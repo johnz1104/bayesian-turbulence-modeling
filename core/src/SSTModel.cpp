@@ -1,0 +1,246 @@
+#include "SSTModel.hpp"
+#include <cmath>
+#include <algorithm>
+
+// Pointwise functions
+
+// F1 blending: switches between inner (k-omega) and outer (k-epsilon) model
+// detects whether cell is near a wall or in free flow
+double SSTModel::computeF1(double k, double omega, double y, double nu, double CDkw_pos) const {
+    // numeric safeguards
+    double sqrtK = std::sqrt(std::max(k, 0.0));
+    double omSafe = std::max(omega, 1e-20);
+    double ySafe  = std::max(y, 1e-20);
+    double y2s    = ySafe * ySafe;
+
+    double term1 = sqrtK / (coeffs.betaStar * omSafe * ySafe);
+    double term2 = 500.0 * nu / (y2s * omSafe);
+    double CDpos = std::max(CDkw_pos, 1e-20);
+    double term3 = 4.0 * coeffs.sigma_w2 * std::max(k, 0.0) / (CDpos * y2s);
+
+    // arg1 = min( max(sqrt(k)/(betaStar*omega*y), 500*nu/(y^2*omega)), 4*sigma_w2*k / (CDkw_pos * y^2))
+    // F1 = tanh(arg1^4)
+    double arg1 = std::min(std::max(term1, term2), term3);
+    double a4   = arg1 * arg1 * arg1 * arg1;
+    return std::tanh(a4);
+}
+
+// F2 blending: used in the eddy viscosity limiter
+// detects how close cell is to a wall to limit turbulent eddy viscosity near walls
+double SSTModel::computeF2(double k, double omega, double y, double nu) const {
+    // numeric safeguards
+    double sqrtK = std::sqrt(std::max(k, 0.0));
+    double omSafe = std::max(omega, 1e-20);
+    double ySafe  = std::max(y, 1e-20);
+    double y2     = ySafe * ySafe;
+
+    double term1 = 2.0 * sqrtK / (coeffs.betaStar * omSafe * ySafe);
+    double term2 = 500.0 * nu / (y2 * omSafe);
+
+    // arg2 = max(2*sqrt(k)/(betaStar*omega*y), 500*nu/(y^2*omega))
+    // F2 = tanh(arg2^2)
+    double arg2  = std::max(term1, term2);
+    return std::tanh(arg2 * arg2);
+}
+
+// Cross-diffusion term: CDkw = 2*sigma_w2/omega * (gradK . gradOmega)
+double SSTModel::crossDiffusion(const Vec3& gradK, const Vec3& gradOmega, double omega) const {
+    double omSafe = std::max(omega, 1e-20);
+    return 2.0 * coeffs.sigma_w2 / omSafe * gradK.dot(gradOmega);
+}
+
+// Eddy viscosity with Bradshaw limiter:
+// ensures turbulent shear stress scales with turbulent kinetic energy
+// prevents excessuve eddy viscosity in high-strain regions (e.g. near walls)
+// nuT = a1*k / max(a1*omega, S*F2)   (Full SST)
+// NoLimiter variant drops the Bradshaw limiter: nuT = k/omega.
+double SSTModel::eddyViscosity(double k, double omega, double S, double F2) const {
+    double kSafe = std::max(k, 0.0);
+    if (variant == SSTVariant::NoLimiter) {
+        return kSafe / std::max(omega, 1e-20);
+    }
+    double denom = std::max(coeffs.a1 * omega, S * F2);
+    denom = std::max(denom, 1e-20);
+    return coeffs.a1 * kSafe / denom;
+}
+
+// Production with Menter limiter:
+// prevents overprediction of turbulent kinetic energy at stagnation points (fluid velocity = 0)
+// Pk = min(nuT * S^2, 10 * betaStar * k * omega)
+double SSTModel::production(double nuT, double S, double k, double omega) const {
+    double Pk_raw = nuT * S * S;
+    double Pk_lim = 10.0 * coeffs.betaStar * std::max(k, 0.0) * std::max(omega, 1e-20);
+    return std::min(Pk_raw, Pk_lim);
+}
+
+// Source term for k-equation:
+// Sk = Pk - betaStar * omega * k
+// production minus dissipation of turbulent kinetic energy
+double SSTModel::sourceK(double Pk, double k, double omega) const {
+    return Pk - coeffs.betaStar * std::max(omega, 1e-20) * std::max(k, 0.0);
+}
+
+// Source term of omega-equation
+// Sw = alpha*(Pk/nuT) - beta*omega^2 + (1-F1)*max(CDkw, 0)
+// combines turbulence production, dissipation, and cross-diffusion effects
+double SSTModel::sourceOmega(double Pk, double nuT, double omega, double F1, double CDkw) const {
+    double alphaB  = coeffs.alpha(F1);
+    double betaB   = coeffs.beta(F1);
+    double nuTSafe = std::max(nuT, 1e-20);
+    return alphaB * Pk / nuTSafe - betaB * omega * omega + (1.0 - F1) * std::max(CDkw, 0.0);
+}
+
+// Field function
+// computes 
+void SSTModel::computeFields(
+        const Mesh& mesh,      
+        const ScalarField& k, 
+        const ScalarField& omega,
+        const VectorField& U, 
+        double nu,
+        ScalarField& nuT,                   // turbulent eddy viscosity
+        ScalarField& F1field,               // iner/outer model blending
+        ScalarField& F2field,               // eddy viscosity limiter
+        ScalarField& Pk,                    // turbulence production
+        ScalarField& CDkwField              // cross-diffusion term
+    ) const {
+
+    // velocity gradients - strain rate magnitude
+    VelocityGradients vg = computeVelocityGradients(U);
+    ScalarField Smag = strainRateMagnitude(vg);
+
+    // k and omega gradients for cross-diffusion
+    VectorField gradK     = greenGaussGrad(k);
+    VectorField gradOmega = greenGaussGrad(omega);
+
+    // computes distance to the nearest wall
+    const auto& wd = mesh.wallDistance();
+
+    // loops over cells
+    for (int ci = 0; ci < mesh.nCells(); ++ci) {
+        double kc  = std::max(k[ci], 0.0);
+        double wc  = std::max(omega[ci], 1e-20);
+        double y   = std::max(wd[ci], 1e-20);
+        double Sc  = Smag[ci];
+
+        // cross-diffusion
+        double CDkw = crossDiffusion(gradK[ci], gradOmega[ci], wc);
+        CDkwField[ci] = CDkw;
+
+        // blending functions
+        // KOmega variant forces F1 = 1 (pure k-w; no k-e blending of coefficients
+        // and the (1-F1) cross-diffusion term in the omega equation vanishes).
+        double CDpos = std::max(CDkw, 1e-20);
+        F1field[ci] = (variant == SSTVariant::KOmega)
+                          ? 1.0
+                          : computeF1(kc, wc, y, nu, CDpos);
+        F2field[ci] = computeF2(kc, wc, y, nu);
+
+        // eddy viscosity
+        nuT[ci] = eddyViscosity(kc, wc, Sc, F2field[ci]);
+
+        // production
+        Pk[ci] = production(nuT[ci], Sc, kc, wc);
+    }
+}
+
+// ADJOINT GROUNDWORK — pointwise analytic ∂(closure)/∂θ (see header).
+// Mirrors computeF1/computeF2/eddyViscosity/production exactly, then differentiates the
+// ACTIVE branch w.r.t. each coefficient.  No derivative is ever taken w.r.t. the fields
+// (k, ω, U) — only w.r.t. the 11 coefficients — so this is strictly the held-adjoint's
+// ∂R/∂θ groundwork and NOT the (∂R/∂U) core.
+SSTClosureSensitivity SSTModel::closureSensitivity(double k, double omega, double S,
+                                                   double y, double nu,
+                                                   double CDkw, double nuTFloor) const {
+    SSTClosureSensitivity d;   // zero-initialised: untouched coefficients stay 0
+
+    // --- safeguarded primitives (identical to computeF1/F2/computeFields) -----------
+    const double kc     = std::max(k, 0.0);
+    const double sqrtK  = std::sqrt(kc);
+    const double wc     = std::max(omega, 1e-20);
+    const double ys     = std::max(y, 1e-20);
+    const double y2     = ys * ys;
+    const double bStar  = coeffs.betaStar;
+
+    // ============================ F2 (β* only) ======================================
+    // arg2 = max(2√k/(β* ω y), 500ν/(y²ω));  F2 = tanh(arg2²)
+    const double t1F2 = 2.0 * sqrtK / (bStar * wc * ys);
+    const double t2F2 = 500.0 * nu / (y2 * wc);
+    const double arg2 = std::max(t1F2, t2F2);
+    const double F2   = std::tanh(arg2 * arg2);
+    double dF2_dbStar = 0.0;
+    if (t1F2 >= t2F2 && bStar > 0.0) {
+        // d(arg2)/dβ* = d t1F2/dβ* = −t1F2/β*;  dF2 = (1−F2²)·2·arg2·d(arg2)
+        dF2_dbStar = (1.0 - F2 * F2) * 2.0 * arg2 * (-t1F2 / bStar);
+    }
+
+    // ============================ F1 (β* only; σ_w2 path ≡ 0) =======================
+    // arg1 = min( max(√k/(β* ω y), 500ν/(y²ω)), 4σ_w2 k/(CDpos y²) );  F1 = tanh(arg1⁴)
+    // KOmega forces F1≡1 (constant) ⇒ dF1 ≡ 0.
+    if (variant != SSTVariant::KOmega) {
+        const double t1   = sqrtK / (bStar * wc * ys);
+        const double t2   = 500.0 * nu / (y2 * wc);
+        const double CDp  = std::max(CDkw, 1e-20);
+        const double t3   = 4.0 * coeffs.sigma_w2 * kc / (CDp * y2);
+        const double m12  = std::max(t1, t2);
+        const double arg1 = std::min(m12, t3);
+        const double F1   = std::tanh(arg1 * arg1 * arg1 * arg1);
+        // β* enters only via t1; contributes only when t1 is the active winner
+        // (arg1 == m12 == t1).  σ_w2 enters only via t3, but where t3 is the winner
+        // CDpos==CDkw==2σ_w2/ω·(∇k·∇ω) makes t3 independent of σ_w2 (the explicit σ_w2
+        // cancels), and where t3 is floored it is huge so m12 wins — hence dF1/dσ_w2≡0.
+        if (arg1 == m12 && t1 >= t2 && bStar > 0.0) {
+            const double dF1_darg1 = (1.0 - F1 * F1) * 4.0 * arg1 * arg1 * arg1;
+            d.dF1[8] = dF1_darg1 * (-t1 / bStar);     // β* = index 8
+        }
+    }
+
+    // ============================ nuT (a1, β* via F2) ===============================
+    // Full/KOmega: nuT_raw = a1 k / max(a1 ω, S F2);  NoLimiter: nuT_raw = k/ω.
+    // Pk uses the UNfloored nuT_raw; the diffusion coefficients use max(nuT_raw,floor).
+    double dnuTraw_da1 = 0.0, dnuTraw_dbStar = 0.0, nuTraw = 0.0;
+    if (variant == SSTVariant::NoLimiter) {
+        nuTraw = kc / wc;                              // independent of θ ⇒ derivs 0
+    } else {
+        const double a1  = coeffs.a1;
+        const double cA  = a1 * wc;                    // candidate: a1·ω
+        const double cB  = S * F2;                     // candidate: S·F2
+        double denom = std::max(cA, cB);
+        denom = std::max(denom, 1e-20);
+        nuTraw = a1 * kc / denom;
+        if (denom == cB && cB >= cA && cB >= 1e-20) {
+            // limiter active (branch B): nuT_raw = a1 k/(S F2)
+            dnuTraw_da1    = kc / (S * F2);
+            dnuTraw_dbStar = -a1 * kc / (S * F2 * F2) * dF2_dbStar;
+        } else if (denom == cA) {
+            // branch A: nuT_raw = k/ω, a1 cancels ⇒ both derivs 0
+        } else {
+            // degenerate 1e-20 floor on denom (essentially never for real fields)
+            dnuTraw_da1 = kc / denom;
+        }
+    }
+    // Apply the eddy-viscosity floor to the DIFFUSION derivative only.
+    const double nuT = std::max(nuTraw, nuTFloor);
+    if (nuT > nuTFloor) {            // above floor ⇒ floored nuT == nuT_raw
+        d.dnuT[9] = dnuTraw_da1;     // a1 = index 9
+        d.dnuT[8] = dnuTraw_dbStar;  // β* = index 8
+    }                                // at/below floor ⇒ floored nuT constant ⇒ dnuT 0
+
+    // ============================ Pk (a1, β*; Menter limiter) =======================
+    // Pk = min(nuT_raw·S², 10 β* k ω)   (production() is fed the UNfloored nuT_raw)
+    const double PkRaw = nuTraw * S * S;
+    const double PkLim = 10.0 * bStar * kc * wc;
+    if (PkRaw <= PkLim) {
+        d.dPk[9] = S * S * dnuTraw_da1;       // a1
+        d.dPk[8] = S * S * dnuTraw_dbStar;    // β* (via nuT_raw → F2)
+    } else {
+        d.dPk[8] = 10.0 * kc * wc;            // β* (limiter branch)
+    }
+
+    // ============================ CDkw (σ_w2 only) ==================================
+    // CDkw = 2 σ_w2/ω · (∇k·∇ω) ⇒ ∂CDkw/∂σ_w2 = CDkw/σ_w2  (linear in σ_w2).
+    if (coeffs.sigma_w2 != 0.0)
+        d.dCDkw[5] = CDkw / coeffs.sigma_w2;  // σ_w2 = index 5
+
+    return d;
+}
