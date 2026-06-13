@@ -5,3 +5,6 @@ compile_commands.json
 .claude
 python/__pycache__
 Theory/
+runs/
+.cache/
+.pytest_cache/
