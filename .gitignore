@@ -1,10 +1,29 @@
-build/
+# ---- Build artifacts ----
+/build/
 compile_commands.json
+
+# ---- Python bytecode and caches ----
+**/__pycache__/
+*.py[cod]
+.pytest_cache/
+.cache/
+
+# ---- OS and editor cruft ----
 .DS_Store
 .vscode/
-.claude
-python/__pycache__
-Theory/
-runs/
-.cache/
-.pytest_cache/
+.claude/
+
+# ---- Local result / output / run trees (kept local, never pushed) ----
+/results/
+/outputs/
+/runs/
+
+# ---- Local status reports, logs, working notes, and archived program records ----
+/summary.md
+/log.md
+/architecture_review.md
+/repo_resume.md
+/api_prep.md
+/git_summary.md
+/CLAUDE.md
+/documents/
