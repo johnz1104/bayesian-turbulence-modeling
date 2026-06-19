@@ -1,0 +1,32 @@
+{
+  "metadata": {
+    "case_id": "synthetic_sbli_ma2",
+    "geometry_type": "ramp",
+    "mach": 2.0,
+    "reynolds": 1000000.0,
+    "stagnation_pressure": 782448.0,
+    "stagnation_temperature": 540.0,
+    "wall_condition": "adiabatic",
+    "fuel_on": false,
+    "data_source": "synthetic",
+    "notes": "Synthetic SBLI fixture — NOT real data. Parametric model for pipeline testing only. Mach 2, adiabatic wall, placeholder Reynolds number."
+  },
+  "observations": {
+    "case_id": "synthetic_sbli_ma2",
+    "observations": [
+      {"observable_type": "wall_pressure_cp", "value": 0.050, "uncertainty": 0.003, "x": 0.0, "y": 0.0, "reference_length": 1.0, "reference_velocity": null, "reference_pressure": null, "reference_temperature": null, "units": "-", "group": "cp_wall", "case_id": "synthetic_sbli_ma2"},
+      {"observable_type": "wall_pressure_cp", "value": 0.145, "uncertainty": 0.007, "x": 0.286, "y": 0.0, "reference_length": 1.0, "reference_velocity": null, "reference_pressure": null, "reference_temperature": null, "units": "-", "group": "cp_wall", "case_id": "synthetic_sbli_ma2"},
+      {"observable_type": "wall_pressure_cp", "value": 0.520, "uncertainty": 0.022, "x": 0.429, "y": 0.0, "reference_length": 1.0, "reference_velocity": null, "reference_pressure": null, "reference_temperature": null, "units": "-", "group": "cp_wall", "case_id": "synthetic_sbli_ma2"},
+      {"observable_type": "wall_pressure_cp", "value": 0.630, "uncertainty": 0.026, "x": 0.571, "y": 0.0, "reference_length": 1.0, "reference_velocity": null, "reference_pressure": null, "reference_temperature": null, "units": "-", "group": "cp_wall", "case_id": "synthetic_sbli_ma2"},
+      {"observable_type": "wall_pressure_cp", "value": 0.615, "uncertainty": 0.025, "x": 1.000, "y": 0.0, "reference_length": 1.0, "reference_velocity": null, "reference_pressure": null, "reference_temperature": null, "units": "-", "group": "cp_wall", "case_id": "synthetic_sbli_ma2"},
+      {"observable_type": "skin_friction_cf", "value": 0.00210, "uncertainty": 0.000105, "x": 0.0, "y": 0.0, "reference_length": 1.0, "reference_velocity": null, "reference_pressure": null, "reference_temperature": null, "units": "-", "group": "cf_wall", "case_id": "synthetic_sbli_ma2"},
+      {"observable_type": "skin_friction_cf", "value": 0.00040, "uncertainty": 0.000050, "x": 0.286, "y": 0.0, "reference_length": 1.0, "reference_velocity": null, "reference_pressure": null, "reference_temperature": null, "units": "-", "group": "cf_wall", "case_id": "synthetic_sbli_ma2"},
+      {"observable_type": "skin_friction_cf", "value": -0.00010, "uncertainty": 0.000050, "x": 0.429, "y": 0.0, "reference_length": 1.0, "reference_velocity": null, "reference_pressure": null, "reference_temperature": null, "units": "-", "group": "cf_wall", "case_id": "synthetic_sbli_ma2"},
+      {"observable_type": "skin_friction_cf", "value": 0.00160, "uncertainty": 0.000080, "x": 0.571, "y": 0.0, "reference_length": 1.0, "reference_velocity": null, "reference_pressure": null, "reference_temperature": null, "units": "-", "group": "cf_wall", "case_id": "synthetic_sbli_ma2"},
+      {"observable_type": "skin_friction_cf", "value": 0.00196, "uncertainty": 0.000098, "x": 1.000, "y": 0.0, "reference_length": 1.0, "reference_velocity": null, "reference_pressure": null, "reference_temperature": null, "units": "-", "group": "cf_wall", "case_id": "synthetic_sbli_ma2"},
+      {"observable_type": "wall_heat_flux", "value": 52000.0, "uncertainty": 2600.0, "x": 0.0, "y": 0.0, "reference_length": 1.0, "reference_velocity": null, "reference_pressure": null, "reference_temperature": null, "units": "W/m^2", "group": "qw_wall", "case_id": "synthetic_sbli_ma2"},
+      {"observable_type": "wall_heat_flux", "value": 120000.0, "uncertainty": 6000.0, "x": 0.571, "y": 0.0, "reference_length": 1.0, "reference_velocity": null, "reference_pressure": null, "reference_temperature": null, "units": "W/m^2", "group": "qw_wall", "case_id": "synthetic_sbli_ma2"},
+      {"observable_type": "wall_heat_flux", "value": 59000.0, "uncertainty": 2950.0, "x": 1.000, "y": 0.0, "reference_length": 1.0, "reference_velocity": null, "reference_pressure": null, "reference_temperature": null, "units": "W/m^2", "group": "qw_wall", "case_id": "synthetic_sbli_ma2"}
+    ]
+  }
+}
