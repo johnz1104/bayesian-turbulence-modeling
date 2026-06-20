@@ -64,8 +64,13 @@ fi
 if [ "$DO_BUILD" -eq 1 ]; then
     # If a prior configure pinned a different interpreter, the cached binding ABI
     # won't match $PY_BIN; wipe so the rebuilt .so matches the test interpreter.
-    CACHED_PY="$(grep -E '^Python_EXECUTABLE:FILEPATH=' \
-                 "${BUILD_DIR}/CMakeCache.txt" 2>/dev/null | head -n1 | cut -d= -f2)"
+    # Guard the cache read: on a fresh checkout there is no CMakeCache.txt, and a
+    # failing grep under `set -euo pipefail` would otherwise abort the script.
+    CACHED_PY=""
+    if [ -f "${BUILD_DIR}/CMakeCache.txt" ]; then
+        CACHED_PY="$(grep -E '^Python_EXECUTABLE:FILEPATH=' \
+                     "${BUILD_DIR}/CMakeCache.txt" | head -n1 | cut -d= -f2 || true)"
+    fi
     if [ -n "${CACHED_PY:-}" ] && [ "$CACHED_PY" != "$PY_BIN" ]; then
         bold "[configure] interpreter changed (${CACHED_PY} -> ${PY_BIN}); wiping ${BUILD_DIR}"
         rm -rf "$BUILD_DIR"
