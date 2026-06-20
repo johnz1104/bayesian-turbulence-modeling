@@ -1,0 +1,46 @@
+# QBTM pinned Python dependencies (foundation freeze, core-v1.0).
+#
+# PINNED INTERPRETER (the note):
+#   CPython 3.11.5  (framework build: /Library/Frameworks/Python.framework/Versions/3.11)
+#   On this checkout `python3` resolves to that interpreter. CI uses the same
+#   3.11 series (actions/setup-python python-version "3.11").
+#
+# Why 3.11 and these pins: numpy 1.25.2 + GPy 1.13.2 is the known-good
+# combination the existing inference layer was validated against; bumping numpy
+# breaks GPy. The C++ pybind11 binding (rans_sst_py) must be (re)built against
+# whatever interpreter runs the tests so the ABI tag matches
+# (cpython-311). The canonical entrypoint scripts/run_tests.sh pins the build
+# interpreter to $PYTHON (default python3) for exactly this reason.
+#
+# NOTE on pybind11: the C++ extension is compiled against pybind11 v2.12.0,
+# which CMake pulls via FetchContent (see CMakeLists.txt). The pip `pybind11`
+# below is only the Python-side helper and is independent of that.
+#
+# Reproduce:  python3 -m pip install -r requirements.txt
+
+# --- core numerics (do not bump without re-validating GPy) ---
+numpy==1.25.2
+scipy==1.11.3
+
+# --- inference / sampling / surrogate stack ---
+emcee==3.1.6
+GPy==1.13.2
+paramz==0.9.6
+scikit-learn==1.3.2
+joblib==1.3.2
+threadpoolctl==3.6.0
+
+# --- parallelism (dill-backed pickling for multiprocess pools) ---
+multiprocess==0.70.19
+dill==0.4.1
+
+# --- plotting ---
+matplotlib==3.7.2
+
+# --- build helper (Python-side; C++ binding uses FetchContent pybind11 2.12.0) ---
+pybind11==3.0.2
+
+# --- test runner and plugins ---
+pytest==7.4.1
+pytest-timeout==2.1.0
+pytest-reportlog==0.4.0

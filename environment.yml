@@ -1,0 +1,26 @@
+# QBTM conda environment (foundation freeze, core-v1.0).
+#
+# PINNED INTERPRETER (the note): CPython 3.11.5.
+# The reference environment used to validate the baseline is the macOS framework
+# CPython 3.11.5 at /Library/Frameworks/Python.framework/Versions/3.11 with the
+# pip pins in requirements.txt. This conda recipe reproduces an equivalent env on
+# any platform: it stands up Python 3.11 plus the C++ toolchain needed to build
+# the rans_sst_py binding, then installs the exact pip pins as the single source
+# of truth (see requirements.txt for the rationale of each pin, especially the
+# numpy 1.25.2 + GPy 1.13.2 coupling).
+#
+# Reproduce:
+#   conda env create -f environment.yml
+#   conda activate qbtm
+#   scripts/run_tests.sh            # configure + build binding + ctest + pytest
+name: qbtm
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pip
+  # C++ toolchain to (re)build the pybind11 binding against this interpreter.
+  - cmake>=3.14
+  - cxx-compiler
+  - pip:
+      - -r requirements.txt
