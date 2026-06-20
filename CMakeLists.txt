@@ -5,6 +5,12 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+# Compile everything position-independent. The btm_* static libraries are linked
+# into the shared pybind11 module rans_sst_py, and on Linux (ELF x86-64) linking
+# non-PIC static objects into a shared object fails with an -fPIC relocation
+# error; macOS does not require this, so it must be set explicitly for portability.
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release)
 endif()
