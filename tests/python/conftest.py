@@ -38,6 +38,11 @@ def _prepend_unique(p: Path) -> None:
 _prepend_unique(BUILD_DIR)
 _prepend_unique(PYTHON_DIR)
 
+# Make the repo root importable so the frozen research.shared interfaces resolve.
+# Appended (not prepended) so it cannot shadow build/ or python/.
+if str(REPO_ROOT) not in sys.path:
+    sys.path.append(str(REPO_ROOT))
+
 
 @pytest.fixture(autouse=True)
 def _deterministic_seed():
