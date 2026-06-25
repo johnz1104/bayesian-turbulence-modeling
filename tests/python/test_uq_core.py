@@ -16,6 +16,7 @@ from UQ import synthetic as syn
 from UQ import evaluation as ev
 from UQ import conformal as cf
 from UQ import generalized_bayes as gb
+from UQ import dns_field as dnsf
 
 
 # ---------------------------------------------------------------- realizability
@@ -59,6 +60,17 @@ def test_recover_planted_heatflux_discrepancy():
     h = syn.make_fake_heatflux(n=300, seed=4)
     dqv = dq.heatflux_discrepancy(h["q_dns"], h["grad_T"], h["nu_t"], h["Pr_t"])
     assert np.allclose(dqv, h["dq_true"], atol=1e-12)
+
+
+def test_dns_schema_adapter_recovers_discrepancies():
+    """The DNS-schema interface recovers both planted discrepancies end to end."""
+    field, db_true, dq_true = dnsf.fake_dns_field(n=300, seed=8)
+    assert field.has_heat_flux()
+    out = field.extract()
+    assert np.allclose(out["reynolds_discrepancy"], db_true, atol=1e-9)
+    assert np.allclose(out["heatflux_discrepancy"], dq_true, atol=1e-12)
+    # features are the five Pope invariants here (no extras supplied)
+    assert out["features"].shape == (300, 5)
 
 
 def test_invariants_are_rotationally_invariant():
