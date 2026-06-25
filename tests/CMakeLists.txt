@@ -32,6 +32,12 @@ target_link_libraries(test_dbns_numerics PRIVATE btm_compressible)
 add_test(NAME dbns_numerics COMMAND test_dbns_numerics)
 set_tests_properties(dbns_numerics PROPERTIES TIMEOUT 30 LABELS "unit;dbns")
 
+# ---- dbns_verification: shock tube vs exact Riemann + MMS order of accuracy ----
+add_executable(test_dbns_verification cpp/test_dbns_verification.cpp)
+target_link_libraries(test_dbns_verification PRIVATE btm_dbns)
+add_test(NAME dbns_verification COMMAND test_dbns_verification)
+set_tests_properties(dbns_verification PROPERTIES TIMEOUT 240 LABELS "verification;dbns")
+
 # ---- pytest target ----
 # Optional convenience target; the canonical way to run Python tests is
 # `pytest tests/python` from the repo root after building the .so.
