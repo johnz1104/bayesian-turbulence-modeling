@@ -3,6 +3,7 @@
 #include <array>
 #include <cmath>
 #include <algorithm>
+#include <functional>   // std::greater (libstdc++ does not include it transitively)
 
 // ---------------------------------------------------------------------------
 // Barycentric realizability projection for the Reynolds-stress anisotropy.

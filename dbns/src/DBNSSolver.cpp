@@ -1,5 +1,7 @@
 #include "DBNSSolver.hpp"
 #include "HLLCFlux.hpp"
+#include <array>
+#include <vector>
 #include <cmath>
 #include <algorithm>
 #include <cstdio>
