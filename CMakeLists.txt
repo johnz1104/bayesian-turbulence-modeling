@@ -69,6 +69,20 @@ target_link_libraries(btm_compressible PUBLIC btm_incompressible)
 add_executable(rans_sst_compressible compressible/src/CompressibleMain.cpp)
 target_link_libraries(rans_sst_compressible PRIVATE btm_compressible)
 
+# ---- btm_dbns: density-based, shock-capturing compressible RANS solver ----
+# Additive high-speed path (HLLC + MUSCL + SSP-RK + SST), separate from the
+# low-Mach pressure-based btm_compressible.  Reuses btm_core (Mesh, Field,
+# SSTModel) and the compressible IdealGasEOS header.
+add_library(btm_dbns STATIC
+    dbns/src/DBNSSolver.cpp
+)
+target_include_directories(btm_dbns PUBLIC
+    core/include
+    compressible/include    # IdealGasEOS
+    dbns/include
+)
+target_link_libraries(btm_dbns PUBLIC btm_core)
+
 # ---- Optional: pybind11 Python bindings ----
 option(BUILD_PYTHON_BINDINGS "Build pybind11 Python module" OFF)
 if(BUILD_PYTHON_BINDINGS)
@@ -84,7 +98,9 @@ if(BUILD_PYTHON_BINDINGS)
     pybind11_add_module(rans_sst_py python/Bindings.cpp)
     # btm_compressible transitively pulls in btm_incompressible and btm_core,
     # so the bindings TU sees both incompressible and compressible headers.
-    target_link_libraries(rans_sst_py PRIVATE btm_compressible)
+    # btm_dbns adds the density-based shock-capturing solver path.
+    target_link_libraries(rans_sst_py PRIVATE btm_compressible btm_dbns)
+    target_include_directories(rans_sst_py PRIVATE dbns/include)
 endif()
 
 # ---- Tests (CTest) ----

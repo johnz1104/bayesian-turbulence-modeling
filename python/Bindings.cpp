@@ -6,8 +6,71 @@
 #include "CompressibleForwardModel.hpp"
 #include "IdealGasEOS.hpp"
 #include "CompressibleBCs.hpp"
+#include "DBNSSolver.hpp"
+#include "DBNSObservation.hpp"
+#include "RealizabilityProjection.hpp"
 
 namespace py = pybind11;
+
+// Extract the density-based solver state as a dict of numpy arrays.
+static py::dict dbnsFields(const dbns::DBNSSolver& s) {
+    int nc = s.nCells();
+    py::array_t<double> rho(nc), u(nc), v(nc), p(nc), T(nc), mach(nc), muT(nc);
+    auto r = rho.mutable_unchecked<1>(); auto uu = u.mutable_unchecked<1>();
+    auto vv = v.mutable_unchecked<1>(); auto pp = p.mutable_unchecked<1>();
+    auto tt = T.mutable_unchecked<1>(); auto mm = mach.mutable_unchecked<1>();
+    auto mt = muT.mutable_unchecked<1>();
+    const IdealGasEOS& eos = s.eos();
+    for (int i = 0; i < nc; ++i) {
+        dbns::Primitive V = s.primitive(i);
+        double Tc = V.p / (V.rho * eos.R);
+        double a = std::sqrt(eos.gamma * V.p / V.rho);
+        r(i) = V.rho; uu(i) = V.u; vv(i) = V.v; pp(i) = V.p;
+        tt(i) = Tc; mm(i) = std::sqrt(V.u * V.u + V.v * V.v) / a; mt(i) = s.eddyViscosity(i);
+    }
+    py::dict d;
+    d["rho"] = rho; d["u"] = u; d["v"] = v; d["p"] = p;
+    d["T"] = T; d["mach"] = mach; d["muT"] = muT;
+    return d;
+}
+
+// Set the solver state from a numpy array of primitives, shape (n_cells, >=4)
+// columns [rho, u, v, p] (k, omega optional as columns 4,5).
+static void dbnsInitField(dbns::DBNSSolver& s, py::array_t<double> arr) {
+    auto a = arr.unchecked<2>();
+    int nc = s.nCells();
+    std::vector<dbns::Primitive> f(nc);
+    for (int i = 0; i < nc; ++i) {
+        f[i].rho = a(i, 0); f[i].u = a(i, 1); f[i].v = a(i, 2); f[i].p = a(i, 3);
+        f[i].k = a.shape(1) > 4 ? a(i, 4) : 0.0;
+        f[i].omega = a.shape(1) > 5 ? a(i, 5) : 0.0;
+    }
+    s.initField(f);
+}
+
+// Wall observation record -> dict of numpy arrays.
+static py::dict dbnsWall(const dbns::DBNSObservation& obs, const std::string& patch,
+                         double wallTemp) {
+    dbns::WallRecord w = obs.wall(patch, wallTemp);
+    auto toArr = [](const std::vector<double>& v) {
+        py::array_t<double> a((py::ssize_t)v.size());
+        auto r = a.mutable_unchecked<1>();
+        for (size_t i = 0; i < v.size(); ++i) r(i) = v[i];
+        return a;
+    };
+    py::dict d;
+    d["x"] = toArr(w.x); d["Cf"] = toArr(w.Cf); d["Cp"] = toArr(w.Cp);
+    d["qw"] = toArr(w.qw); d["St"] = toArr(w.St);
+    return d;
+}
+
+// Realizability projection of a Reynolds stress given its six components.
+static std::vector<double> dbnsProjectStress(double xx, double yy, double zz,
+                                             double xy, double xz, double yz) {
+    dbns::Sym3 R{xx, yy, zz, xy, xz, yz};
+    dbns::Sym3 P = dbns::RealizabilityProjection::projectReynoldsStress(R);
+    return {P.xx, P.yy, P.zz, P.xy, P.xz, P.yz};
+}
 
 // Helper: extract cell centers from Mesh as numpy array (n_cells, 3)
 static py::array_t<double> meshCellCenters(const Mesh& mesh) {
@@ -455,4 +518,98 @@ PYBIND11_MODULE(rans_sst_py, m) {
              py::return_value_policy::reference)
         .def("has_last_fields", &CompressibleForwardModel::hasLastFields)
         .def("last_fields", &extractCompressibleFields);
+
+    // ---- Density-based shock-capturing solver (dbns) ----------------------
+    using namespace dbns;
+
+    py::class_<Primitive>(m, "Primitive")
+        .def(py::init<>())
+        .def(py::init([](double rho, double u, double v, double p, double k, double w) {
+                 Primitive V; V.rho = rho; V.u = u; V.v = v; V.p = p; V.k = k; V.omega = w;
+                 return V; }),
+             py::arg("rho"), py::arg("u"), py::arg("v"), py::arg("p"),
+             py::arg("k") = 0.0, py::arg("omega") = 0.0)
+        .def_readwrite("rho", &Primitive::rho).def_readwrite("u", &Primitive::u)
+        .def_readwrite("v", &Primitive::v).def_readwrite("p", &Primitive::p)
+        .def_readwrite("k", &Primitive::k).def_readwrite("omega", &Primitive::omega);
+
+    py::enum_<TimeMode>(m, "TimeMode")
+        .value("Steady", TimeMode::Steady).value("Unsteady", TimeMode::Unsteady);
+    py::enum_<CompressibilityModel>(m, "CompressibilityModel")
+        .value("None_", CompressibilityModel::None)
+        .value("Sarkar", CompressibilityModel::Sarkar)
+        .value("Zeman", CompressibilityModel::Zeman);
+    py::enum_<BoundaryKind>(m, "DBNSBoundaryKind")
+        .value("SupersonicInflow", BoundaryKind::SupersonicInflow)
+        .value("Extrapolate", BoundaryKind::Extrapolate)
+        .value("SubsonicInflow", BoundaryKind::SubsonicInflow)
+        .value("SubsonicOutflow", BoundaryKind::SubsonicOutflow)
+        .value("SlipWall", BoundaryKind::SlipWall)
+        .value("NoSlipAdiabatic", BoundaryKind::NoSlipAdiabatic)
+        .value("NoSlipIsothermal", BoundaryKind::NoSlipIsothermal)
+        .value("FixedState", BoundaryKind::FixedState);
+
+    py::class_<BoundarySpec>(m, "DBNSBoundarySpec")
+        .def(py::init<>())
+        .def_readwrite("kind", &BoundarySpec::kind)
+        .def_readwrite("freestream", &BoundarySpec::freestream)
+        .def_readwrite("wall_temp", &BoundarySpec::wallTemp)
+        .def_readwrite("back_pressure", &BoundarySpec::backPressure)
+        .def_readwrite("wall_velocity", &BoundarySpec::wallVelocity);
+
+    py::class_<DBNSBoundaryConditions>(m, "DBNSBoundaryConditions")
+        .def(py::init<>())
+        .def("set", &DBNSBoundaryConditions::set, py::arg("patch"), py::arg("spec"));
+
+    py::class_<DBNSSettings>(m, "DBNSSettings")
+        .def(py::init<>())
+        .def_readwrite("time_mode", &DBNSSettings::timeMode)
+        .def_readwrite("cfl", &DBNSSettings::cfl)
+        .def_readwrite("max_iterations", &DBNSSettings::maxIterations)
+        .def_readwrite("t_end", &DBNSSettings::tEnd)
+        .def_readwrite("convergence_tol", &DBNSSettings::convergenceTol)
+        .def_readwrite("reconstruct_order", &DBNSSettings::reconstructOrder)
+        .def_readwrite("limit_reconstruction", &DBNSSettings::limitReconstruction)
+        .def_readwrite("viscous", &DBNSSettings::viscous)
+        .def_readwrite("turbulent", &DBNSSettings::turbulent)
+        .def_readwrite("const_mu", &DBNSSettings::constMu)
+        .def_readwrite("compressibility", &DBNSSettings::compressibility)
+        .def_readwrite("rk_stages", &DBNSSettings::rkStages)
+        .def_readwrite("verbose", &DBNSSettings::verbose);
+
+    py::class_<ReferenceState>(m, "ReferenceState")
+        .def(py::init<>())
+        .def_readwrite("rho", &ReferenceState::rho).def_readwrite("U", &ReferenceState::U)
+        .def_readwrite("T", &ReferenceState::T).def_readwrite("p", &ReferenceState::p)
+        .def_readwrite("recovery_factor", &ReferenceState::recoveryFactor);
+
+    py::class_<SolveReport>(m, "DBNSSolveReport")
+        .def_readonly("status", &SolveReport::status)
+        .def_readonly("iterations", &SolveReport::iterations)
+        .def_readonly("final_residual", &SolveReport::finalResidual)
+        .def_readonly("t_final", &SolveReport::tFinal);
+
+    py::class_<DBNSSolver>(m, "DBNSSolver")
+        .def(py::init<const Mesh&, const IdealGasEOS&, const SSTCoefficients&,
+                      const DBNSBoundaryConditions&, const DBNSSettings&>(),
+             py::arg("mesh"), py::arg("eos"), py::arg("sst"), py::arg("bcs"),
+             py::arg("settings") = DBNSSettings{}, py::keep_alive<1, 2>())
+        .def("init_uniform", &DBNSSolver::initUniform, py::arg("state"))
+        .def("init_field", &dbnsInitField, py::arg("array"))
+        .def("solve", &DBNSSolver::solve)
+        .def("prepare_properties", &DBNSSolver::prepareProperties)
+        .def("n_cells", &DBNSSolver::nCells)
+        .def("primitive", &DBNSSolver::primitive, py::arg("cell"))
+        .def("fields", &dbnsFields);
+
+    py::class_<DBNSObservation>(m, "DBNSObservation")
+        .def(py::init<const DBNSSolver&, const ReferenceState&>(),
+             py::arg("solver"), py::arg("ref"), py::keep_alive<1, 2>())
+        .def("wall", &dbnsWall, py::arg("patch"), py::arg("wall_temp"));
+
+    // Realizability projection (also reused by the Track B Python layer).
+    m.def("project_reynolds_stress", &dbnsProjectStress,
+          py::arg("xx"), py::arg("yy"), py::arg("zz"),
+          py::arg("xy"), py::arg("xz") = 0.0, py::arg("yz") = 0.0,
+          "Project a Reynolds-stress tensor into the realizable (barycentric) set.");
 }
