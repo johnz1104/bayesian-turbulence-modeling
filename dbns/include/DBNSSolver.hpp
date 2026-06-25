@@ -5,6 +5,7 @@
 #include "DBNSConfig.hpp"
 #include "SSTModel.hpp"
 #include "EvaluationTypes.hpp"
+#include <array>
 #include <vector>
 
 // ---------------------------------------------------------------------------
@@ -116,8 +117,6 @@ private:
     // reconstruct primitive at a face from cell ci toward face center xf
     Primitive reconstruct(int ci, const Vec3& xf) const;
 
-    // helper: kinematic viscosity floor for SST blending
-    static double safeOmega(double w, double floor) { return w > floor ? w : floor; }
 };
 
 }  // namespace dbns

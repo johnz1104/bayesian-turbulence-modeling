@@ -3,6 +3,7 @@
 #include "Mesh.hpp"        // Vec3
 #include "DBNSTypes.hpp"
 #include "Limiters.hpp"
+#include <stdexcept>
 #include <string>
 #include <unordered_map>
 #include <vector>
