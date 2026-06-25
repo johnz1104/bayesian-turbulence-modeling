@@ -59,7 +59,7 @@ void DBNSSolver::updateProperties() {
     for (int ci = 0; ci < mesh_.nCells(); ++ci) {
         Primitive V = GasState::toPrimitive(W_[ci], eos_);
         double T = GasState::temperature(V, eos_);
-        muLam_[ci] = eos_.viscosity(T);
+        muLam_[ci] = (settings_.constMu >= 0.0) ? settings_.constMu : eos_.viscosity(T);
         if (!settings_.turbulent) { muT_[ci] = 0.0; continue; }
 
         double nu = muLam_[ci] / V.rho;
@@ -228,13 +228,15 @@ Primitive DBNSSolver::ghostState(const Primitive& in, int faceId,
             return g;
         }
         case BoundaryKind::NoSlipAdiabatic: {
-            g.u = -in.u; g.v = -in.v;            // face velocity 0
+            g.u = 2.0 * spec.wallVelocity.x - in.u;   // face velocity = wallVelocity
+            g.v = 2.0 * spec.wallVelocity.y - in.v;
             g.p = in.p; g.rho = in.rho;          // dT/dn = 0
             g.k = -in.k;                         // face k = 0
             return g;
         }
         case BoundaryKind::NoSlipIsothermal: {
-            g.u = -in.u; g.v = -in.v;
+            g.u = 2.0 * spec.wallVelocity.x - in.u;
+            g.v = 2.0 * spec.wallVelocity.y - in.v;
             double Tw = spec.wallTemp;
             double Tin = GasState::temperature(in, eos_);
             double Tg = 2.0 * Tw - Tin;          // face T = Tw
@@ -338,11 +340,10 @@ void DBNSSolver::addBoundaryFlux(int faceId, int patchIdx) {
         // No-slip viscous wall flux from one-sided near-wall gradients.
         double delta = std::max(f.delta, 1e-12);
         double muEff = muLam_[P] + muT_[P];
-        // tangential velocity gradient (wall velocity = 0)
-        Vec3 Uc{VP.u, VP.v, 0.0};
-        double un = Uc.dot(f.normal);
-        Vec3 Ut = Uc - f.normal * un;            // tangential part
-        Vec3 dUdn = Uc / delta;                  // (U_cell - 0)/delta
+        // tangential velocity gradient relative to the (possibly moving) wall
+        Vec3 Uw = spec.wallVelocity;
+        Vec3 Uc{VP.u - Uw.x, VP.v - Uw.y, 0.0};
+        Vec3 dUdn = Uc / delta;                  // (U_cell - U_wall)/delta
         double dUdn_n = dUdn.dot(f.normal);
         // tau.n = mu_eff [ dU/dn + 1/3 (dU/dn . n) n ]
         Vec3 taun = (dUdn + f.normal * (dUdn_n / 3.0)) * muEff;

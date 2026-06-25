@@ -53,11 +53,17 @@ public:
     // Advance the solution (steady iteration or unsteady march).
     SolveReport solve();
 
+    // Compute derived properties (gradients, laminar/eddy viscosity) for the
+    // current state without advancing it.  Lets the observation operator be
+    // exercised on a prescribed field independent of solver convergence.
+    void prepareProperties() { computeGradients(); updateProperties(); }
+
     // --- accessors for observation / extraction ---
     int nCells() const { return mesh_.nCells(); }
     Primitive primitive(int ci) const { return GasState::toPrimitive(W_[ci], eos_); }
     const StateVec& conserved(int ci) const { return W_[ci]; }
-    double eddyViscosity(int ci) const { return muT_[ci]; }   // mu_t [Pa s]
+    double eddyViscosity(int ci) const { return muT_[ci]; }    // mu_t [Pa s]
+    double laminarViscosity(int ci) const { return muLam_[ci]; } // mu [Pa s] (honours constMu)
     const Mesh& mesh() const { return mesh_; }
     const IdealGasEOS& eos() const { return eos_; }
 

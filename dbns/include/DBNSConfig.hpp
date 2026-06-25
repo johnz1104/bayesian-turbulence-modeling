@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Mesh.hpp"        // Vec3
 #include "DBNSTypes.hpp"
 #include "Limiters.hpp"
 #include <string>
@@ -41,6 +42,8 @@ struct DBNSSettings {
 
     bool   viscous    = true;       // include viscous + heat fluxes
     bool   turbulent  = false;      // integrate SST k-omega transport
+    double constMu    = -1.0;       // if >= 0, use this constant dynamic viscosity
+                                    // (verification: constant mu and lambda)
     CompressibilityModel compressibility = CompressibilityModel::None;
     double turbMachCutoff = 0.25;   // M_t0 for the Zeman form
     double comprXiStar    = 1.0;    // xi* scaling of dilatational dissipation
@@ -73,6 +76,7 @@ struct BoundarySpec {
     Primitive    freestream;     // for inflow / fixed-state / imposed-shock
     double       wallTemp = 300; // for NoSlipIsothermal
     double       backPressure = 101325.0;  // for SubsonicOutflow
+    Vec3         wallVelocity{}; // tangential wall velocity (moving wall / Couette)
 };
 
 // Container mapping patch names to their boundary specs.
