@@ -92,7 +92,9 @@ if(BUILD_PYTHON_BINDINGS)
     pybind11_add_module(rans_sst_py python/Bindings.cpp)
     # btm_compressible transitively pulls in btm_incompressible and btm_core,
     # so the bindings TU sees both incompressible and compressible headers.
-    target_link_libraries(rans_sst_py PRIVATE btm_compressible)
+    # btm_dbns adds the density-based shock-capturing solver path.
+    target_link_libraries(rans_sst_py PRIVATE btm_compressible btm_dbns)
+    target_include_directories(rans_sst_py PRIVATE dbns/include)
 endif()
 
 # ---- Tests (CTest) ----
