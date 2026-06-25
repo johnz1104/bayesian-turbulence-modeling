@@ -25,6 +25,13 @@ set_tests_properties(compressible_smoke PROPERTIES
     TIMEOUT 180
     LABELS "smoke;compressible")
 
+# ---- dbns_numerics: density-based solver foundational numerics (header-only) ----
+add_executable(test_dbns_numerics cpp/test_dbns_numerics.cpp)
+target_include_directories(test_dbns_numerics PRIVATE ${CMAKE_SOURCE_DIR}/dbns/include)
+target_link_libraries(test_dbns_numerics PRIVATE btm_compressible)
+add_test(NAME dbns_numerics COMMAND test_dbns_numerics)
+set_tests_properties(dbns_numerics PROPERTIES TIMEOUT 30 LABELS "unit;dbns")
+
 # ---- pytest target ----
 # Optional convenience target; the canonical way to run Python tests is
 # `pytest tests/python` from the repo root after building the .so.
