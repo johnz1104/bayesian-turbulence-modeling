@@ -252,14 +252,16 @@ class ChannelBaselineRANS:
             "omega": self._interp(self.omega, yplus_query),
         }
 
-    def timescale_plus_at(self, yplus_query, k_floor=1e-8):
-        """Baseline turbulence timescale tau^+ = nu_t^+ / (C_mu k^+) at stations.
+    def timescale_plus_at(self, yplus_query):
+        """Baseline turbulence timescale tau^+ = k^+/epsilon^+ = 1/(C_mu omega^+).
 
-        This is the timescale the discrepancy non-dimensionalisation expects, so
-        that the linear-eddy-viscosity anisotropy b = -C_mu dev(S) reproduces the
-        actual baseline Boussinesq anisotropy -nu_t/k * dev(strain). Equivalently
-        tau^+ = k^+/epsilon^+ = 1/(C_mu omega^+).
+        This is the turbulence timescale the discrepancy non-dimensionalisation
+        expects (dns_field: "1/omega or k/epsilon"). With it the linear-eddy-
+        viscosity anisotropy b = -C_mu dev(S) reproduces the canonical k-omega
+        Boussinesq anisotropy (eddy viscosity nu_t = k/omega). The omega form is
+        used rather than nu_t^+/(C_mu k^+) because the SST solver floors nu_t^+
+        near the wall while k^+ -> 0, which would make the ratio diverge; omega^+
+        is bounded and smooth through the viscous sublayer.
         """
-        p = self.profiles_at(yplus_query)
-        k = np.maximum(p["k"], k_floor)
-        return p["nu_t"] / (_CMU * k)
+        omega = self.profiles_at(yplus_query)["omega"]
+        return 1.0 / (_CMU * np.maximum(omega, 1e-30))
