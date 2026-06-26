@@ -5,6 +5,15 @@ produces, so results accumulate in one trackable place on the trunk. One
 subfolder per step (DNS_plan.md), each holding the curated evidence package for
 that step.
 
+## Data attribution
+
+Every dataset analysed here is third-party DNS, not produced by this project, and
+is cited where it is used. Full provenance (source, reference, license) is in
+`DNS_data/README.md`. The plane-channel data are from Lee and Moser (2015),
+J. Fluid Mech. 774, 395-415 (UT Austin Oden Institute,
+https://turbulence.oden.utexas.edu), used under their research-use-with-citation
+terms. The raw fields are kept local and are not redistributed in this repository.
+
 ## What goes here (tracked)
 
 - the per-step finding memo (the writeup measured against the pre-registered

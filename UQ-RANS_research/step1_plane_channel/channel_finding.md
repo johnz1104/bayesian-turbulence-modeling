@@ -23,7 +23,10 @@ pushes the coverage story toward the separated and compressible cases.
 
 ## 2. Data and forward model
 
-Data: Lee and Moser (2015) plane-channel DNS at five friction Reynolds numbers
+Data: the plane-channel DNS of Lee and Moser (2015), J. Fluid Mech. 774, 395-415,
+a third-party public dataset from the UT Austin Oden Institute
+(https://turbulence.oden.utexas.edu), used here under its research-use-with-citation
+terms and not produced by this work. Five friction Reynolds numbers
 (Re_tau = 180, 550, 1000, 2000, 5200), wall units, with the per-point statistical
 uncertainty (_stdev) carried as observation uncertainty. Loader:
 `UQ.datasets.ChannelDNS`, verified against the published per-case parameters.

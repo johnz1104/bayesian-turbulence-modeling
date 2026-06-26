@@ -173,9 +173,10 @@ handled.
 
 ## Compiled dataset 1: plane channel (Lee and Moser 2015)
 
-Status: compiled and verified 2026-06-25. First dataset, Step 1 of DNS_plan.md.
-Coverage is complete and the labeling error in the original upload (the Re_tau =
-5200 case sat in a folder named "5000") has been corrected.
+Status: downloaded from the source database (below) and verified 2026-06-25;
+third-party data, not produced by this project. First dataset, Step 1 of
+DNS_plan.md. Coverage is complete and the labeling error in the original upload
+(the Re_tau = 5200 case sat in a folder named "5000") has been corrected.
 
 ### Provenance
 
