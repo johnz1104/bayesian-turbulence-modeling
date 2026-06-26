@@ -39,8 +39,10 @@ sys.path.insert(0, os.path.join(_HERE, ".."))
 from UQ.datasets import ChannelDNS, CHANNEL_CASES
 from UQ.datasets.channel_baseline import ChannelBaselineRANS
 from UQ.datasets import channel_discrepancy as cdisc
-from UQ.datasets.channel_calibration import ChannelCalibration, CrossReStudy
+from UQ.datasets.channel_calibration import ChannelCalibration, CrossReStudy, PARAM_SETS
 from UQ import evaluation as ev
+
+PARAM_SETS_AVAILABLE = tuple(PARAM_SETS)
 
 CONFIG = {
     "cases": list(CHANNEL_CASES),
@@ -58,6 +60,12 @@ CONFIG = {
     "param_set": "a1_betaStar",
 }
 OUT = os.path.join(_HERE, "..", "..", "results", "channel")
+
+
+def ensemble_path(n, param_set):
+    """Cache path for one case; the default set keeps the bare name, others suffix."""
+    tag = "" if param_set == "a1_betaStar" else f"{param_set}_"
+    return os.path.join(OUT, f"ensemble_{tag}{n}.npz")
 
 
 # ---- stage 1: baselines ----------------------------------------------------
@@ -112,7 +120,7 @@ def stage_ensembles(regen, quick):
         c = ChannelCalibration(dns, param_set=CONFIG["param_set"],
                                n_stations=CONFIG["n_stations"], cfg=CONFIG["cfg"],
                                sigma_floor=CONFIG["sigma_floor"])
-        path = os.path.join(OUT, f"ensemble_{n}.npz")
+        path = ensemble_path(n, CONFIG["param_set"])
         if os.path.exists(path) and not regen:
             c.load_cache(dict(np.load(path)))
             print(f"  Re_tau {n:>4}: loaded {c.n_valid} ensemble points")
@@ -239,7 +247,8 @@ def make_figures(indist, evaluation):
     except Exception as exc:
         print(f"  [figures] matplotlib unavailable, skipping ({exc})")
         return
-    fig_dir = os.path.join(OUT, "figures")
+    tag = "" if CONFIG["param_set"] == "a1_betaStar" else f"_{CONFIG['param_set']}"
+    fig_dir = os.path.join(OUT, f"figures{tag}")
     os.makedirs(fig_dir, exist_ok=True)
 
     # reliability diagram (aggregated over Re, standard vs tempered)
@@ -297,7 +306,11 @@ def main():
     ap.add_argument("--regen-baselines", action="store_true")
     ap.add_argument("--regen-ensembles", action="store_true")
     ap.add_argument("--quick", action="store_true")
+    ap.add_argument("--param-set", choices=list(PARAM_SETS_AVAILABLE),
+                    default=CONFIG["param_set"],
+                    help="SST coefficient set to calibrate (default a1_betaStar)")
     args = ap.parse_args()
+    CONFIG["param_set"] = args.param_set
 
     os.makedirs(OUT, exist_ok=True)
     print("== stage 1: baselines ==")
@@ -323,9 +336,11 @@ def main():
         "evaluation": {str(n): {k: v for k, v in evaluation[n].items()
                                 if not k.startswith("pit")} for n in CONFIG["cases"]},
     }
-    with open(os.path.join(OUT, "finding_numbers.json"), "w") as f:
+    tag = "" if CONFIG["param_set"] == "a1_betaStar" else f"_{CONFIG['param_set']}"
+    out_json = os.path.join(OUT, f"finding_numbers{tag}.json")
+    with open(out_json, "w") as f:
         json.dump(numbers, f, indent=2, default=float)
-    print(f"\nwrote {os.path.join(OUT, 'finding_numbers.json')}")
+    print(f"\nwrote {out_json}")
 
 
 if __name__ == "__main__":
