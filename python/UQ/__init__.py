@@ -25,6 +25,7 @@ gracefully otherwise; the rest are numpy/scipy only.
 
 from . import realizability, discrepancy, synthetic, conformal
 from . import generalized_bayes, evaluation, dns_field
+from . import datasets
 
 __all__ = [
     "realizability",
@@ -34,4 +35,5 @@ __all__ = [
     "generalized_bayes",
     "evaluation",
     "dns_field",
+    "datasets",
 ]

@@ -26,6 +26,11 @@ compile_commands.json
 /data/*
 !/data/README.md
 
+# ---- DNS datasets: bulk fields kept local; only the manifest .md files are tracked ----
+/DNS_data/*
+!/DNS_data/README.md
+!/DNS_data/*.md
+
 # ---- Local result / output / run trees (kept local, never pushed) ----
 /results/
 /outputs/
