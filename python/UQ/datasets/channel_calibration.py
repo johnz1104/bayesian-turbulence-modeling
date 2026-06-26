@@ -191,7 +191,7 @@ class ChannelCalibration:
 
     # ---- posterior and posterior predictive -------------------------------
 
-    def sample_posterior(self, eta=1.0, n_walkers=24, n_steps=3000, burn_in=600,
+    def sample_posterior(self, eta=1.0, n_walkers=24, n_steps=2000, burn_in=500,
                          seed=0):
         """Power (Gibbs) posterior at learning rate eta via the existing sampler.
 
@@ -310,43 +310,48 @@ class CrossReStudy:
             return lp + eta * ll
         return log_post
 
-    def pooled_posterior_samples(self, train, eta, n_walkers=24, n_steps=3000,
-                                 burn_in=600, seed=0):
+    def pooled_posterior_samples(self, train, eta, n_walkers=24, n_steps=2000,
+                                 burn_in=500, seed=0):
         samples, _ = run_emcee(
             log_posterior=self.pooled_log_posterior(train, eta), prior=self.prior,
             n_walkers=n_walkers, n_steps=n_steps, burn_in=burn_in, thin=1,
             progress=False, rng_seed=seed)
         return samples
 
-    def predict_heldout(self, train, test, eta, level=0.9, seed=0):
+    def predict_heldout(self, train, test, eta=None, level=0.9, seed=0):
         """Calibrate on train Reynolds numbers, predict the held-out one.
 
         Returns a dict with the predictive coverage and sharpness at the held-out
         Re for standard Bayes (eta = 1) and the tempered posterior, plus the
         conformal coverage and gap (calibration set = a training Re's stations).
+        Two pooled posteriors are drawn (eta = 1 and the tempered eta) and reused
+        across the standard / tempered / conformal scores. If eta is None it is
+        moment-matched on the training Reynolds numbers from the eta = 1 posterior.
         """
         test_cal = self.cals[test]
         out = {"test": test, "train": list(train)}
 
-        # standard Bayes (eta = 1) and tempered posterior predictive at held-out Re
-        for tag, e in (("standard", 1.0), ("tempered", eta)):
-            post = self.pooled_posterior_samples(train, e, seed=seed)
+        # standard (eta = 1) pooled posterior, reused for the learning-rate match
+        post1 = self.pooled_posterior_samples(train, 1.0, seed=seed)
+        if eta is None:
+            eta = float(np.mean([self.cals[r].calibrate_eta(
+                post1, np.arange(self.cals[r].n_qoi)) for r in train]))
+        post_t = self.pooled_posterior_samples(train, eta, seed=seed)
+
+        for tag, e, post in (("standard", 1.0, post1), ("tempered", eta, post_t)):
             pp = test_cal.posterior_predictive(post, eta=e, seed=seed + 1)
             cov, sharp = test_cal.coverage_vs_truth(pp, level=level)
             out[f"{tag}_coverage"] = cov
             out[f"{tag}_sharpness"] = sharp
-            out[f"{tag}_eta"] = e
+        out["eta"] = eta
 
         # conformal: calibration residuals from a training Re, applied at held-out Re
-        cal_re = train[0]
-        cal = self.cals[cal_re]
-        post = self.pooled_posterior_samples(train, eta, seed=seed)
+        cal = self.cals[train[0]]
         idx_all = np.arange(test_cal.n_qoi)
-        pred_cal = cal.point_prediction(post, idx_all)
-        pred_test = test_cal.point_prediction(post, idx_all)
-        y_cal, y_test = cal.qoi_truth, test_cal.qoi_truth
-        lo, hi = cf.split_conformal_intervals(pred_cal, y_cal, pred_test,
+        pred_cal = cal.point_prediction(post_t, idx_all)
+        pred_test = test_cal.point_prediction(post_t, idx_all)
+        lo, hi = cf.split_conformal_intervals(pred_cal, cal.qoi_truth, pred_test,
                                               alpha=1.0 - level)
-        out["conformal_coverage"] = ev.empirical_coverage(y_test, lo, hi)
+        out["conformal_coverage"] = ev.empirical_coverage(test_cal.qoi_truth, lo, hi)
         out["conformal_gap"] = level - out["conformal_coverage"]
         return out

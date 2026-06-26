@@ -176,12 +176,11 @@ def stage_cross_re(cals):
     seed = CONFIG["seed"]
     results = {"loro": [], "high_re_holdout": None}
 
-    # leave-one-Reynolds-out
+    # leave-one-Reynolds-out (predict_heldout moment-matches eta on the train Re)
     print("  leave-one-Reynolds-out:")
     for test in cases:
         train = tuple(r for r in cases if r != test)
-        eta = _pooled_eta(study, train, test, seed)
-        r = study.predict_heldout(train, test, eta=eta, level=level, seed=seed)
+        r = study.predict_heldout(train, test, level=level, seed=seed)
         results["loro"].append(r)
         print(f"    held-out Re_tau {test:>4}: standard cov={r['standard_coverage']:.3f} "
               f"tempered cov={r['tempered_coverage']:.3f} "
@@ -192,22 +191,13 @@ def stage_cross_re(cals):
     print(f"  high-Re holdout (train {train}):")
     hi = []
     for test in (2000, 5200):
-        eta = _pooled_eta(study, train, test, seed)
-        r = study.predict_heldout(train, test, eta=eta, level=level, seed=seed)
+        r = study.predict_heldout(train, test, level=level, seed=seed)
         hi.append(r)
         print(f"    held-out Re_tau {test:>4}: standard cov={r['standard_coverage']:.3f} "
               f"tempered cov={r['tempered_coverage']:.3f} "
               f"conformal cov={r['conformal_coverage']:.3f} (gap {r['conformal_gap']:+.3f})")
     results["high_re_holdout"] = {"train": list(train), "results": hi}
     return results
-
-
-def _pooled_eta(study, train, test, seed):
-    """Moment-match the pooled-posterior learning rate on the training Re only."""
-    post = study.pooled_posterior_samples(train, eta=1.0, seed=seed)
-    etas = [study.cals[r].calibrate_eta(post, np.arange(study.cals[r].n_qoi))
-            for r in train]
-    return float(np.mean(etas))
 
 
 # ---- stage 6: evaluation harness (reliability, PIT, CRPS) -------------------
