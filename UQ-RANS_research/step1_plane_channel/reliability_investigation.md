@@ -77,16 +77,38 @@ which fits the full conditional density rather than a variance, is designed to
 remove it. In that sense the bow here is a small, in-distribution preview of the
 argument for the generative spine.
 
-## What does not fix it, and what does
+## Can the bow be reduced within Step 1? (tested)
 
-- Conformal is distribution-free and so is not tied to a Gaussian shape, but at
-  this per-Re station count (about 20 stations, split for calibration) its
-  across-level curve is finite-sample noisy; it is reliable at the single headline
-  level (0.9, where the full-split conformal gives 0.91 in the main finding) but is
-  not a clean fix for the whole curve at this sample size.
-- The principled fix is a predictive that matches the discrepancy shape, not just
-  its variance: the generative conditional model-form. Establishing that on a case
-  with a strongly non-Gaussian discrepancy is the Step 3 finding.
+The natural distribution-free lever is conformal, which assumes no Gaussian shape.
+Tested directly: pool the point-prediction residuals across all 105 stations and
+five Reynolds numbers, split 52 calibration / 53 test, and build symmetric
+split-conformal intervals at each level. It does NOT reduce the bow; it is worse:
+
+| nominal | pooled conformal | Gaussian generalized Bayes |
+|---|---|---|
+| 0.1 | 0.245 | 0.133 |
+| 0.3 | 0.358 | 0.305 |
+| 0.5 | 0.566 | 0.571 |
+| 0.7 | 0.642 | 0.733 |
+| 0.9 | 0.811 | 0.905 |
+
+mean |empirical - nominal|: pooled conformal 0.072 versus Gaussian generalized
+Bayes 0.034. The leptokurtic, slightly-biased residuals (a clump near zero plus a
+thin tail) make the symmetric-residual conformal quantile over-cover at low levels
+and under-cover at high ones, so the distribution-free interval is no free fix for
+the across-level shape here. The Gaussian generalized-Bayes curve is in fact the
+best-calibrated of the Step 1 options across levels, and it is exactly on target at
+the headline 0.9 (0.905). Conformal remains valuable at the single headline level
+(0.91 in the main finding) where it is a coverage guarantee, not a curve fit.
+
+So within Step 1 there is no clean fix, and that is the point. The principled fix
+is a predictive that matches the discrepancy shape rather than its variance: the
+conditional generative model-form, which fits the full density. Establishing it on
+a strongly non-Gaussian discrepancy is the Step 3 finding; the small channel bow is
+its in-distribution motivation. An ad hoc parametric shape correction (a Student-t
+predictive matched to the +0.53 excess kurtosis) could shrink the bow but is out of
+scope and would obscure the diagnostic, so it is not adopted. Recommendation: report
+the bow as the diagnostic it is; the headline coverage claim is unaffected.
 
 ## Reproduce
 
