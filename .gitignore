@@ -13,23 +13,23 @@ compile_commands.json
 .vscode/
 .claude/
 
-# ---- Relocated findings (kept local, never pushed): supporting + unrelated ----
-/_archive/
-
-# ---- Deferred service-layer scaffold (kept local, not pushed) ----
-# .github/ (CI) and the Makefile/scripts entrypoint are now TRACKED on trunk so
-# CI and every later agent share one build-and-test entrypoint. Only the in-progress
-# infra/ runtime scaffold stays local until it is declared in scope.
-/infra/
-
-# ---- Datasets: contents kept local; only the provenance manifest is tracked ----
-/data/*
-!/data/README.md
-
 # ---- Local result / output / run trees (kept local, never pushed) ----
 /results/
 /outputs/
 /runs/
+
+# ---- viz raw run artifacts (regenerable; figures under viz/figures are kept) ----
+/viz/artifacts/
+
+# ---- DNS datasets (bulk data stays local; only the manifest .md files are tracked) ----
+/DNS_data/*
+!/DNS_data/README.md
+!/DNS_data/*.md
+
+# ---- Local-only agent instructions and archived program records (never pushed) ----
+/CLAUDE.md
+/_archive/
+/infra/
 
 # ---- Local status reports, logs, working notes, and archived program records ----
 /summary.md
@@ -39,4 +39,3 @@ compile_commands.json
 /api_prep.md
 /git_summary.md
 /documents/
-/CLAUDE.md
