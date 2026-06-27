@@ -110,8 +110,14 @@ thermodynamic modes the anisotropy tensor cannot hold.
 
 ## Databases and access portals
 
+- **UT Austin Oden Institute (turbulence.oden.utexas.edu).** Plane turbulent
+  channel DNS up to Re_tau 5200 (Lee and Moser 2015). The source of the compiled
+  channel data (dataset 1 below) and the real-DNS calibration source actually used
+  for Step 1. https://turbulence.oden.utexas.edu
 - **TU Darmstadt FDY (Oberlack group).** Attached canonical flows: channel,
-  Couette, rotating channel, plane jets. The primary real-DNS calibration source.
+  Couette, rotating channel, plane jets. A candidate source for the attached
+  calibration and cross-flow cases (still a strong option for the Step 2 Couette
+  data); it is not the source of the compiled channel data.
   https://www.fdy.tu-darmstadt.de/fdyresearch/dns/direkte_numerische_simulation.en.jsp
 - **Johns Hopkins Turbulence Databases (JHTDB).** Channel, boundary layer, isotropic,
   and other space-time-resolved DNS with a query interface.
