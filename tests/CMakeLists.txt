@@ -17,6 +17,12 @@ target_link_libraries(test_mesh_bfs PRIVATE btm_core)
 add_test(NAME mesh_bfs COMMAND test_mesh_bfs)
 set_tests_properties(mesh_bfs PROPERTIES TIMEOUT 30 LABELS "unit;mesh")
 
+# ---- couette_bc: moving-wall (Couette) boundary-condition test ----
+add_executable(test_couette_bc cpp/test_couette_bc.cpp)
+target_link_libraries(test_couette_bc PRIVATE btm_core)
+add_test(NAME couette_bc COMMAND test_couette_bc)
+set_tests_properties(couette_bc PROPERTIES TIMEOUT 30 LABELS "unit;bc")
+
 # ---- compressible_smoke: Ma=0.1 channel smoke convergence ----
 add_executable(test_compressible_smoke cpp/test_compressible_smoke.cpp)
 target_link_libraries(test_compressible_smoke PRIVATE btm_compressible)
