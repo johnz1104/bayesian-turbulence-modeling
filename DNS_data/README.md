@@ -239,3 +239,131 @@ Reynolds number, provenance). Later datasets (separated, compressible, SBLI) add
 their own raw loaders but emit the SAME canonical record, extended with temperature,
 heat flux, and two-dimensional fields as the case requires, so the discrepancy
 extraction, the UQ, and the evaluation layers always see one uniform representation.
+
+## Compiled dataset 2: plane Couette (Pirozzoli, Bernardini and Orlandi 2014)
+
+Status: downloaded and verified 2026-06-27; third-party data, not produced by this
+project. Step 2 of DNS_plan.md, the cross-flow generalization primary (calibrate on
+channel, predict Couette). Loader: UQ.datasets.CouetteDNS.
+
+### Provenance
+
+- Source or URL: Roma (Sapienza University of Rome) DNS database, group of
+  S. Pirozzoli; distributed with the reference below.
+- Reference: S. Pirozzoli, M. Bernardini and P. Orlandi, "Turbulence statistics in
+  Couette flow at high Reynolds number", J. Fluid Mech. 742 (2014) 171-191.
+- Regime: incompressible
+- Cases and per-case parameters (from the RETAU title line of each file):
+
+  | file | Re_tau | wall-normal points (half gap) | sha256 |
+  |---|---|---|---|
+  | roma_couette_171.txt | 171 | 128 | d2190dd4...28de10d |
+  | roma_couette_260.txt | 260 | 128 | 49416bd3...142dd6 |
+  | roma_couette_507.txt | 507 | 192 | 7f2d9522...7ca0ab |
+  | roma_couette_986.txt | 986 | 256 | 6ada1862...8384ca |
+
+- Fields provided: per wall-normal station (wall units), y, y^+, mean velocity U^+,
+  the rms velocity fluctuations u'^+, v'^+, w'^+ (the normal stresses are their
+  squares), and the shear covariance u'v'^+. No mean-gradient column (dU^+/dy^+ is
+  finite-differenced), no k column (k^+ = 0.5(uu+vv+ww)), and no per-point _stdev.
+- OOD axis it populates: flow type (cross-flow, channel -> Couette), and a bonus
+  cross-Re axis within Couette (four friction Reynolds numbers).
+- Observation uncertainty: MODELED relative value (UQ.datasets.observation_sigma),
+  not a DNS _stdev (the file carries none). Anchored by the data-only constant-
+  total-stress identity dU^+/dy^+ - u'v'^+ = 1, whose rms deviation is 0.03 to
+  0.15 percent across the four cases.
+- Used by: research.md and DNS_plan.md Step 2 (cross-flow generalization).
+- License and notes: free for research use with the citation above. All quantities
+  are in wall units (^+); the profile spans one wall to the centerline (the half
+  gap), U^+ from 0 to the centerline value (~21.5 at Re_tau 986).
+
+### Raw layout and file format
+
+Per case, DNS_data/couette_flow/roma_couette_<Re_tau>.txt: a header of '*' blocks
+and bare prose lines (NOT '%'), the friction Reynolds number only in the title
+line "... AT RETAU = <N>", then seven whitespace-separated wall-unit columns:
+y, y^+, U^+, u'^+, v'^+, w'^+, u'v'^+. paper.pdf is included alongside for reference.
+
+## Compiled dataset 3: turbulent pipe flow (Pirozzoli 2024)
+
+Status: downloaded and verified 2026-06-27; third-party data, not produced by this
+project. Step 2 cross-geometry companion. Loader: UQ.datasets.PipeDNS.
+
+### Provenance
+
+- Source or URL: Roma (Sapienza University of Rome) DNS database, group of
+  S. Pirozzoli; distributed with the reference below.
+- Reference: S. Pirozzoli, "On the streamwise velocity variance in the near-wall
+  region of turbulent flows", J. Fluid Mech. 989 (2024) A5.
+- Regime: incompressible
+- Cases and per-case parameters (from the '%' header block of each file):
+
+  | file | Re_tau (actual) | Re_bulk | points | sha256 |
+  |---|---|---|---|---|
+  | Pipe_Re_tau500.txt   | 495.6   | 1.70e4 | 95   | 96381405...4c5b330e |
+  | Pipe_Re_tau1140.txt  | 1132.2  | 4.40e4 | 163  | 20025e3b...f677d26c |
+  | Pipe_Re_tau2000.txt  | 1972.0  | 8.25e4 | 242  | c001aacb...94ab09c1 |
+  | Pipe_Re_tau3000.txt  | 3027.3  | 1.33e5 | 326  | 25c9971c...c6d7d320 |
+  | Pipe_Re_tau6000.txt  | 6007.9  | 2.85e5 | 545  | 4c5839cb...26ee13d2 |
+  | Pipe_Re_tau12000.txt | 12054.6 | 6.12e5 | 1023 | 959fc065...69be44ef |
+
+- Fields provided: per station (wall units), y^+, mean U_z^+, mean pressure P^+,
+  the velocity variances u_z^2, u_r^2, u_t^2 (streamwise, radial, azimuthal), the
+  shear covariance u_z u_r, and the pressure variance p^2. No mean-gradient column
+  (FD), no k column (computed), no _stdev. P^+ and p^2 are ignored by the loader.
+- Cylindrical-to-Cartesian mapping: u_z^2 -> R_xx, u_r^2 -> R_yy (radial =
+  wall-normal), u_t^2 -> R_zz (azimuthal = spanwise), and u_z u_r -> R_xy with a
+  SIGN FLIP (R_xy = -u_z u_r), because the wall-normal direction into the fluid is
+  -r. The flip is fixed, not chosen, by the linear-total-stress identity (below).
+- OOD axis it populates: geometry (cross-geometry, channel -> pipe), plus cross-Re.
+- Observation uncertainty: MODELED relative value, anchored by the linear-total-
+  stress identity dU^+/dy^+ - R_xy = 1 - y^+/Re_tau (rms deviation 0.05 to 0.28
+  percent across the six cases; order one if the shear sign flip is omitted).
+- Used by: research.md and DNS_plan.md Step 2 (cross-geometry companion).
+- License and notes: free for research use with the citation above. Only y^+ is
+  given; the outer coordinate is y/R = y^+/Re_tau. The lowest-Reynolds file omits
+  the friction-factor header line; it is derived from f = 8(2 Re_tau/Re_bulk)^2.
+
+## Compiled dataset 4: streamwise-rotating channel (University of Manitoba)
+
+Status: downloaded and verified 2026-06-27; third-party data, not produced by this
+project. Step 2 model-stress-test companion (standard SST has no rotation
+correction). Loader: UQ.datasets.RotatingChannelDNS.
+
+### Provenance
+
+- Source or URL: University of Manitoba streamwise-rotating channel DNS database
+  (Department of Mechanical Engineering, Winnipeg).
+- Reference: Z. Yang and B.-C. Wang, "Capturing Taylor-Gortler vortices in a
+  streamwise-rotating channel at very high rotation numbers", J. Fluid Mech. 838
+  (2018) 658-689, doi:10.1017/jfm.2017.892.
+- Regime: incompressible
+- Cases and per-case parameters (Re_tau = 180 for all; from the FLOW CONDITIONS
+  header block):
+
+  | file | Ro_tau | stations (full channel) | sha256 |
+  |---|---|---|---|
+  | tu-darmstadt_re180_ro7.5  | 7.5 | 129 | 7596fa5e...96bc157c4 |
+  | tu-darmstadt_re180_ro15.txt  | 15  | 129 | 89c32d47...725f02cce |
+  | tu-darmstadt_re180_ro30.txt  | 30  | 129 | fb455093...4f0e6f2563 |
+  | tu-darmstadt_re180_ro75.txt  | 75  | 129 | b4965a23...f96327b80 |
+  | tu-darmstadt_re180_ro150.txt | 150 | 129 | 8db787ba...0729352ab |
+
+- Fields provided: per station (wall units), y/h, mean U^+ and W^+, the full
+  Reynolds-stress tensor <uu>,<vv>,<ww>,<uv>,<uw>,<vw>^+, TKE^+, and the
+  Reynolds-stress-transport budget terms (production, rotation, pressure-strain,
+  dissipation, diffusions, residual) for each stress. Loaded columns: the first ten
+  plus the six budget residual columns res_*^+. No _stdev.
+- OOD axis it populates: system rotation (a case standard SST fails without a
+  rotation correction); the rotation number Ro_tau is swept across five conditions.
+- Streamwise rotation makes W^+ and <uw>,<vw>^+ nonzero, so the mean velocity
+  gradient carries dU^+/dy^+ and dW^+/dy^+ and the full anisotropy is active. The
+  profile spans the full channel (y/h from +1 to -1, 129 stations); rotation breaks
+  the top/bottom symmetry (U^+ even, W^+ odd about the centerline).
+- Observation uncertainty: MODELED relative value, anchored by the file's own RSTE
+  budget-closure residual columns res_*^+ (rms 0.06 to 0.44 percent, growing with
+  Ro_tau). Files use CRLF line endings, and the Ro_tau 7.5 file has no .txt suffix.
+- Used by: research.md and DNS_plan.md Step 2 (rotation model-stress-test).
+- License and notes: ALL RIGHTS RESERVED by the University of Manitoba; the data may
+  be used WITH REFERENCE (cite Yang and Wang 2018). Honor this citation requirement
+  wherever the data is used.

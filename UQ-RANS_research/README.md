@@ -9,10 +9,20 @@ that step.
 
 Every dataset analysed here is third-party DNS, not produced by this project, and
 is cited where it is used. Full provenance (source, reference, license) is in
-`DNS_data/README.md`. The plane-channel data are from Lee and Moser (2015),
-J. Fluid Mech. 774, 395-415 (UT Austin Oden Institute,
-https://turbulence.oden.utexas.edu), used under their research-use-with-citation
-terms. The raw fields are kept local and are not redistributed in this repository.
+`DNS_data/README.md`. The raw fields are kept local and are not redistributed in
+this repository.
+
+- Plane channel (Step 1): Lee and Moser (2015), J. Fluid Mech. 774, 395-415 (UT
+  Austin Oden Institute, https://turbulence.oden.utexas.edu), research-use with
+  citation.
+- Plane Couette (Step 2): Pirozzoli, Bernardini and Orlandi (2014), J. Fluid Mech.
+  742, 171-191 (Roma / Sapienza University of Rome), research-use with citation.
+- Turbulent pipe (Step 2 companion): Pirozzoli (2024), J. Fluid Mech. 989, A5
+  (Roma / Sapienza University of Rome), research-use with citation.
+- Streamwise-rotating channel (Step 2 companion): Yang and Wang (2018), J. Fluid
+  Mech. 838, 658-689 (University of Manitoba). All rights reserved by the
+  University of Manitoba; the data may be used with reference, so it is cited
+  wherever used.
 
 ## What goes here (tracked)
 
