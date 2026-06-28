@@ -43,9 +43,9 @@ from UQ.datasets.couette_crossflow import CrossFlowStudy
 from UQ.datasets import crossflow_companions as companions
 
 CONFIG = {
-    "channel_cases": [550, 1000, 2000, 5200],
+    "channel_cases": [550, 1000, 2000],
     "couette_cases": [171, 260, 507, 986],
-    "n_ensemble": 40,
+    "n_ensemble": 24,
     "n_stations": 18,
     "level": 0.9,
     "bands": [0.005, 0.010],
