@@ -12,6 +12,7 @@ enum class BCType {
     Dirichlet, Neumann,
     InletVelocity, OutletPressure,
     WallNoSlip, WallKOmega,
+    WallMoving,                 // no-slip wall translating tangentially at vecValue (Couette)
     Symmetry, Cyclic
 };
 // Boundary conditions for a single mesh patch 
@@ -101,6 +102,36 @@ struct FlowBoundaryConditions {
         }
         return bc;
     }
+
+    // plane Couette: bottom wall stationary, top wall translating at Uwall in x
+    // (both remain no-slip k-omega walls). Fully-developed Couette is streamwise
+    // invariant, so rather than force a developing inlet/outlet flow the streamwise
+    // ends are made zero-gradient (Neumann) on every field and the flow is driven
+    // purely by the moving-wall shear with no mean pressure gradient. With the wall
+    // velocities pinning the profile (0 at the bottom, Uwall at the top) and the
+    // outlet pressure pinning the level, the solution is the x-invariant turbulent
+    // Couette profile (constant total stress dU/dy(nu+nuT) = u_tau^2), reached on a
+    // short domain rather than after a long, slow development length. The top wall
+    // keeps its WallKOmega k/omega BC (k = 0, Menter omega); only its velocity moves.
+    static FlowBoundaryConditions couetteDefaults(
+        const Mesh& mesh, double Uwall, double kIn, double omIn) {
+        FlowBoundaryConditions bc = channelDefaults(mesh, 0.5 * Uwall, kIn, omIn);
+        for (int p = 0; p < mesh.nPatches(); ++p) {
+            const Patch& pat = mesh.patch(p);
+            if (pat.name == "top") {
+                // moving wall: tangential velocity Uwall, k/omega stay WallKOmega
+                bc.velocityBC[p] = {BCType::WallMoving, 0.0, Vec3(Uwall, 0, 0), pat.name};
+            } else if (pat.name == "inlet") {
+                // streamwise-invariant: zero-gradient inflow (purely wall-driven)
+                bc.velocityBC[p] = {BCType::Neumann, 0.0, {}, pat.name};
+                bc.pressureBC[p] = {BCType::Neumann, 0.0, {}, pat.name};
+                bc.kBC[p]        = {BCType::Neumann, 0.0, {}, pat.name};
+                bc.omegaBC[p]    = {BCType::Neumann, 0.0, {}, pat.name};
+            }
+            // outlet keeps channelDefaults: zero-gradient velocity, fixed pressure
+        }
+        return bc;
+    }
 };
 
 // Apply functions
@@ -117,6 +148,8 @@ inline void applyVelocityBC(VectorField& U,
             switch (bc.type) {
                 case BCType::WallNoSlip:
                     U.bface(fi) = Vec3(0,0,0); break;       // enforces u = 0 for no-slip walls
+                case BCType::WallMoving:                    // moving wall: u = wall velocity (no-slip,
+                                                            // but the wall translates tangentially)
                 case BCType::InletVelocity:                 // enforces u = U_in
                 case BCType::Dirichlet:                     // enforces u = u_boundary
                     U.bface(fi) = bc.vecValue; break;
