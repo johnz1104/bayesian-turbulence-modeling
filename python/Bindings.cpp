@@ -332,7 +332,9 @@ PYBIND11_MODULE(rans_sst_py, m) {
         .def(py::init<>())
         .def_static("channel_defaults", &FlowBoundaryConditions::channelDefaults)
         .def_static("flat_plate_defaults", &FlowBoundaryConditions::flatPlateDefaults)
-        .def_static("bfs_defaults", &FlowBoundaryConditions::bfsDefaults);
+        .def_static("bfs_defaults", &FlowBoundaryConditions::bfsDefaults)
+        .def_static("couette_defaults", &FlowBoundaryConditions::couetteDefaults,
+                    py::arg("mesh"), py::arg("Uwall"), py::arg("kIn"), py::arg("omIn"));
 
     // SolverSettings
     py::class_<SolverSettings>(m, "SolverSettings")
