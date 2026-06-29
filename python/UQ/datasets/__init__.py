@@ -8,5 +8,13 @@ is the first and establishes the pattern (location, naming, provenance) every
 later dataset reuses (Couette, separated, compressible, SBLI).
 """
 from .channel import ChannelDNS, CHANNEL_CASES
+from .couette import CouetteDNS, COUETTE_CASES
+from .pipe import PipeDNS, PIPE_CASES
+from .rotating_channel import RotatingChannelDNS, ROTATING_CASES
 
-__all__ = ["ChannelDNS", "CHANNEL_CASES"]
+__all__ = [
+    "ChannelDNS", "CHANNEL_CASES",
+    "CouetteDNS", "COUETTE_CASES",
+    "PipeDNS", "PIPE_CASES",
+    "RotatingChannelDNS", "ROTATING_CASES",
+]
