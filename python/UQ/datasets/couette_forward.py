@@ -225,6 +225,16 @@ class CouetteCalibration(ChannelCalibration):
                                      float(u), float(s))
         return obs
 
+    def to_cache(self):
+        """Arrays sufficient to rebuild the Couette surrogate without re-solving.
+
+        Overrides the channel cache (which stores y_delta); the Couette QoI stations
+        are in y/h, and the matched nu is stored so the case reconstructs exactly.
+        """
+        return {"X": self.X, "loglik": self.loglik, "preds": self.preds,
+                "qoi_truth": self.qoi_truth, "qoi_sigma": self.qoi_sigma,
+                "y_h": self.y_h, "re_tau": self.dns.re_tau, "nu": self.nu}
+
     def _forward_model(self):
         rs = self.rs
         Uwall = _UWALL
