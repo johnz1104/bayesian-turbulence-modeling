@@ -3,7 +3,7 @@
 These are the minimal shared contracts every Thread A and Thread B agent builds
 against. They are FROZEN: consume them, do not edit them in place from a
 consuming branch. An interface change is escalated to a reviewed `core/` PR (root
-CLAUDE.md, working rules). One planned revision is expected after Phase 1; until
+CLAUDE.md, working rules). One planned revision is expected early; until
 then the surface stays as small as it is here.
 
 The contracts are designed against the real C++/Python framework

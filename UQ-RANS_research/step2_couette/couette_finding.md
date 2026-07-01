@@ -1,7 +1,7 @@
-# Couette cross-flow generalization finding (DNS_plan.md Step 2)
+# Couette cross-flow generalization finding
 
 Evidence package for the second real-data finding of the UQ-for-RANS program: does
-the Step-1 channel calibration plus its calibrated UQ transfer to a held-out flow
+the channel calibration plus its calibrated UQ transfer to a held-out flow
 type (plane Couette), and does the predictive interval cover the Couette truth at
 the strict 0.5 percent observation band.
 
@@ -9,16 +9,16 @@ This memo is generated against the pre-registered criterion below. The numbers c
 from `python/UQ/reproduce_couette.py` (fixed seeds, config in that file, ensembles
 cached under the gitignored `results/couette/`); nothing was tuned toward the
 criterion. The correction is calibrated on the channel and applied to the held-out
-Couette, exactly as Step 1 calibrated on training Reynolds numbers and applied to
+Couette, exactly as the channel calibrated on training Reynolds numbers and applied to
 held-out ones.
 
-## 1. Pre-registered criterion (reviewer-set before the runs)
+## 1. Pre-registered criterion (set before the runs)
 
 A-posteriori Couette (through the moving-wall solver), 0.5 percent primary band and
 a 1 percent sensitivity band:
 
 - Standard Bayes is overconfident on the Couette mean-velocity and Cf QoIs
-  (expected, re-confirming the Step-1 cross-flow), and generalized Bayes and
+  (expected, re-confirming the channel overconfidence), and generalized Bayes and
   conformal restore coverage to within a few points of nominal at the 0.5 percent
   band WITHOUT inflating the observation floor, with the conformal cross-flow gap
   reported honestly. Graceful, characterized transfer is positive; a silent
@@ -27,8 +27,8 @@ a 1 percent sensitivity band:
 
 Rotating-channel companion (a-priori diagnostic): the streamwise-rotation
 out-of-plane stress is a structural model-form failure a linear eddy-viscosity
-cannot represent, and the global Step-1/2 correction inflates diffusely and cannot
-localise to it, which motivates the Step-3 feature-conditioned generative
+cannot represent, and the global correction inflates diffusely and cannot
+localise to it, which motivates the feature-conditioned generative
 model-form. (The streamwise-rotation mean velocity is symmetric, so there is no
 one-sided unstable side; the failure is per-component, not per-wall.)
 
@@ -57,9 +57,9 @@ channel QoI. The same SST closure that was calibrated on the channel is pushed
 through this Couette solve, so the prediction is a genuine a-posteriori transfer,
 not an analytic surrogate.
 
-## 3. Methods (all reuse the Step-1 layers)
+## 3. Methods (all reuse the channel layers)
 
-- Channel posterior: the Step-1 channel calibrations are pooled into a posterior
+- Channel posterior: the channel calibrations are pooled into a posterior
   over the SST coefficients (standard, eta = 1, and tempered at the channel-
   calibrated generalized-Bayes learning rate), reusing `CrossReStudy`.
 - Cross-flow prediction: the channel posterior is propagated through the
@@ -71,7 +71,7 @@ not an analytic surrogate.
   exchangeable calibration residuals, whose quantile sets the interval half-width
   applied to the Couette point predictions). The conformal cross-flow gap is the
   honest exchangeability-violation measure under the flow-type shift.
-- Within-Couette (bonus): the same Step-1 in-distribution and cross-Re protocol is
+- Within-Couette (bonus): the same in-distribution and cross-Re protocol is
   reused directly on the Couette calibrations (`CrossReStudy`), giving the
   within-Couette coverage and the cross-Re-within-Couette degradation, plus the
   capability check that the correction restores coverage when calibrated on Couette.
@@ -107,7 +107,7 @@ channel-calibrated learning rate eta = 0.014:
 
 Standard Bayes is overconfident on every held-out Couette case (coverage 0.05 to
 0.26 at nominal 0.90), with bands far too narrow (mean half-width 0.008 to 0.009 in
-U/U_b). This is the Step-1 overconfidence transferring to the cross-flow shift, as
+U/U_b). This is the channel overconfidence transferring to the cross-flow shift, as
 H1 predicts for a precise observation under a misspecified closure now applied to a
 flow type it never saw. The correction widens the bands roughly eightfold (gen.-Bayes
 half-width 0.07) and lifts coverage substantially: it is restored fully at the lower
@@ -133,7 +133,7 @@ The wider 1 percent band improves coverage everywhere (gen. Bayes up to 0.90,
 conformal up to 1.00) but leaves the same cross-flow gap structure: the direction
 (overconfidence) and the correction (widening restores most of the coverage) are
 robust to the modeled observation level, while the residual gap depends on it, the
-same sigma-sensitivity Step 1 reported in distribution.
+same sigma-sensitivity the channel reported in distribution.
 
 ## 6. Within-Couette result: the correction restores coverage when calibrated on Couette
 
@@ -169,11 +169,11 @@ S_13 = 0, so the Boussinesq anisotropy b_13 = -C_mu S_13 is exactly zero (verifi
 machine precision for every rotation number), while the DNS <uw> anisotropy is order
 0.03 to 0.10. The discrepancy is distributed unevenly across the six stress
 components, so a global correction (the scalar generalized-Bayes tempering or the
-pooled conformal half-width of Steps 1 to 2) must over-inflate the median component
-by a factor of 2.2 to 3.2 to cover the worst, and it cannot equalise the per-component
-coverage. This diffuse inflation is exactly what a feature-conditioned generative
-model-form (DNS_plan.md Step 3) is built to remove; the rotating channel is therefore
-a motivation for Step 3, not a clean cross-flow transfer. (The streamwise-rotation
+pooled conformal half-width of the channel and cross-flow work) must over-inflate the
+median component by a factor of 2.2 to 3.2 to cover the worst, and it cannot equalise
+the per-component coverage. This diffuse inflation is exactly what a feature-conditioned
+generative model-form is built to remove; the rotating channel is therefore
+a motivation for the separated-flow model-form, not a clean cross-flow transfer. (The streamwise-rotation
 mean velocity is symmetric about the centerline, so there is no one-sided unstable
 side; the structural failure is per-component, the picture that holds for streamwise
 rather than spanwise rotation.)
@@ -182,7 +182,7 @@ rather than spanwise rotation.)
 
 Positive, matching the pre-registered graceful-degradation shape. Standard Bayesian
 calibration is overconfident on the held-out Couette flow type (coverage 0.05 to 0.26
-at nominal 0.90, bands eightfold too narrow), the Step-1 overconfidence transferring
+at nominal 0.90, bands eightfold too narrow), the channel overconfidence transferring
 across the cross-flow shift. Generalized Bayes and conformal widen the bands and
 restore coverage at the strict 0.5 percent band, fully at the lower Couette Reynolds
 numbers and partially at the higher ones, with the conformal cross-flow gap reported
@@ -190,12 +190,12 @@ honestly (negative at low Re, up to +0.22 at Re_tau 507). The within-Couette che
 confirms the correction restores coverage to nominal when calibrated on Couette, so
 the residual gap is the genuine flow-type out-of-distribution shift, not a failure of
 the method. The rotating-channel companion exposes the structural out-of-plane failure
-and the diffuse inflation of a global correction, motivating the Step-3 generative
-model-form. The coverage-correction spine of research.md therefore holds across a
+and the diffuse inflation of a global correction, motivating the separated-flow generative
+model-form. The coverage-correction spine therefore holds across a
 held-out flow type and a-posteriori through a real moving-wall solve, and the pipeline
 (loaders, modeled observation sigma, moving-wall forward model, cross-flow protocol,
-companions, evaluation) is ready to carry to the separated (Step 3) and compressible
-(Steps 4 to 6) cases.
+companions, evaluation) is ready to carry to the separated and compressible
+cases.
 
 The honest caveats, none of which change the finding: the ensembles are 24 to 40
 members (a 2-coefficient surrogate; a larger ensemble would sharpen the surrogate but

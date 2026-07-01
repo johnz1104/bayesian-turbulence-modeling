@@ -1,9 +1,8 @@
 # DNS data to compile
 
 The high-fidelity datasets the UQ-for-RANS program needs, organized by the role
-each plays in research.md (incompressible) and compressible_research.md
-(compressible). The list is meant to be comprehensive, so it includes more than any
-single paper requires. Priority order is in the last section. The actual data files
+each plays in the incompressible and compressible studies. The list is meant to be comprehensive, so it includes more than any
+single study requires. Priority order is in the last section. The actual data files
 stay local and gitignored. Only this manifest and the per-dataset provenance entries
 are tracked, following the same rule as data/README.md.
 
@@ -38,10 +37,10 @@ baseline can be formed from it. The required and desired fields:
 ## Acceptance criteria (the gate)
 
 - Reynolds-stress availability is non-negotiable. A case without it is excluded.
-- For any out-of-distribution claim the axis must be populated by at least two
+- For any out-of-distribution generalization the axis must be populated by at least two
   conditions: two Reynolds numbers, or two Mach numbers, or two ramp angles or shock
   strengths. A single operating point cannot support a generalization test.
-- For compressible heat-flux claims the turbulent heat flux and the wall heat flux
+- For compressible heat-flux generalization the turbulent heat flux and the wall heat flux
   must both be present.
 - Reproducibility metadata (grid, scheme, BCs) must be documented.
 
@@ -59,10 +58,10 @@ clean in-distribution and cross-flow generalization.
 | Zero-pressure-gradient TBL | attached boundary-layer calibration and control | Re_theta up to ~6500 | U, Reynolds stress, Cf | Schlatter and Orlu 2010; Sillero, Jimenez and Moser 2013 |
 | Adverse-pressure-gradient TBL | non-equilibrium attached, pre-separation | various beta | U, Reynolds stress, Cf, Cp | Bobke et al. 2017; Pozuelo et al. 2022 |
 
-## Tier 2. Incompressible separated flows (the high-impact incompressible out-of-distribution test)
+## Tier 2. Incompressible separated flows (the incompressible out-of-distribution test)
 
 Where baseline SST is most wrong incompressibly, so the largest improvement and the
-clearest coverage claim live here.
+clearest coverage gains live here.
 
 | Case | Role | Re (as published) | Key fields | Source and references |
 |---|---|---|---|---|
@@ -77,7 +76,7 @@ clearest coverage claim live here.
 
 The compressible analogue of Tier 1. Supplies the momentum and heat-flux closure
 calibration and the attached-flow control, and exercises the temperature and
-heat-flux machinery before any SBLI claim.
+heat-flux machinery before any SBLI generalization test.
 
 | Case | Role | Ma and Re (as published) | Key fields | Source and references |
 |---|---|---|---|---|
@@ -85,9 +84,9 @@ heat-flux machinery before any SBLI claim.
 | Supersonic turbulent boundary layer | attached compressible, calibration and control | Ma ~2 to 2.25 | U, T, rho, Reynolds stress, turbulent heat flux, Cf, q_w | Pirozzoli, Grasso and Gatski 2004; Pirozzoli and Bernardini 2011 |
 | Hypersonic turbulent boundary layer | high-Mach attached, the moat regime begins here; wall-temperature effects | Ma 5 to 12, cold and hot walls | U, T, rho, Reynolds stress, turbulent heat flux, q_w, turbulent Mach number | Duan, Beekman and Martin 2010, 2011; Zhang, Duan and Choudhari 2018 |
 
-## Tier 4. Compressible shock-boundary-layer interaction (the flagship compressible out-of-distribution test)
+## Tier 4. Compressible shock-boundary-layer interaction (the compressible out-of-distribution test)
 
-The headline target. The Mach number and the ramp angle or shock strength are the
+The compressible shock-boundary-layer-interaction case. The Mach number and the ramp angle or shock strength are the
 out-of-distribution axes, so collect at least two operating points along whichever
 axis is used.
 
@@ -113,10 +112,10 @@ thermodynamic modes the anisotropy tensor cannot hold.
 - **UT Austin Oden Institute (turbulence.oden.utexas.edu).** Plane turbulent
   channel DNS up to Re_tau 5200 (Lee and Moser 2015). The source of the compiled
   channel data (dataset 1 below) and the real-DNS calibration source actually used
-  for Step 1. https://turbulence.oden.utexas.edu
+  for the channel work. https://turbulence.oden.utexas.edu
 - **TU Darmstadt FDY (Oberlack group).** Attached canonical flows: channel,
   Couette, rotating channel, plane jets. A candidate source for the attached
-  calibration and cross-flow cases (still a strong option for the Step 2 Couette
+  calibration and cross-flow cases (still a strong option for the cross-flow Couette
   data); it is not the source of the compiled channel data.
   https://www.fdy.tu-darmstadt.de/fdyresearch/dns/direkte_numerische_simulation.en.jsp
 - **Johns Hopkins Turbulence Databases (JHTDB).** Channel, boundary layer, isotropic,
@@ -140,31 +139,31 @@ fetch or regenerate it:
 ```
 ## <dataset-name>
 - Source or URL:
-- Reference (paper):
+- Reference (citation):
 - Version or date:
 - Regime: incompressible | compressible
 - Parameters: Re, Ma, ramp angle, wall thermal condition
 - Fields provided: U, Reynolds stress, T, rho, turbulent heat flux, q_w, Cp, Cf, budgets
 - OOD axis it populates: Reynolds number | Mach number | ramp angle | none (calibration)
 - Checksum (sha256):
-- Used by: research.md | compressible_research.md (which spine and milestone)
+- Used by: (which study)
 - License and notes:
 ```
 
 ## Priority order
 
-Collect in this sequence so each acquisition unblocks a concrete milestone.
+Collect in this sequence so each acquisition unblocks a concrete result.
 
 1. **Plane channel DNS** (Tier 1). Replaces the Dean correlation with real data and
    unblocks every incompressible result.
 2. **One Couette and one additional Reynolds number** (Tier 1). Gives the first
    cross-flow and cross-Re generalization tests.
 3. **One separated case, backward-facing step or periodic hills** (Tier 2). The
-   incompressible out-of-distribution headline.
+   incompressible out-of-distribution test.
 4. **Compressible plane channel and one supersonic boundary layer** (Tier 3). Brings
    up the temperature and heat-flux machinery and the compressible calibration.
-5. **One SBLI case at two ramp angles or two Mach numbers** (Tier 4). The flagship
-   compressible out-of-distribution claim. This is the highest-value compressible
+5. **One SBLI case at two ramp angles or two Mach numbers** (Tier 4). The central
+   compressible out-of-distribution test. This is the most demanding compressible
    acquisition.
 6. **Hypersonic boundary layer and isotropic-turbulence-through-a-shock** (Tiers 3
    and 5). Extends to the high-Mach regime and supplies the compressible-moat
@@ -180,8 +179,7 @@ handled.
 ## Compiled dataset 1: plane channel (Lee and Moser 2015)
 
 Status: downloaded from the source database (below) and verified 2026-06-25;
-third-party data, not produced by this project. First dataset, Step 1 of
-DNS_plan.md. Coverage is complete and the labeling error in the original upload
+third-party data, not produced by this project. The channel dataset, the first compiled. Coverage is complete and the labeling error in the original upload
 (the Re_tau = 5200 case sat in a folder named "5000") has been corrected.
 
 ### Provenance
@@ -206,7 +204,7 @@ DNS_plan.md. Coverage is complete and the labeling error in the original upload
   velocity-pressure correlations, and a per-quantity standard-deviation profile
   (the statistical uncertainty).
 - OOD axis it populates: Reynolds number (five conditions, a rich cross-Re axis)
-- Used by: research.md and DNS_plan.md Step 1 (the calibration anchor that
+- Used by: the channel real-data calibration (the anchor that
   replaces the Dean correlation, and the cross-Re generalization test)
 - License and notes: free for research use with the citation above. All
   quantities are normalized in wall units (signified by ^+) by u_tau and nu.
@@ -243,7 +241,7 @@ extraction, the UQ, and the evaluation layers always see one uniform representat
 ## Compiled dataset 2: plane Couette (Pirozzoli, Bernardini and Orlandi 2014)
 
 Status: downloaded and verified 2026-06-27; third-party data, not produced by this
-project. Step 2 of DNS_plan.md, the cross-flow generalization primary (calibrate on
+project. The cross-flow generalization primary (calibrate on
 channel, predict Couette). Loader: UQ.datasets.CouetteDNS.
 
 ### Provenance
@@ -272,7 +270,7 @@ channel, predict Couette). Loader: UQ.datasets.CouetteDNS.
   not a DNS _stdev (the file carries none). Anchored by the data-only constant-
   total-stress identity dU^+/dy^+ - u'v'^+ = 1, whose rms deviation is 0.03 to
   0.15 percent across the four cases.
-- Used by: research.md and DNS_plan.md Step 2 (cross-flow generalization).
+- Used by: the cross-flow generalization (calibrate on channel, predict Couette).
 - License and notes: free for research use with the citation above. All quantities
   are in wall units (^+); the profile spans one wall to the centerline (the half
   gap), U^+ from 0 to the centerline value (~21.5 at Re_tau 986).
@@ -287,7 +285,7 @@ y, y^+, U^+, u'^+, v'^+, w'^+, u'v'^+. paper.pdf is included alongside for refer
 ## Compiled dataset 3: turbulent pipe flow (Pirozzoli 2024)
 
 Status: downloaded and verified 2026-06-27; third-party data, not produced by this
-project. Step 2 cross-geometry companion. Loader: UQ.datasets.PipeDNS.
+project. The cross-geometry companion. Loader: UQ.datasets.PipeDNS.
 
 ### Provenance
 
@@ -319,7 +317,7 @@ project. Step 2 cross-geometry companion. Loader: UQ.datasets.PipeDNS.
 - Observation uncertainty: MODELED relative value, anchored by the linear-total-
   stress identity dU^+/dy^+ - R_xy = 1 - y^+/Re_tau (rms deviation 0.05 to 0.28
   percent across the six cases; order one if the shear sign flip is omitted).
-- Used by: research.md and DNS_plan.md Step 2 (cross-geometry companion).
+- Used by: the cross-flow generalization (cross-geometry companion).
 - License and notes: free for research use with the citation above. Only y^+ is
   given; the outer coordinate is y/R = y^+/Re_tau. The lowest-Reynolds file omits
   the friction-factor header line; it is derived from f = 8(2 Re_tau/Re_bulk)^2.
@@ -327,7 +325,7 @@ project. Step 2 cross-geometry companion. Loader: UQ.datasets.PipeDNS.
 ## Compiled dataset 4: streamwise-rotating channel (University of Manitoba)
 
 Status: downloaded and verified 2026-06-27; third-party data, not produced by this
-project. Step 2 model-stress-test companion (standard SST has no rotation
+project. The model-stress-test companion (standard SST has no rotation
 correction). Loader: UQ.datasets.RotatingChannelDNS.
 
 ### Provenance
@@ -363,7 +361,7 @@ correction). Loader: UQ.datasets.RotatingChannelDNS.
 - Observation uncertainty: MODELED relative value, anchored by the file's own RSTE
   budget-closure residual columns res_*^+ (rms 0.06 to 0.44 percent, growing with
   Ro_tau). Files use CRLF line endings, and the Ro_tau 7.5 file has no .txt suffix.
-- Used by: research.md and DNS_plan.md Step 2 (rotation model-stress-test).
+- Used by: the cross-flow generalization (rotation model-stress-test).
 - License and notes: ALL RIGHTS RESERVED by the University of Manitoba; the data may
   be used WITH REFERENCE (cite Yang and Wang 2018). Honor this citation requirement
   wherever the data is used.

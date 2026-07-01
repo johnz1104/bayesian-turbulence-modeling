@@ -1,10 +1,10 @@
 # Thread B: hypersonic SBLI application
 
-Application thread for the research direction. This thread targets hypersonic
+Application thread for the research direction. This thread addresses hypersonic
 separated flows (shock-boundary-layer interaction), where the deterministic,
 local, memoryless Boussinesq closure is least reliable, using a streamline-history
 non-local stochastic closure. The current solver is low-Mach (Ma about 0.5 and
-below), so the high-speed regime is the research target, not a present capability;
+below), so the high-speed regime is the intended application, not a present capability;
 work here builds toward it.
 
 Any experiment placed here requires parameters in a config file (never hard-coded

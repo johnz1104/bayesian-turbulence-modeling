@@ -26,7 +26,7 @@ distribution.
 
 Bayesian calibration of turbulence-model coefficients is itself well established
 (Edeling et al., 2014). Surrogate-accelerated implementations, however, carry
-recurring weaknesses that this work targets directly. A Gaussian-process surrogate
+recurring weaknesses this work addresses directly. A Gaussian-process surrogate
 fitted to a deterministic solver tends toward an interpolating, overconfident
 posterior unless its predictive variance is controlled, so the surrogate here is
 given a noise floor and its accuracy is reported on held-out solves rather than
@@ -35,7 +35,7 @@ often left implicit, so this implementation measures identifiability and
 sensitivity and reports them. Parameter uncertainty and model-form error are
 easily conflated, so a Kennedy-O'Hagan discrepancy term separates the two, and a
 posterior predictive check run on the real solver exposes the model-form residual
-that no choice of coefficients can remove. The contribution is not the Bayesian
+that no choice of coefficients can remove. The emphasis here is not the Bayesian
 formulation, which is standard, but the discipline applied to keep its uncertainty
 estimates honest.
 

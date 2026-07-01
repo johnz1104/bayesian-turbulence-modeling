@@ -11,7 +11,7 @@ hypersonic one (root CLAUDE.md, cross-cutting constraints).
 The field keys below match `research/shared/benchmarks/base.py`
 (`PROVENANCE_FIELDS`), so a loader's `BenchmarkData.metadata` and this manifest
 cannot drift. `docs/data_acquisition.md` holds the candidate databases and the
-Phase 3 acceptance bar these entries must clear.
+acceptance bar these entries must clear.
 
 ## Per-dataset entry template
 

@@ -1,9 +1,9 @@
 # Data acquisition track (Thread B)
 
 Scaffold and acceptance bar for the hypersonic shock-boundary-layer interaction
-(SBLI) data the program needs. The actual downloading and access requests are the
-reviewer's parallel task; this file is the target list, the required fields, and
-the gate that must pass before Phase 3 designs the out-of-distribution (OOD)
+(SBLI) data the program needs. The actual downloading and access requests are a
+separate acquisition task; this file is the candidate list, the required fields, and
+the gate that must pass before the out-of-distribution (OOD)
 protocol.
 
 Every dataset that lands gets a full entry in `data/README.md` (the provenance
@@ -15,7 +15,7 @@ There is no real hypersonic data in the repo today.
 ## What we need and why
 
 - A-priori calibration and OOD on FROZEN high-fidelity fields (the solver is
-  low-Mach, Ma <= 0.5; hypersonic a-posteriori is a Phase 4 stretch). So the
+  low-Mach, Ma <= 0.5; hypersonic a-posteriori is a later stretch). So the
   hypersonic datasets are used a-priori: frozen mean fields plus the Reynolds
   stresses and anisotropy needed to test the closure ansatz, and surface
   Cf / Cp / St for the model-form-discrepancy target.
@@ -23,13 +23,13 @@ There is no real hypersonic data in the repo today.
   of the spatial non-local ansatz and the tensor-basis construction. Surface-only
   experimental data cannot supply this; it needs DNS or wall-resolved LES.
 - At least two regimes (two Mach numbers OR two ramp/shock angles from comparable
-  setups) are required so Phase 3 can hold one out and measure OOD generalization.
+  setups) are required so the study can hold one out and measure OOD generalization.
 
 ## Candidate hypersonic / SBLI databases (to confirm)
 
 Fidelity tag: DNS, WRLES (wall-resolved LES), or EXP (experiment).
 
-### High-fidelity (carry Reynolds stresses; primary targets)
+### High-fidelity (carry Reynolds stresses; primary sources)
 
 - Compression-ramp STBLI DNS, Martin group (e.g. Priebe and Martin, JFM 2012;
   later hypersonic extensions). Geometry: compression ramp. Mach ~2.9 baseline
@@ -77,9 +77,9 @@ vs edge vs wall units); separation and reattachment definitions; coordinate orig
 (shock-relative placement and sign convention); available quantities (mean fields,
 Reynolds stresses and anisotropy, surface Cf / Cp / St); license and access status.
 
-## Acceptance check (gate before Phase 3 designs the OOD protocol)
+## Acceptance check (gate before the OOD protocol is designed)
 
-Phase 3 does not start designing the OOD protocol until BOTH hold, recorded in
+The OOD protocol design does not start until BOTH hold, recorded in
 `data/README.md`:
 
 1. Reynolds-stress availability CONFIRMED for at least one hypersonic (or, as an

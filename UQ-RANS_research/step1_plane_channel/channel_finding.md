@@ -1,4 +1,4 @@
-# Channel real-data coverage-correction finding (DNS_plan.md Step 1)
+# Channel real-data coverage-correction finding
 
 Evidence package for the first real-data finding of the UQ-for-RANS program: does
 standard Bayesian calibration on real plane-channel DNS produce overconfident
@@ -10,13 +10,13 @@ come from `python/UQ/reproduce_channel.py` (fixed seeds, config in that file,
 ensembles cached under the gitignored `results/channel/`); nothing was tuned
 toward the criterion.
 
-## 1. Pre-registered criterion (from DNS_plan.md Step 1, set before the runs)
+## 1. Pre-registered criterion (set before the runs)
 
 Positive shape: the empirical coverage of nominal intervals for standard Bayes
 sits below nominal and worsens with data; the corrected method (generalized Bayes
 and conformal) returns coverage to within a few points of nominal at matched or
 better sharpness; and the cross-Reynolds coverage gap is characterized and
-reported honestly (a graceful degradation is the target, a silent collapse would
+reported honestly (a graceful degradation is expected, a silent collapse would
 be a negative finding). A null result, that standard calibration is already
 calibrated on the channel QoIs, is itself a finding and a decision point that
 pushes the coverage story toward the separated and compressible cases.
@@ -77,7 +77,7 @@ structural error (the linear eddy-viscosity baseline predicts zero normal
 anisotropy in shear); and the discrepancy peaks in the buffer layer (y^+ ~ 8) and
 grows toward the wall. The channel is attached and the discrepancy is modest, so
 this validates the extraction machinery; the generative model-form is first
-trained on the separated case (DNS_plan.md Step 3).
+trained on the separated case (the separated-flow model-form).
 
 Results below are from `results/channel/finding_numbers.json` (seed 0, 48-member
 ensembles per Re, 20 stations, nominal 90 percent). Figures are in
@@ -138,7 +138,7 @@ under extrapolation (coverage 0.048 at Re_tau 5200 from a low-Re calibration). T
 corrected coverage degrades gracefully and characterizably: generalized Bayes
 stays in [0.81, 1.0] and conformal in [0.86, 1.0], and the conformal coverage gap
 under the cross-Re shift is small (at most 0.10, typically +0.04). This is the
-pre-registered graceful-degradation target, not a silent collapse.
+pre-registered graceful degradation, not a silent collapse.
 
 ## 7. Evaluation diagnostics
 
@@ -163,16 +163,16 @@ in distribution, and as low as 0.05 extrapolating across Reynolds number);
 generalized Bayes and conformal return coverage to within a few points of nominal
 at the wider sharpness the misspecification requires; and the cross-Reynolds
 coverage gap is small and characterized (graceful degradation, conformal gap
-<= 0.10). The coverage-correction spine of research.md is therefore established on
+<= 0.10). The coverage-correction spine is therefore established on
 real data, and the pipeline (loader, baseline, discrepancy, calibration,
 calibrated UQ, cross-Re protocol, evaluation) is ready to carry forward to the
-cross-flow (Step 2), separated (Step 3), and compressible (Steps 4-6) cases.
+cross-flow, separated, and compressible cases.
 
 The honest caveats, none of which weaken the finding: the incompressible solver is
 a developing inlet/outlet channel that sits a few to ~14 percent below Dean's Cf;
 the calibration target is the mean-velocity profile and Cf, not the full Reynolds
 stress (the channel discrepancy validates the model-form machinery but the
-generative model is first trained at Step 3); and conformal is mildly conservative
+generative model is first trained on the separated case); and conformal is mildly conservative
 at this station count. The degree of overconfidence depends on the observation
 sigma (DNS _stdev floored at 0.5 percent of U_b); the direction and the correction
 do not.

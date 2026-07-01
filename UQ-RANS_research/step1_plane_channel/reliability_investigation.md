@@ -5,8 +5,8 @@ curve sits slightly above the ideal diagonal at low nominal levels (0.1-0.2) and
 more so across the middle (0.3-0.7), converging back to the diagonal by 0.8-0.9.
 Question: is this a defect or expected? Answer: expected, and informative. It is
 the signature of a Gaussian correction applied to a non-Gaussian discrepancy, and
-it is exactly the gap the generative model-form (Steps 3+) is meant to close. The
-headline 90 percent coverage claim is unaffected.
+it is exactly the gap the feature-conditioned generative model-form is meant to
+close. The primary 90 percent coverage result is unaffected.
 
 ## What the diagram shows (quantified, pooled over the five Re)
 
@@ -64,20 +64,19 @@ shifts the curve but is small next to the shape effect.
 ## Why this is expected and not a defect
 
 This is the documented limitation of a Gaussian or moment-matched model-form
-correction under a non-Gaussian discrepancy (compressible_research.md, "Why a
-stochastic, generative discrepancy specifically": a Gaussian Kennedy-O'Hagan term
+correction under a non-Gaussian discrepancy (a Gaussian Kennedy-O'Hagan term
 cannot match a discrepancy that is heteroscedastic, skewed, or multimodal, so the
 predictive distribution is misshapen even when its mean and its variance are
 reasonable). On the attached channel the non-Gaussianity is mild (excess kurtosis
 only +0.53), so the bow is small (at most +0.076) and the 90 percent coverage is
-restored cleanly. The effect is expected to be larger on the separated (Step 3)
-and compressible-SBLI (Step 5) cases, where the discrepancy is strongly
+restored cleanly. The effect is expected to be larger on the separated
+and compressible-SBLI cases, where the discrepancy is strongly
 non-Gaussian, and that is precisely where the conditional generative model-form,
 which fits the full conditional density rather than a variance, is designed to
 remove it. In that sense the bow here is a small, in-distribution preview of the
 argument for the generative spine.
 
-## Can the bow be reduced within Step 1? (tested)
+## Can the bow be reduced within the channel calibration? (tested)
 
 The natural distribution-free lever is conformal, which assumes no Gaussian shape.
 Tested directly: pool the point-prediction residuals across all 105 stations and
@@ -97,18 +96,18 @@ Bayes 0.034. The leptokurtic, slightly-biased residuals (a clump near zero plus 
 thin tail) make the symmetric-residual conformal quantile over-cover at low levels
 and under-cover at high ones, so the distribution-free interval is no free fix for
 the across-level shape here. The Gaussian generalized-Bayes curve is in fact the
-best-calibrated of the Step 1 options across levels, and it is exactly on target at
-the headline 0.9 (0.905). Conformal remains valuable at the single headline level
+best-calibrated of the channel options across levels, and it is exactly on target at
+the primary 0.9 (0.905). Conformal remains valuable at the single primary level
 (0.91 in the main finding) where it is a coverage guarantee, not a curve fit.
 
-So within Step 1 there is no clean fix, and that is the point. The principled fix
+So within the channel calibration there is no clean fix, and that is the point. The principled fix
 is a predictive that matches the discrepancy shape rather than its variance: the
 conditional generative model-form, which fits the full density. Establishing it on
-a strongly non-Gaussian discrepancy is the Step 3 finding; the small channel bow is
+a strongly non-Gaussian discrepancy is the separated-flow finding; the small channel bow is
 its in-distribution motivation. An ad hoc parametric shape correction (a Student-t
 predictive matched to the +0.53 excess kurtosis) could shrink the bow but is out of
 scope and would obscure the diagnostic, so it is not adopted. Recommendation: report
-the bow as the diagnostic it is; the headline coverage claim is unaffected.
+the bow as the diagnostic it is; the primary coverage result is unaffected.
 
 ## Reproduce
 
