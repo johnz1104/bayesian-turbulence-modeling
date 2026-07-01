@@ -23,6 +23,12 @@ target_link_libraries(test_couette_bc PRIVATE btm_core)
 add_test(NAME couette_bc COMMAND test_couette_bc)
 set_tests_properties(couette_bc PROPERTIES TIMEOUT 30 LABELS "unit;bc")
 
+# ---- bfs_lemoin_bc: free-slip top + profile inflow (Le-Moin BFS) BC test ----
+add_executable(test_bfs_lemoin_bc cpp/test_bfs_lemoin_bc.cpp)
+target_link_libraries(test_bfs_lemoin_bc PRIVATE btm_core)
+add_test(NAME bfs_lemoin_bc COMMAND test_bfs_lemoin_bc)
+set_tests_properties(bfs_lemoin_bc PROPERTIES TIMEOUT 30 LABELS "unit;bc")
+
 # ---- compressible_smoke: Ma=0.1 channel smoke convergence ----
 add_executable(test_compressible_smoke cpp/test_compressible_smoke.cpp)
 target_link_libraries(test_compressible_smoke PRIVATE btm_compressible)

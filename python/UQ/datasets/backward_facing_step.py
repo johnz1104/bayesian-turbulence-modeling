@@ -239,21 +239,24 @@ class BackwardFacingStepDNS:
         g[:, 1, 1] = dVdy      # du_y/dy
         return g
 
-    def to_dnsfield(self, grad_u=None, timescale=None, nu_t=None):
+    def to_dnsfield(self, grad_u=None, timescale=None, nu_t=None, k_baseline=None):
         """Build a UQ DNSField from the flattened record.
 
         For the production recipe, pass the RANS-derived grad_u (features), the
-        baseline turbulence timescale, and nu_t interpolated to the profile points,
-        so the discrepancy is b_DNS (from the DNS stress here) minus the Boussinesq
-        baseline (from RANS). With no arguments it falls back to the wall-normal DNS
-        gradient and a unit timescale, which is standalone inspection only and not a
-        calibrated baseline.
+        baseline turbulence timescale, nu_t, and the baseline k interpolated to
+        the profile points, so the discrepancy is b_DNS (from the DNS stress
+        here) minus the Boussinesq baseline the solver actually applies,
+        b_B = -(nu_t/(k_baseline timescale)) S, limiter included. With no
+        arguments it falls back to the wall-normal DNS gradient and a unit
+        timescale, which is standalone inspection only and not a calibrated
+        baseline.
         """
         g = self.velocity_gradient() if grad_u is None else np.asarray(grad_u, float)
         ts = np.ones(self.n) if timescale is None else np.asarray(timescale, float)
         return DNSField(
             grad_u=g, R=self.R, k=self.k, timescale=ts,
             nu_t=None if nu_t is None else np.asarray(nu_t, float),
+            k_baseline=None if k_baseline is None else np.asarray(k_baseline, float),
             meta=dict(self.meta))
 
     def cf_stations(self):

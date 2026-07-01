@@ -6,6 +6,7 @@
 #include <string>
 #include <cmath>
 #include <algorithm>
+#include <stdexcept>
 
 // Boundary condition types
 enum class BCType {
@@ -15,12 +16,19 @@ enum class BCType {
     WallMoving,                 // no-slip wall translating tangentially at vecValue (Couette)
     Symmetry, Cyclic
 };
-// Boundary conditions for a single mesh patch 
+// Boundary conditions for a single mesh patch
 struct PatchBC {
     BCType      type     = BCType::Neumann;
     double      value    = 0.0;
     Vec3        vecValue = {};
     std::string patchName;
+    // Optional per-face boundary values (a profile), indexed by the face's
+    // position in the patch face list. When non-empty they override the uniform
+    // vecValue/value for the Dirichlet-like types (InletVelocity / Dirichlet),
+    // so an inlet can prescribe a boundary-layer profile U(y), k(y), omega(y)
+    // instead of a uniform state (the Le-Moin BFS inflow is such a profile).
+    std::vector<Vec3>   vecProfile;
+    std::vector<double> scalarProfile;
 };
 
 // Container for boundary conditions of solved fields
@@ -66,6 +74,16 @@ struct FlowBoundaryConditions {
             } else if (pat.type == "outlet") {
                 bc.velocityBC[p] = {BCType::Neumann, 0.0, {}, pat.name};
                 bc.pressureBC[p] = {BCType::OutletPressure, 0.0, {}, pat.name};
+                bc.kBC[p]        = {BCType::Neumann, 0.0, {}, pat.name};
+                bc.omegaBC[p]    = {BCType::Neumann, 0.0, {}, pat.name};
+            } else if (pat.type == "symmetry") {
+                // free-slip / zero-stress boundary: no penetration (velocity
+                // Symmetry removes the wall-normal component), zero gradient of
+                // everything else. Not a turbulence wall: the patch type also
+                // excludes it from computeWallDistance, so the SST blending and
+                // wall omega treat only true walls.
+                bc.velocityBC[p] = {BCType::Symmetry, 0.0, {}, pat.name};
+                bc.pressureBC[p] = {BCType::Neumann, 0.0, {}, pat.name};
                 bc.kBC[p]        = {BCType::Neumann, 0.0, {}, pat.name};
                 bc.omegaBC[p]    = {BCType::Neumann, 0.0, {}, pat.name};
             } else {
@@ -132,6 +150,43 @@ struct FlowBoundaryConditions {
         }
         return bc;
     }
+
+    // ---- per-face boundary profiles -------------------------------------
+    // Attach a profile (one value per patch face, in patch-face order) to a
+    // Dirichlet-like BC, so an inlet can carry U(y), k(y), omega(y). The apply
+    // functions use the profile when present and fall back to the uniform value
+    // otherwise. Face order and count come from mesh.patch(...).faces, exposed
+    // to Python through Mesh::wall_patch_data(name).
+
+    static int patchIndex(const Mesh& mesh, const std::string& name) {
+        for (int p = 0; p < mesh.nPatches(); ++p)
+            if (mesh.patch(p).name == name) return p;
+        throw std::runtime_error("FlowBoundaryConditions: unknown patch '" + name + "'");
+    }
+
+    void setVelocityProfile(const Mesh& mesh, const std::string& name,
+                            const std::vector<Vec3>& vals) {
+        int p = patchIndex(mesh, name);
+        if (vals.size() != mesh.patch(p).faces.size())
+            throw std::runtime_error("velocity profile size != patch face count");
+        velocityBC[p].vecProfile = vals;
+    }
+
+    void setKProfile(const Mesh& mesh, const std::string& name,
+                     const std::vector<double>& vals) {
+        int p = patchIndex(mesh, name);
+        if (vals.size() != mesh.patch(p).faces.size())
+            throw std::runtime_error("k profile size != patch face count");
+        kBC[p].scalarProfile = vals;
+    }
+
+    void setOmegaProfile(const Mesh& mesh, const std::string& name,
+                         const std::vector<double>& vals) {
+        int p = patchIndex(mesh, name);
+        if (vals.size() != mesh.patch(p).faces.size())
+            throw std::runtime_error("omega profile size != patch face count");
+        omegaBC[p].scalarProfile = vals;
+    }
 };
 
 // Apply functions
@@ -141,18 +196,22 @@ struct FlowBoundaryConditions {
 inline void applyVelocityBC(VectorField& U, 
                             const Mesh& mesh, 
                             const FlowBoundaryConditions& bcs) {
-    for (int p = 0; p < mesh.nPatches(); ++p) { // loops over every boundary patch 
+    for (int p = 0; p < mesh.nPatches(); ++p) { // loops over every boundary patch
         const Patch& pat = mesh.patch(p);       // faces that this patch belongs to
         const PatchBC& bc = bcs.velocityBC[p];  // velocity BC kind
-        for (FaceID fi : pat.faces) {           // loops over faces in patch
+        for (size_t k = 0; k < pat.faces.size(); ++k) {     // loops over faces in patch
+            FaceID fi = pat.faces[k];
             switch (bc.type) {
                 case BCType::WallNoSlip:
                     U.bface(fi) = Vec3(0,0,0); break;       // enforces u = 0 for no-slip walls
                 case BCType::WallMoving:                    // moving wall: u = wall velocity (no-slip,
                                                             // but the wall translates tangentially)
-                case BCType::InletVelocity:                 // enforces u = U_in
-                case BCType::Dirichlet:                     // enforces u = u_boundary
                     U.bface(fi) = bc.vecValue; break;
+                case BCType::InletVelocity:                 // enforces u = U_in (profile-aware)
+                case BCType::Dirichlet:                     // enforces u = u_boundary
+                    U.bface(fi) = bc.vecProfile.empty() ? bc.vecValue
+                                                        : bc.vecProfile[k];
+                    break;
                 case BCType::Symmetry: {                    // enforces no normal velocity and unchanged tangential velocity
                     Vec3 Uo = U[mesh.face(fi).owner];
                     U.bface(fi) = Uo - mesh.face(fi).normal * Uo.dot(mesh.face(fi).normal);
@@ -193,12 +252,15 @@ inline void applyKBC(ScalarField& k,
     for (int p = 0; p < mesh.nPatches(); ++p) {
         const Patch& pat = mesh.patch(p);
         const PatchBC& bc = bcs.kBC[p];
-        for (FaceID fi : pat.faces) {
+        for (size_t j = 0; j < pat.faces.size(); ++j) {
+            FaceID fi = pat.faces[j];
             switch (bc.type) {
                 case BCType::WallKOmega:
                     k.bface(fi) = 0.0; break;       // enforces k = 0 at wall (u = 0 at no slip wall)
-                case BCType::Dirichlet:             // enforces k = k_in
-                    k.bface(fi) = bc.value; break;
+                case BCType::Dirichlet:             // enforces k = k_in (profile-aware)
+                    k.bface(fi) = bc.scalarProfile.empty() ? bc.value
+                                                           : bc.scalarProfile[j];
+                    break;
                 default:
                     k.bface(fi) = k[mesh.face(fi).owner]; break;
             }
@@ -218,15 +280,18 @@ inline void applyOmegaBC(ScalarField& omega,
     for (int p = 0; p < mesh.nPatches(); ++p) {
         const Patch& pat = mesh.patch(p);
         const PatchBC& bc = bcs.omegaBC[p];
-        for (FaceID fi : pat.faces) {
+        for (size_t j = 0; j < pat.faces.size(); ++j) {
+            FaceID fi = pat.faces[j];
             switch (bc.type) {
                 case BCType::WallKOmega: {  // near-wall omega formula Menter (1994)
                     double y1 = std::max(mesh.face(fi).delta, 1e-20);
                     omega.bface(fi) = 60.0 * nu / (beta1 * y1 * y1);
                     break;
                 }
-                case BCType::Dirichlet:
-                    omega.bface(fi) = bc.value; break;
+                case BCType::Dirichlet:     // enforces omega = omega_in (profile-aware)
+                    omega.bface(fi) = bc.scalarProfile.empty() ? bc.value
+                                                               : bc.scalarProfile[j];
+                    break;
                 default:
                     omega.bface(fi) = omega[mesh.face(fi).owner]; break;
             }

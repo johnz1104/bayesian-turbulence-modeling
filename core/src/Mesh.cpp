@@ -380,6 +380,12 @@ PatchID Mesh::patchByName(const std::string& name) const {
     throw std::runtime_error("Patch not found: " + name);
 }
 
+// retype a boundary patch; the caller re-runs computeWallDistance so a patch
+// retyped away from "wall" stops contributing wall distances (SST blending)
+void Mesh::setPatchType(const std::string& name, const std::string& type) {
+    patches_[patchByName(name)].type = type;
+}
+
 // save/load binary mesh code
 // binary serialization layer
 static const uint32_t MESH_MAGIC = 0x4D534831; // "MSH1"
