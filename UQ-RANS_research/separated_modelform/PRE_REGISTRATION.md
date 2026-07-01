@@ -7,8 +7,7 @@ no-tuning-toward-the-number rule, CLAUDE.md sections 2 and 3). It is committed f
 
 ## The work
 
-The first test of the generative, realizability-constrained model-form (research.md
-N4, developed further in compressible_research.md) on flows where the Boussinesq
+The first test of the generative, realizability-constrained model-form on flows where the Boussinesq
 hypothesis genuinely fails, and the incompressible precursor to the compressible
 shock-boundary-layer work. The channel coverage-correction study and the cross-flow
 generalization study are complete and merged. This work replaces the global
@@ -22,7 +21,7 @@ interest.
    through the solver to predicted quantities of interest (reattachment length,
    bubble size, Cf, Cp). The a-priori discrepancy fit and its coverage are the
    precursor; the primary result is the a-posteriori one, because the
-   error-reduction claim needs predicted (not frozen) quantities and the
+   error reduction must be shown on predicted (not frozen) quantities and the
    eigenspace-perturbation baseline is itself a-posteriori, so a fair comparison runs
    both through the solver.
 2. Datasets: backward-facing step (Le, Moin and Kim 1997, Re_h = 5100, sparse
@@ -77,7 +76,7 @@ around.
 
 Shape-based, consistent with the channel and Couette pre-registrations ("contains the
 truth", "no worse than the baselines on the proper scores", "graceful, not silent,
-degradation"). No numeric target is fixed in advance, and no learning rate, conformal
+degradation"). No numeric threshold is fixed in advance, and no learning rate, conformal
 score, feature set, or model is tuned toward any test number.
 
 ## Baselines the result is measured against

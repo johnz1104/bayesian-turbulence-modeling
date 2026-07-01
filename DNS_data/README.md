@@ -410,9 +410,8 @@ Reynolds number). Loader: UQ.datasets.PeriodicHillsDNS.
   (du/dx + dv/dy has an RMS of about 1.0 to 1.6 percent of the RMS strain rate on
   interior points), and the DNS Reynolds stress is realizable at every fluid point
   (barycentric check passes at fraction 1.0).
-- Used by: research.md (the separated-flow model-form study; cross-geometry
-  generalization) and compressible_research.md (the incompressible de-risk that
-  precedes the compressible SBLI work).
+- Used by: the separated-flow model-form study (cross-geometry generalization),
+  the incompressible precursor to the compressible shock-boundary-layer study.
 - License and notes: no explicit license is stated in the source repository; cite
   Xiao et al. 2020 and treat as research-use-with-citation. All quantities are
   normalized by the crest bulk velocity and the hill height (h = 1). The companion
@@ -466,8 +465,8 @@ separated-flow model-form study. Loader: UQ.datasets.BackwardFacingStepDNS.
   station point (fraction 1.0), and the wall Cf changes sign across the reattachment
   (negative inside the recirculation at x/h = 4, positive in recovery), bracketing the
   published x_r/h = 6.28.
-- Used by: research.md (the separated-flow model-form study; the cross-geometry
-  transfer test paired with the periodic hills).
+- Used by: the separated-flow model-form study (the cross-geometry transfer test
+  paired with the periodic hills).
 - License and notes: research-use with citation (cite Le, Moin and Kim 1997). This is
   sparse in x, so the model-form target b_DNS = R/(2k) - I/3 comes from the DNS
   Reynolds stress at the profile points (gradient-free), while the Boussinesq baseline
