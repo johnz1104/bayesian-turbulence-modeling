@@ -367,3 +367,118 @@ correction). Loader: UQ.datasets.RotatingChannelDNS.
 - License and notes: ALL RIGHTS RESERVED by the University of Manitoba; the data may
   be used WITH REFERENCE (cite Yang and Wang 2018). Honor this citation requirement
   wherever the data is used.
+
+## Compiled dataset 5: periodic hills, parametric slope family (Xiao et al. 2020)
+
+Status: downloaded and verified 2026-07-01; third-party data, not produced by this
+project. The dense, two-dimensional separated case for the separated-flow model-form
+study, and the cross-geometry generalization axis (hill steepness varied at fixed
+Reynolds number). Loader: UQ.datasets.PeriodicHillsDNS.
+
+### Provenance
+
+- Source or URL: https://github.com/xiaoh/para-database-for-PIML (blobless sparse
+  checkout of pehill-5-cases-DNS and pehill-5-cases-OpenFOAM; the 7.35 GB
+  pehill-29-cases-DNS set was not pulled).
+- Reference: H. Xiao, J.-L. Wu, S. Laizet and L. Duan, "Flows over periodic hills of
+  parameterized geometries: a dataset for data-driven turbulence modeling from direct
+  simulations", Comput. Fluids 200 (2020) 104431.
+- Regime: incompressible.
+- Cases and per-case parameters: a slope family parameterized by the hill-steepness
+  alpha, spanning incipient (0.5) to massive (1.5) separation, at a fixed bulk
+  Reynolds number Re_b = 5600 (crest bulk velocity and hill height h = 1;
+  cross-checked against the companion OpenFOAM drive Ubar = 0.020188 volume-averaged,
+  0.020188 / 0.7210 = 0.028 crest bulk, nu = 5e-6). Two on-disk formats:
+
+  | case | alpha | format | grid (nX x nY) | mean-file sha256 (16) |
+  |---|---|---|---|---|
+  | case_0p5         | 0.5 | VTK .vtr   | 736 x 385 | 3895d4cb26d623e7 |
+  | case_0p8         | 0.8 | ASCII .dat | 704 x 385 | 041e62e5142fbb17 |
+  | case_1p0         | 1.0 | ASCII .dat | 512 x 257 | aa81c64e28bb3056 |
+  | case_1p0_refined | 1.0 | ASCII .dat | finer mesh | c4635582e1f4a9f7 |
+  | case_1p2         | 1.2 | ASCII .dat | 832 x 385 | e2972b8ebd487237 |
+  | case_1p5         | 1.5 | VTK .vtr   | 934 x 385 | 8b97dc28a9abf668 |
+
+- Fields provided: mean velocity (U, V, W), mean pressure, and the full
+  Reynolds-stress tensor (UU, VV, WW, UV, UW, VW), interpolated onto a rectilinear
+  bounding grid with the solid hill interior blanked to exact zeros. Reynolds number
+  is fixed across the family, so the varied geometry is the out-of-distribution axis.
+- OOD axis it populates: geometry (hill steepness, a cross-geometry axis at constant
+  Reynolds number), the dense-field separated case.
+- Observation uncertainty: MODELED relative value, anchored by two data-only physics
+  residuals computed by the loader: the interpolated mean satisfies continuity
+  (du/dx + dv/dy has an RMS of about 1.0 to 1.6 percent of the RMS strain rate on
+  interior points), and the DNS Reynolds stress is realizable at every fluid point
+  (barycentric check passes at fraction 1.0).
+- Used by: the separated-flow model-form study (cross-geometry generalization),
+  the incompressible precursor to the compressible shock-boundary-layer study.
+- License and notes: no explicit license is stated in the source repository; cite
+  Xiao et al. 2020 and treat as research-use-with-citation. All quantities are
+  normalized by the crest bulk velocity and the hill height (h = 1). The companion
+  pehill-5-cases-OpenFOAM set carries the DNS interpolated onto a coarse RANS-like
+  mesh (UDNS, TauDNS) plus the hill mesh, used as a convenience cross-check.
+
+### Standardized processing format
+
+The loader parses both the VTK RectilinearGrid (.vtr) and the ASCII columnar (.dat)
+format into the same canonical dns_field record: N flattened field points (x-fastest
+tensor order), the mean velocity, the full Reynolds-stress tensor and k, and the mean
+velocity-gradient tensor formed by differencing on the grid. A fluid mask excludes
+the blanked solid interior and an interior mask marks points whose grid neighbours
+are all fluid (a clean central-difference stencil), so the discrepancy, UQ, and
+evaluation layers see the same uniform record the wall-bounded loaders emit.
+
+## Compiled dataset 6: backward-facing step (Le, Moin and Kim 1997)
+
+Status: downloaded and verified 2026-07-01; third-party data, not produced by this
+project. The sparser cross-geometry companion to the periodic hills for the
+separated-flow model-form study. Loader: UQ.datasets.BackwardFacingStepDNS.
+
+### Provenance
+
+- Source or URL: the Le and Moin backward-facing-step DNS (distributed with the
+  reference below).
+- Reference: H. Le, P. Moin and J. Kim, "Direct numerical simulation of turbulent flow
+  over a backward-facing step", J. Fluid Mech. 330 (1997) 349-374 (and the Stanford
+  report, Le and Moin 1994).
+- Regime: incompressible.
+- Parameters: step height h, inlet free-stream U0, Re_h = U0 h / nu = 5100, expansion
+  ratio 1.2, published mean reattachment length x_r/h = 6.28.
+- Format: wall-normal profiles at six streamwise stations (NOT a dense field). The
+  nodal index nnn maps to x/h (readme.txt): 181 to -3, 360 to 4, 411 to 6, 513 to 10,
+  641 to 15, 744 to 19 (the six bracket the reattachment).
+
+  | file | contents | columns / notes | sha256 (16) |
+  |---|---|---|---|
+  | x-nnn.dat    | mean and stresses | y/h, U/U0, V/U0, u'/U0, v'/U0, w'/U0, u'v'/U0^2 | x-411: 95e7a3deb8b39ecf |
+  | stat-inf.dat | per-station wall data | x/h, U_e, U_tau, Cf, Cp and BL thicknesses | f739a1dc1c1e9f06 |
+  | rs*-nnn.dat  | RSTE budgets | per-component (not required for the discrepancy) | - |
+
+- Fields provided: the two-dimensional mean velocity (U and V) and the full in-plane
+  Reynolds-stress tensor (normal stresses are the squares of the rms columns, R_xy is
+  the signed u'v' column, spanwise off-diagonals vanish for the spanwise-homogeneous
+  mean), plus per-station Cf, Cp, U_e and U_tau. Normalized by the inlet free-stream
+  U0. NOTE: readme.txt refers to "stat-info.dat"; the actual file is "stat-inf.dat".
+- OOD axis it populates: geometry (separated), the sparser cross-geometry companion.
+- Observation uncertainty: MODELED relative value, anchored by two data-only physics
+  facts checked by the loader: the DNS Reynolds stress is realizable at every resolved
+  station point (fraction 1.0), and the wall Cf changes sign across the reattachment
+  (negative inside the recirculation at x/h = 4, positive in recovery), bracketing the
+  published x_r/h = 6.28.
+- Used by: the separated-flow model-form study (the cross-geometry transfer test
+  paired with the periodic hills).
+- License and notes: research-use with citation (cite Le, Moin and Kim 1997). This is
+  sparse in x, so the model-form target b_DNS = R/(2k) - I/3 comes from the DNS
+  Reynolds stress at the profile points (gradient-free), while the Boussinesq baseline
+  anisotropy and the conditioning features come from the dense RANS baseline field
+  interpolated to these locations; the reattachment-length truth is the published
+  x_r/h = 6.28, since six Cf stations are too sparse to locate it directly.
+
+### Standardized processing format
+
+The loader concatenates the six station profiles into the same canonical dns_field
+record (N flattened points across the stations, with a station index): the mean
+velocity, the full Reynolds-stress tensor and k, the per-station wall quantities, and
+a wall-normal-resolved velocity gradient (the streamwise gradient is left zero because
+the stations are too sparse to difference in x). Downstream layers consume it exactly
+as they consume the dense and wall-bounded records.

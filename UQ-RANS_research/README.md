@@ -23,6 +23,12 @@ this repository.
   Mech. 838, 658-689 (University of Manitoba). All rights reserved by the
   University of Manitoba; the data may be used with reference, so it is cited
   wherever used.
+- Periodic hills, parametric slope family (separated-flow model-form): Xiao, Wu,
+  Laizet and Duan (2020), Comput. Fluids 200, 104431
+  (github.com/xiaoh/para-database-for-PIML). No explicit license is stated in the
+  source repository, so it is treated as research-use with citation.
+- Backward-facing step (separated-flow model-form): Le, Moin and Kim (1997), J.
+  Fluid Mech. 330, 349-374, research-use with citation.
 
 ## What goes here (tracked)
 
