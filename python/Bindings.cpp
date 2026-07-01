@@ -313,6 +313,7 @@ PYBIND11_MODULE(rans_sst_py, m) {
              py::arg("Re"), py::arg("yPlusTarget") = 1.0)
         .def_static("load_from_file", &Mesh::loadFromFile)
         .def("compute_wall_distance", &Mesh::computeWallDistance)
+        .def("set_patch_type", &Mesh::setPatchType, py::arg("name"), py::arg("type"))
         .def("n_cells", &Mesh::nCells)
         .def("n_faces", &Mesh::nFaces)
         .def("n_nodes", &Mesh::nNodes)
@@ -334,7 +335,35 @@ PYBIND11_MODULE(rans_sst_py, m) {
         .def_static("flat_plate_defaults", &FlowBoundaryConditions::flatPlateDefaults)
         .def_static("bfs_defaults", &FlowBoundaryConditions::bfsDefaults)
         .def_static("couette_defaults", &FlowBoundaryConditions::couetteDefaults,
-                    py::arg("mesh"), py::arg("Uwall"), py::arg("kIn"), py::arg("omIn"));
+                    py::arg("mesh"), py::arg("Uwall"), py::arg("kIn"), py::arg("omIn"))
+        // per-face boundary profiles (patch-face order = wall_patch_data(name))
+        .def("set_velocity_profile",
+             [](FlowBoundaryConditions& bc, const Mesh& mesh, const std::string& name,
+                py::array_t<double, py::array::c_style | py::array::forcecast> vals) {
+                 auto v = vals.unchecked<2>();
+                 if (v.shape(1) != 3)
+                     throw std::runtime_error("velocity profile must be (n_faces, 3)");
+                 std::vector<Vec3> out(v.shape(0));
+                 for (py::ssize_t i = 0; i < v.shape(0); ++i)
+                     out[i] = Vec3(v(i, 0), v(i, 1), v(i, 2));
+                 bc.setVelocityProfile(mesh, name, out);
+             }, py::arg("mesh"), py::arg("name"), py::arg("values"))
+        .def("set_k_profile",
+             [](FlowBoundaryConditions& bc, const Mesh& mesh, const std::string& name,
+                py::array_t<double, py::array::c_style | py::array::forcecast> vals) {
+                 auto v = vals.unchecked<1>();
+                 std::vector<double> out(v.shape(0));
+                 for (py::ssize_t i = 0; i < v.shape(0); ++i) out[i] = v(i);
+                 bc.setKProfile(mesh, name, out);
+             }, py::arg("mesh"), py::arg("name"), py::arg("values"))
+        .def("set_omega_profile",
+             [](FlowBoundaryConditions& bc, const Mesh& mesh, const std::string& name,
+                py::array_t<double, py::array::c_style | py::array::forcecast> vals) {
+                 auto v = vals.unchecked<1>();
+                 std::vector<double> out(v.shape(0));
+                 for (py::ssize_t i = 0; i < v.shape(0); ++i) out[i] = v(i);
+                 bc.setOmegaProfile(mesh, name, out);
+             }, py::arg("mesh"), py::arg("name"), py::arg("values"));
 
     // SolverSettings
     py::class_<SolverSettings>(m, "SolverSettings")

@@ -457,6 +457,12 @@ separated-flow model-form study. Loader: UQ.datasets.BackwardFacingStepDNS.
   the signed u'v' column, spanwise off-diagonals vanish for the spanwise-homogeneous
   mean), plus per-station Cf, Cp, U_e and U_tau. Normalized by the inlet free-stream
   U0. NOTE: readme.txt refers to "stat-info.dat"; the actual file is "stat-inf.dat".
+- Boundary conditions verified from the data (they fix the matching RANS setup): the
+  top boundary is FREE-SLIP, not a wall (every station shows zero mean shear at the
+  top edge, |dU/dy| < 4e-4 over the top 0.37 h, with U at free-stream level and
+  decelerating downstream only through the expansion); the inflow carries a turbulent
+  boundary layer (delta_999 = 1.158 h, Theta = 0.136 h at x/h = -3 per stat-inf.dat;
+  the DNS inflow plane is x/h = -10) under a quiet free stream (top-row u' ~ 3e-4 U0).
 - OOD axis it populates: geometry (separated), the sparser cross-geometry companion.
 - Observation uncertainty: MODELED relative value, anchored by two data-only physics
   facts checked by the loader: the DNS Reynolds stress is realizable at every resolved

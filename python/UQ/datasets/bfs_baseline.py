@@ -9,10 +9,28 @@ correlation.
 
 Geometry (Le, Moin and Kim 1997): step height h = 1 (reference length), expansion
 ratio 1.2, so the downstream channel height is 6 h and the inlet channel height is
-5 h, at Re_h = U0 h / nu = 5100. The incompressible solver runs a developing
-inlet/outlet domain, and the channel-calibrated SST under-predicts the reattachment
-(about 5.1 h here against the DNS 6.28 h), which is the model-form error the
-discrepancy quantifies.
+5 h, at Re_h = U0 h / nu = 5100.
+
+Boundary conditions match the DNS setup, both verified against the data:
+
+- Top boundary: FREE-SLIP (symmetry), not a wall. The published profiles carry
+  zero mean shear at the top edge at every station (|dU/dy| < 4e-4 over the top
+  0.37 h) with U at free-stream level, which identifies a zero-stress boundary; a
+  no-slip top would drive U to zero and grow a spurious top boundary layer (the
+  earlier no-slip baseline had U = 0.48 against the DNS 0.94 at y/h = 5.9).
+- Inflow: at the DNS inflow plane x/h = -10, a prescribed turbulent
+  boundary-layer profile (the measured x/h = -3 station shape rescaled to an
+  inlet thickness delta_in), not a uniform stream. The DNS boundary layer at
+  x/h = -3 is delta_999 = 1.158 h (stat-inf.dat); a uniform inlet at x = -4
+  develops only a thin layer by the step and mis-states the attached-flow
+  discrepancy. delta_in is matched so the solved delta_999 at x/h = -3
+  reproduces the measured one (match_inlet_delta); this matches the boundary
+  CONDITIONS of the comparison to the data and touches no pre-registered
+  quantity. The free stream is quiet (k from the measured top-row fluctuation
+  level), as in the DNS.
+
+The channel-calibrated SST still under-predicts the reattachment, which is the
+model-form error the discrepancy quantifies.
 
 Coordinate convention. The mesh places the step at x = 0, the downstream bottom
 wall at y = 0, and the step-top (the upstream bottom wall) at y = h. The DNS profile
@@ -28,7 +46,9 @@ from scipy.interpolate import LinearNDInterpolator
 from solver_bindings import _rs
 from bfs_reference import _bfs_solver_settings
 
-_CMU = 0.09  # Boussinesq C_mu, for the turbulence timescale tau = 1/(C_mu omega)
+_CMU = 0.09     # Boussinesq C_mu, for the turbulence timescale tau = 1/(C_mu omega)
+_BETA1 = 0.075  # Menter beta1, for the viscous-sublayer omega ~ 6 nu/(beta1 y^2)
+_KAPPA = 0.41   # von Karman, for the log-layer omega = u_tau/(sqrt(C_mu) kappa y)
 
 
 class BFSBaselineRANS:
@@ -47,10 +67,25 @@ class BFSBaselineRANS:
     U_BULK = 1.0
     REATTACH_XR_H = 6.28     # published DNS reattachment, for reference
 
-    # sized for a converged separated field in ~30 s; tests override with a coarse,
-    # fast config that only exercises the machinery.
-    DEFAULT_CONFIG = {"nx_up": 24, "nx_down": 48, "ny_up": 24, "ny_down": 18,
-                      "Lu": 4.0, "Ld": 22.0, "max_iter": 12000, "conv_tol": 1.0e-4}
+    # measured inflow anchors at x/h = -3 (stat-inf.dat): the boundary-layer
+    # thickness the solved inlet layer must reproduce there, and the friction
+    # velocity used to synthesize the inlet omega profile.
+    DNS_DELTA999 = 1.1583
+    DNS_UTAU = 0.0485
+    # quiet free stream, from the measured top-row fluctuation level at x/h = -3
+    # (u' ~ 2.9e-4 U0): k_fs = 0.5 (u'^2 + v'^2 + w'^2) ~ 5e-8 U0^2.
+    K_FREESTREAM = 5.0e-8
+
+    # sized for a converged separated field in about a minute; tests override with
+    # a coarse, fast config that only exercises the machinery. inlet_delta is the
+    # prescribed inlet boundary-layer thickness at x/h = -10, matched by
+    # match_inlet_delta on this grid so the solved delta_999 at x/h = -3
+    # reproduces DNS_DELTA999 (0.6784 develops into 1.186 there, 2.4 percent
+    # above the measured 1.1583). inlet_delta None gives the legacy uniform
+    # inlet, slip_top False the legacy no-slip top (regression comparison only).
+    DEFAULT_CONFIG = {"nx_up": 40, "nx_down": 48, "ny_up": 24, "ny_down": 18,
+                      "Lu": 10.0, "Ld": 22.0, "max_iter": 12000, "conv_tol": 1.0e-4,
+                      "slip_top": True, "inlet_delta": 0.6784}
 
     def __init__(self, x, y, U, V, k, omega, nu_t, nu, reattachment,
                  status, iterations, meta):
@@ -75,7 +110,43 @@ class BFSBaselineRANS:
     # ---- solving ----------------------------------------------------------
 
     @staticmethod
-    def solve(cfg=None):
+    def inlet_profiles(y_local, dns_station, delta_in, nu, u_tau,
+                       k_fs=None, om_cap=None):
+        """Inlet U, k, omega at wall-normal offsets y_local, for thickness delta_in.
+
+        U and k take the measured x/h = -3 station shape rescaled from the
+        measured delta_999 to delta_in (free stream exactly U0 = 1 and the quiet
+        k_fs outside the layer). omega is synthesized (it is not measured) from
+        the standard two-layer form the SST wall treatment itself uses,
+          omega_vis = 6 nu / (beta1 y^2),  omega_log = u_tau / (sqrt(C_mu) kappa y),
+          omega = sqrt(omega_vis^2 + omega_log^2),
+        with y capped at delta_in so omega stays at its edge value outside the
+        layer instead of decaying to zero or being pinned artificially high.
+        """
+        y_local = np.asarray(y_local, float)
+        k_fs = BFSBaselineRANS.K_FREESTREAM if k_fs is None else float(k_fs)
+        scale = BFSBaselineRANS.DNS_DELTA999 / float(delta_in)
+
+        y_dns = dns_station["y"]
+        # BL shape normalized so the free stream is exactly 1 (U_e at -3 is 0.9993)
+        U_shape = dns_station["U"] / np.max(dns_station["U"])
+        k_shape = dns_station["k"]
+
+        y_eq = y_local * scale        # equivalent y in the measured profile
+        U = np.interp(y_eq, y_dns, U_shape, right=1.0)
+        k = np.interp(y_eq, y_dns, k_shape, right=k_fs)
+        k = np.maximum(k, k_fs)
+
+        y_eff = np.minimum(np.maximum(y_local, 1e-12), float(delta_in))
+        om_vis = 6.0 * nu / (_BETA1 * y_eff ** 2)
+        om_log = u_tau / (np.sqrt(_CMU) * _KAPPA * y_eff)
+        omega = np.sqrt(om_vis ** 2 + om_log ** 2)
+        if om_cap is not None:
+            omega = np.minimum(omega, float(om_cap))
+        return U, k, omega
+
+    @staticmethod
+    def solve(cfg=None, dns=None):
         """Solve the Le-Moin BFS at Menter defaults, return the baseline field."""
         cfg = {**BFSBaselineRANS.DEFAULT_CONFIG, **(cfg or {})}
         rs = _rs()
@@ -85,12 +156,39 @@ class BFSBaselineRANS:
         mesh = rs.Mesh.make_backward_facing_step_2d(
             cfg["nx_up"], cfg["nx_down"], cfg["ny_up"], cfg["ny_down"],
             cfg["Lu"], cfg["Ld"], h, H, Re=Re, yPlusTarget=1.0)
+        if cfg.get("slip_top", False):
+            # the Le-Moin top boundary is free-slip (zero measured shear at the
+            # top edge of every station); retype it so the BC factory assigns the
+            # symmetry BCs and the wall distance sees only the true walls
+            mesh.set_patch_type("top_wall", "symmetry")
         mesh.compute_wall_distance()
 
-        Tu = 0.05
-        kIn = 1.5 * (Ub * Tu) ** 2
-        omIn = kIn / (nu * 100.0)
+        delta_in = cfg.get("inlet_delta", None)
+        if delta_in is not None:
+            # quiet free stream, as measured; the inlet layer carries the
+            # turbulence. omega edge value at the layer edge anchors the ambient.
+            kIn = BFSBaselineRANS.K_FREESTREAM
+            omIn = BFSBaselineRANS.DNS_UTAU / (np.sqrt(_CMU) * _KAPPA * float(delta_in))
+        else:
+            Tu = 0.05
+            kIn = 1.5 * (Ub * Tu) ** 2
+            omIn = kIn / (nu * 100.0)
         bcs = rs.FlowBoundaryConditions.bfs_defaults(mesh, Ub, kIn, omIn)
+
+        if delta_in is not None:
+            if dns is None:
+                from .backward_facing_step import BackwardFacingStepDNS
+                dns = BackwardFacingStepDNS.load()
+            station = dns.stations[0]           # the x/h = -3 profile shape
+            inlet = mesh.wall_patch_data("inlet")
+            y_face = np.asarray(inlet["center"])[:, 1] - h   # offset above step-top
+            Uin, kin, omin = BFSBaselineRANS.inlet_profiles(
+                y_face, station, delta_in, nu, BFSBaselineRANS.DNS_UTAU)
+            vel = np.column_stack([Uin, np.zeros_like(Uin), np.zeros_like(Uin)])
+            bcs.set_velocity_profile(mesh, "inlet", vel)
+            bcs.set_k_profile(mesh, "inlet", kin)
+            bcs.set_omega_profile(mesh, "inlet", omin)
+
         # the reattachment QoI keeps the ForwardModel well-formed; the baseline reads
         # last_fields(), and the reattachment prediction is a useful diagnostic.
         obs = rs.ObservationOperator()
@@ -118,7 +216,9 @@ class BFSBaselineRANS:
             "config": dict(cfg),
             "case": "backward_facing_step",
             "geometry": "Le-Moin, Re_h=5100, expansion ratio 1.2",
-            "note": "developing inlet/outlet BFS; channel-calibrated SST",
+            "note": ("free-slip top, prescribed inflow boundary layer"
+                     if delta_in is not None and cfg.get("slip_top", False)
+                     else "developing inlet/outlet BFS; channel-calibrated SST"),
         }
         return BFSBaselineRANS(
             x=cc[:, 0], y=cc[:, 1], U=Uf[:, 0], V=Uf[:, 1],
@@ -126,6 +226,68 @@ class BFSBaselineRANS:
             nu_t=np.asarray(ff["nuT"]), nu=nu,
             reattachment=float(result.predictions[0]), status=status,
             iterations=cfg["max_iter"], meta=meta)
+
+    def delta_999_at(self, x, n_y=400):
+        """Solved boundary-layer thickness delta_999 above the local bottom wall.
+
+        Samples U on a fine wall-normal grid at station x, takes the edge
+        velocity as the maximum of the column (the free stream under a slip
+        top), and returns the smallest wall offset where U first reaches
+        0.999 U_e, by linear interpolation between samples.
+        """
+        y_wall = self.STEP_H if x < 0.0 else 0.0
+        y_top = self.EXPANSION_H
+        ys = np.linspace(y_wall + 1e-3, y_top - 1e-3, n_y)
+        U = self.sample_at(np.full(n_y, float(x)), ys)["U"]
+        good = np.isfinite(U)
+        ys, U = ys[good], U[good]
+        Ue = np.max(U)
+        target = 0.999 * Ue
+        above = np.nonzero(U >= target)[0]
+        if above.size == 0:
+            return float("nan")
+        j = above[0]
+        if j == 0:
+            return ys[0] - y_wall
+        # linear interpolation to the crossing
+        f = (target - U[j - 1]) / max(U[j] - U[j - 1], 1e-30)
+        return (ys[j - 1] + f * (ys[j] - ys[j - 1])) - y_wall
+
+    @staticmethod
+    def match_inlet_delta(cfg=None, target=None, tol=0.02, max_iter=4, dns=None):
+        """Secant on the inlet thickness so delta_999 at x/h = -3 matches the DNS.
+
+        Returns (delta_in, achieved_delta999, baseline). This matches the inflow
+        boundary condition to the measured layer thickness (a data anchor), and
+        touches no pre-registered quantity.
+        """
+        target = BFSBaselineRANS.DNS_DELTA999 if target is None else float(target)
+        base_cfg = {**BFSBaselineRANS.DEFAULT_CONFIG, **(cfg or {})}
+
+        def run(delta_in):
+            b = BFSBaselineRANS.solve({**base_cfg, "inlet_delta": delta_in}, dns=dns)
+            return b, b.delta_999_at(-3.0)
+
+        d0 = float(base_cfg.get("inlet_delta") or 1.05)
+        b0, m0 = run(d0)
+        if abs(m0 - target) <= tol * target:
+            return d0, m0, b0
+        # the solved thickness grows nearly one-for-one with the inlet thickness,
+        # so a secant from a shifted second point converges in one or two steps
+        d1 = d0 * target / max(m0, 1e-9)
+        b1, m1 = run(d1)
+        for _ in range(max_iter):
+            if abs(m1 - target) <= tol * target:
+                break
+            denom = (m1 - m0)
+            if abs(denom) < 1e-9:
+                break
+            d2 = d1 + (target - m1) * (d1 - d0) / denom
+            d2 = float(np.clip(d2, 0.2, 3.0))
+            d0, m0 = d1, m1
+            d1 = d2
+            b1, m1 = run(d1)
+        return d1, m1, b1
 
     # ---- interpolation to query points ------------------------------------
 
@@ -136,17 +298,25 @@ class BFSBaselineRANS:
         return {"U": v[:, 0], "V": v[:, 1], "k": v[:, 2],
                 "omega": v[:, 3], "nu_t": v[:, 4]}
 
-    def velocity_gradient_at(self, xq, yq, dx=0.03):
+    def velocity_gradient_at(self, xq, yq, dx=0.03, dy=None):
         """grad_u[i, j] = d u_i / d x_j at the query points by central differences.
 
-        The interpolant is evaluated at the four neighbours (x +/- dx, y +/- dx);
+        The interpolant is evaluated at the four neighbours (x +/- dx, y +/- dy);
         where a neighbour falls outside the domain (NaN) a one-sided difference is
         used, and a fully surrounded-by-NaN point yields zero (it is masked out
         downstream). Only the in-plane derivatives of U and V are formed (the mean
         is two-dimensional and spanwise-homogeneous).
+
+        dx and dy may be scalars or per-point arrays. The wall-normal step dy
+        (default: dx) should shrink toward the wall: a fixed 0.03 step spans many
+        near-wall cells of the stretched mesh and smears the sublayer shear the
+        discrepancy features depend on, so callers pass dy of the order of the
+        local wall distance there (see BFSDiscrepancy.build).
         """
         xq = np.asarray(xq, float)
         yq = np.asarray(yq, float)
+        dx = np.broadcast_to(np.asarray(dx, float), xq.shape)
+        dy = dx if dy is None else np.broadcast_to(np.asarray(dy, float), yq.shape)
 
         def uv(x, y):
             v = self._interp(np.column_stack([x, y]))
@@ -155,22 +325,22 @@ class BFSBaselineRANS:
         U0, V0 = uv(xq, yq)
         Uxp, Vxp = uv(xq + dx, yq)
         Uxm, Vxm = uv(xq - dx, yq)
-        Uyp, Vyp = uv(xq, yq + dx)
-        Uym, Vym = uv(xq, yq - dx)
+        Uyp, Vyp = uv(xq, yq + dy)
+        Uym, Vym = uv(xq, yq - dy)
 
-        def deriv(fp, fm, f0):
+        def deriv(fp, fm, f0, step):
             # central where both sides valid; one-sided if one side is NaN; else 0
-            d = np.where(np.isfinite(fp) & np.isfinite(fm), (fp - fm) / (2.0 * dx),
-                         np.where(np.isfinite(fp) & np.isfinite(f0), (fp - f0) / dx,
+            d = np.where(np.isfinite(fp) & np.isfinite(fm), (fp - fm) / (2.0 * step),
+                         np.where(np.isfinite(fp) & np.isfinite(f0), (fp - f0) / step,
                                   np.where(np.isfinite(fm) & np.isfinite(f0),
-                                           (f0 - fm) / dx, 0.0)))
+                                           (f0 - fm) / step, 0.0)))
             return d
 
         g = np.zeros((xq.size, 3, 3))
-        g[:, 0, 0] = deriv(Uxp, Uxm, U0)      # dU/dx
-        g[:, 0, 1] = deriv(Uyp, Uym, U0)      # dU/dy
-        g[:, 1, 0] = deriv(Vxp, Vxm, V0)      # dV/dx
-        g[:, 1, 1] = deriv(Vyp, Vym, V0)      # dV/dy
+        g[:, 0, 0] = deriv(Uxp, Uxm, U0, dx)      # dU/dx
+        g[:, 0, 1] = deriv(Uyp, Uym, U0, dy)      # dU/dy
+        g[:, 1, 0] = deriv(Vxp, Vxm, V0, dx)      # dV/dx
+        g[:, 1, 1] = deriv(Vyp, Vym, V0, dy)      # dV/dy
         return g
 
     def timescale_at(self, xq, yq):

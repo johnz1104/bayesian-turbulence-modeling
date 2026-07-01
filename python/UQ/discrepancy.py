@@ -98,9 +98,40 @@ def boussinesq_anisotropy(S):
     anisotropy is b = -(nu_t/k) S.  In the non-dimensional convention used here
     (S already carries the turbulence timescale and nu_t ~ C_mu k timescale) the
     linear term is b = -C_mu S with C_mu = 0.09; this is the T^(1) coefficient.
+
+    This form assumes nu_t = k/omega exactly. Where a baseline limits nu_t below
+    that (the SST Bradshaw limiter binds in separated shear layers), use
+    boussinesq_anisotropy_actual with the solved nu_t instead, so the baseline
+    anisotropy is the stress the solver actually applies.
     """
     Cmu = 0.09
     return -Cmu * _dev(S)   # deviatoric strain (traceless even when div u != 0)
+
+
+def boussinesq_anisotropy_actual(S, nu_t, k_baseline, timescale,
+                                 k_floor=1e-30, coeff_cap=0.09):
+    """Boussinesq anisotropy from the baseline's ACTUAL eddy viscosity.
+
+    b = -(nu_t / k) S_dim = -(nu_t / (k timescale)) S_nondim, with the baseline's
+    own k and the same timescale that non-dimensionalised S. This reproduces the
+    stress the running solver applies, including the SST Bradshaw limiter (which
+    binds in separated shear layers and REDUCES the coefficient below C_mu). The
+    injected a-posteriori closure adds the learned db on top of this same
+    baseline, so training target and injection stay consistent where the limiter
+    is active.
+
+    coeff_cap removes the solver's numerical nu_t floor (0.1 nu everywhere): near
+    a wall the physical k/omega falls orders of magnitude below that floor, and
+    dividing the floored nu_t by the vanishing local k would inflate b_B far
+    beyond the realizable bound. In the tau = 1/(C_mu omega) convention the
+    unfloored coefficient nu_t/(k tau) never exceeds C_mu (the limiter only
+    lowers it), so capping at C_mu = 0.09 reproduces exactly min(nu_t, k/omega),
+    the physical SST viscosity.
+    """
+    coeff = np.asarray(nu_t) / np.maximum(np.asarray(k_baseline)
+                                          * np.asarray(timescale), k_floor)
+    coeff = np.minimum(coeff, coeff_cap)
+    return -coeff[..., None, None] * _dev(S)
 
 
 def reynolds_anisotropy(R, k_floor=1e-12):

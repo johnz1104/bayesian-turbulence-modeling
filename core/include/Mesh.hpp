@@ -145,6 +145,12 @@ public:
 
     PatchID patchByName(const std::string& name) const; // patch lookup by name
 
+    // Retype a boundary patch (e.g. "wall" -> "symmetry"), so BC factories and
+    // computeWallDistance see the new type. Call computeWallDistance afterwards:
+    // a patch retyped away from "wall" must stop contributing wall distances
+    // (the Le-Moin BFS top boundary is free-slip, not a turbulence wall).
+    void setPatchType(const std::string& name, const std::string& type);
+
     // iterators (range-based for loops )
     const std::vector<Cell>&    cells()     const { return cells_;}
     const std::vector<Face>&    faces()     const { return faces_;}

@@ -34,7 +34,7 @@ class DNSField:
     """
 
     def __init__(self, grad_u, R, k=None, timescale=None, grad_T=None,
-                 heat_flux=None, nu_t=None, Pr_t=0.9, meta=None):
+                 heat_flux=None, nu_t=None, Pr_t=0.9, meta=None, k_baseline=None):
         self.grad_u = np.asarray(grad_u, dtype=float)
         self.R = np.asarray(R, dtype=float)
         n = self.grad_u.shape[0]
@@ -47,6 +47,14 @@ class DNSField:
         self.nu_t = None if nu_t is None else np.asarray(nu_t, dtype=float)
         self.Pr_t = Pr_t
         self.meta = meta or {}
+        # baseline (RANS) turbulent kinetic energy: when supplied together with
+        # nu_t, the Boussinesq baseline anisotropy uses the solver's ACTUAL eddy
+        # viscosity, b_B = -(nu_t/(k_baseline timescale)) S, so any limiter (the
+        # SST Bradshaw limiter binds in separated shear layers) is honoured and
+        # the a-priori training target db stays consistent with the baseline an
+        # a-posteriori injection adds db to.
+        self.k_baseline = None if k_baseline is None \
+            else np.asarray(k_baseline, dtype=float)
 
     @staticmethod
     def from_dict(d):
@@ -74,10 +82,21 @@ class DNSField:
         """Galilean-invariant conditioning features (Pope invariants + extras)."""
         return dq.feature_set(self.grad_u, self.timescale, extra=extra)
 
+    def baseline_anisotropy(self):
+        """The Boussinesq baseline anisotropy b_B the discrepancy is formed against.
+
+        Uses the actual-eddy-viscosity form when nu_t and k_baseline are supplied
+        (limiter-consistent); otherwise the classical -C_mu S form.
+        """
+        S, _ = self.strain_rotation()
+        if self.nu_t is not None and self.k_baseline is not None:
+            return dq.boussinesq_anisotropy_actual(S, self.nu_t, self.k_baseline,
+                                                   self.timescale)
+        return dq.boussinesq_anisotropy(S)
+
     def reynolds_discrepancy(self):
         """Boussinesq Reynolds-stress anisotropy discrepancy db = b_DNS - b_Bouss."""
-        S, _ = self.strain_rotation()
-        return dq.reynolds_discrepancy(self.R, S)
+        return dq.reynolds_anisotropy(self.R) - self.baseline_anisotropy()
 
     def heatflux_discrepancy(self):
         """Gradient-diffusion turbulent-heat-flux discrepancy (requires heat flux)."""
