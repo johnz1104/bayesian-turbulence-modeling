@@ -195,7 +195,7 @@ def fig_intervals(d):
     ax.text(base, -0.62, f"baseline SST {base:.2f}", fontsize=8.5, color=MUTED,
             ha="center")
     ax.set_yticks([])
-    ax.set_xlim(1.0, 13.0)
+    ax.set_xlim(0.5, 13.0)
     ax.set_ylim(-0.9, len(kept) - 0.1)
     ax.set_xlabel("reattachment length x_r / h", color=INK)
     ax.set_title("Periodic hills: propagated reattachment vs the DNS truth",
