@@ -311,6 +311,20 @@ PYBIND11_MODULE(rans_sst_py, m) {
              py::arg("nx_up"), py::arg("nx_down"), py::arg("ny_up"), py::arg("ny_down"),
              py::arg("Lu"), py::arg("Ld"), py::arg("h_s"), py::arg("H"),
              py::arg("Re"), py::arg("yPlusTarget") = 1.0)
+        .def_static("make_curved_channel_periodic_2d",
+             [](py::array_t<double, py::array::c_style | py::array::forcecast> xN,
+                py::array_t<double, py::array::c_style | py::array::forcecast> yB,
+                double yTop, int ny, double Re, double yPlusTarget) {
+                 auto x = xN.unchecked<1>();
+                 auto y = yB.unchecked<1>();
+                 std::vector<double> xv(x.shape(0)), yv(y.shape(0));
+                 for (py::ssize_t i = 0; i < x.shape(0); ++i) xv[i] = x(i);
+                 for (py::ssize_t i = 0; i < y.shape(0); ++i) yv[i] = y(i);
+                 return Mesh::makeCurvedChannelPeriodic2D(xv, yv, yTop, ny,
+                                                          Re, yPlusTarget);
+             },
+             py::arg("x_nodes"), py::arg("y_bottom"), py::arg("y_top"),
+             py::arg("ny"), py::arg("Re"), py::arg("yPlusTarget") = 1.0)
         .def_static("load_from_file", &Mesh::loadFromFile)
         .def("compute_wall_distance", &Mesh::computeWallDistance)
         .def("set_patch_type", &Mesh::setPatchType, py::arg("name"), py::arg("type"))
@@ -380,6 +394,7 @@ PYBIND11_MODULE(rans_sst_py, m) {
         .def_readwrite("turb_start_iter",   &SolverSettings::turbStartIter)
         .def_readwrite("turb_update_interval", &SolverSettings::turbUpdateInterval)
         .def_readwrite("alpha_injection",   &SolverSettings::alphaInjection)
+        .def_readwrite("body_force",        &SolverSettings::bodyForce)
         .def_readwrite("k_min",             &SolverSettings::kMin)
         .def_readwrite("omega_min",         &SolverSettings::omegaMin)
         .def_readwrite("verbose",           &SolverSettings::verbose)

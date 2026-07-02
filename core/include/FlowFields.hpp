@@ -66,6 +66,12 @@ struct SolverSettings {
     // leaves a residual floor near the tolerance.
     double alphaInjection = 0.3;
 
+    // Constant body force per unit volume (momentum source f_i * V per cell).
+    // A streamwise-PERIODIC domain has no inlet to drive it: the mean pressure
+    // gradient is represented by this force (e.g. bodyForce.x tuned so the
+    // solved bulk velocity matches the target Reynolds number).
+    Vec3 bodyForce = Vec3(0.0, 0.0, 0.0);
+
     double kMin     = 1e-10;
     double kMax     = 1e10;
     double omegaMin = 1e-6;

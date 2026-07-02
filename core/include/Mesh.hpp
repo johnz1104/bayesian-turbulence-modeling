@@ -131,6 +131,20 @@ public:
                                           double h_s, double H,
                                           double Re, double yPlusTarget = 1.0);
 
+    // Streamwise-PERIODIC curved-bottom channel (the periodic-hills family).
+    // The bottom boundary is a prescribed curve y_bottom(x) sampled at the
+    // nx+1 x-node locations (first and last must match: one periodic column);
+    // the top is flat at yTop. Periodicity is built as wrap-around INTERNAL
+    // faces between the last and first cell columns (no boundary condition is
+    // involved), with the face distance vector, delta and interpolation weight
+    // computed against the periodic image of the neighbor. The flow must be
+    // driven by a body force (SolverSettings::bodyForce): there is no inlet.
+    // Patches: bottom_wall (curved, type wall), top_wall (flat, type wall).
+    static Mesh makeCurvedChannelPeriodic2D(const std::vector<double>& xNodes,
+                                            const std::vector<double>& yBottom,
+                                            double yTop, int ny,
+                                            double Re, double yPlusTarget = 1.0);
+
     // returns count
     int nCells()  const { return static_cast<int>(cells_.size());}
     int nFaces()  const { return static_cast<int>(faces_.size());}
