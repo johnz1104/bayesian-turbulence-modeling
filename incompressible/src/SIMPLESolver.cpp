@@ -252,7 +252,10 @@ void SIMPLESolver::addInjectionSource(LinearSystem& sys, const FlowFields& f,
         injDiag_.checkedIters += 1;
         for (int ci = 0; ci < nc; ++ci) {
             const double margin = aniso::barycentricMargin(bTarget6_->data() + 6 * ci);
-            if (margin < -1e-9) {
+            // tolerance above the trig eigensolver's conditioning floor at
+            // degenerate eigenvalues (see AnisotropyTools::isRealizable): corner
+            // targets from the eigenspace family sit exactly on the boundary
+            if (margin < -1e-6) {
                 injDiag_.allRealizable = false;
                 injDiag_.maxViolation = std::max(injDiag_.maxViolation, -margin);
             }
