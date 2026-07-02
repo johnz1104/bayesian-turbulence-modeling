@@ -62,7 +62,17 @@ inline double barycentricMargin(const double b[6]) {
     return std::min(c1, std::min(c2, c3));
 }
 
-inline bool isRealizable(const double b[6], double tol = 1e-9) {
+// The tolerance must sit above the trigonometric solver's conditioning floor
+// at DEGENERATE eigenvalues: exactly at a barycentric corner the acos argument
+// r is 1 and d(acos)/dr is infinite there, so a one-ulp rounding of r (a few
+// 1e-16) perturbs the eigenvalues by ~ p sqrt(2 eps) ~ 1e-8. Realizable states
+// projected ONTO the simplex boundary (the corners the eigenspace baseline
+// uses) therefore carry margins as low as about -2e-8 in exact arithmetic
+// terms; 1e-6 clears that floor by two orders while staying far below any
+// physically meaningful margin. (Verified against LAPACK eigenvalues, which
+// give the corner margin at 1e-16; the floor is a property of the closed-form
+// trig method, not of the state.)
+inline bool isRealizable(const double b[6], double tol = 1e-6) {
     return barycentricMargin(b) >= -tol;
 }
 
