@@ -70,3 +70,52 @@ pressure at the six profile stations, and the mean-velocity profiles at the six
 stations. Region-resolved reporting follows the pre-registration (recirculation,
 reattachment, recovery); coverage, sharpness, CRPS and the multivariate energy
 score come from the existing evaluation harness.
+
+## 5. A-priori checkpoint protocol (added 2026-07-01, before any full fit ran)
+
+The precursor checkpoint (PRE_REGISTRATION.md scope decision 1: "the a-priori
+discrepancy fit and its coverage are the precursor") is scored as follows,
+fixed before any conditional model was fit to the real separated data at full
+training length:
+
+- Held-out unit: a profile STATION. The six wall-normal profiles are
+  internally correlated, so a point-level split would leak the test station
+  into training; the protocol is leave-one-station-out over the six stations,
+  plus a train-on-all in-distribution machinery check.
+- Target: the DNS anisotropy at the held-out station. Predictions are
+  b_baseline + db_model with every draw projected into the barycentric
+  realizable set, the same projection the a-posteriori injection applies.
+- Metrics: per-component coverage and sharpness of the central 90 percent
+  band, per-component CRPS, the multivariate energy score over the five
+  independent components, and the realizable fraction (1.0 by construction).
+- Both the generative flow and the Gaussian model-form baseline are scored
+  through the identical fit / sample / project / score path, isolating the
+  distribution family. Fixed seed 0, 128 samples per point, 400 training
+  epochs; no learning rate, feature set, or model is tuned toward any test
+  number.
+
+## 6. A-posteriori ensemble construction (added 2026-07-01, before any
+## a-posteriori ensemble result was computed)
+
+How a per-cell conditional sampler becomes a field realization one coupled
+solve consumes, fixed before any ensemble ran:
+
+- Each ensemble member is a COHERENT closure realization: one shared latent
+  draw z (a single standard-normal vector over the five components) is pushed
+  through the conditional model at every cell, so the member perturbs the
+  whole field consistently, exactly as an eigenspace corner does. Sampling an
+  independent latent per cell instead yields a spatially white stress
+  perturbation whose divergence largely cancels; that variant is reported only
+  as a labeled sensitivity diagnostic, never as the primary band.
+- Both the generative flow and the Gaussian baseline use the same shared-
+  latent construction (the Gaussian member is mu(x) + sigma(x) * z).
+- Ensemble size 24 per probabilistic method, fixed seed 0, at the production
+  grid; the eigenspace family contributes its corner solves (Delta_B = 1.0,
+  with 0.5 as the moderation sensitivity) per section 1.
+- Every member's target is projected into the realizable set before injection
+  and re-checked in the running solve (section 3); members that fail to
+  converge are reported by count and excluded from scores only with that
+  exclusion stated.
+- Scored quantities per section 4 against the DNS truths (reattachment 6.28
+  and the measured station Cf), with coverage, CRPS and the energy score from
+  the standard harness.
