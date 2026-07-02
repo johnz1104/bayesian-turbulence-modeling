@@ -49,8 +49,18 @@ class HillsBaselineRANS:
     # treatment: a uniform initial stream slamming into the hill constriction
     # blows up within a dozen iterations, while the body force accelerating
     # the flow from rest develops it smoothly.
-    DEFAULT_CONFIG = {"nx": 96, "ny": 64, "max_iter": 24000, "conv_tol": 1.0e-4,
-                      "body_force": 0.0095, "alpha_u": 0.3, "alpha_p": 0.2}
+    #
+    # Grid ceiling, documented: 72x48 and finer diverge from the near-wall
+    # cells of the steep windward slope, where the terrain-following mesh is
+    # most sheared and the pressure-correction Laplacian's orthogonal
+    # approximation is least consistent with the true face normals; the
+    # inconsistency grows with slope resolution and no relaxation level damps
+    # it (the pre-divergence field is smooth, not odd-even). 60x40 converges
+    # with margin and the reattachment is grid-stable against 48x32 (7.62 vs
+    # 7.66). A non-orthogonal correction of the pressure operator is the
+    # identified upgrade path if finer hills grids are ever needed.
+    DEFAULT_CONFIG = {"nx": 60, "ny": 40, "max_iter": 25000, "conv_tol": 1.0e-4,
+                      "body_force": 0.00906, "alpha_u": 0.3, "alpha_p": 0.2}
 
     def __init__(self, x, y, U, V, k, omega, nu_t, nu, body_force,
                  bulk_crest, reattachment, status, meta):
