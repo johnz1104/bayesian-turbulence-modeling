@@ -197,3 +197,53 @@ following was run:
   loaders; the primary protocol uses the alpha = 1.0 case (the benchmark
   configuration), with the family reserved for the parametric axis if the
   phase verdict motivates it.
+
+## 9. Periodic-hills a-posteriori and cross-geometry propagation protocol
+## (added 2026-07-02, before any hills-injected ensemble was run)
+
+The second-geometry coupled leg and the propagated form of the cross-geometry
+clause, fixed before any sampled closure was injected through the periodic
+solver.
+
+- Ensemble construction: identical to section 6. Coherent shared-latent
+  members (one latent per member pushed through the conditional model at every
+  solver cell), ensemble size 24 per probabilistic method, fixed seed 0, the
+  production hills grid pinned in the baseline module; every member projected
+  into the realizable set before injection and re-checked each outer
+  iteration; non-converged members counted and excluded with the exclusion
+  stated; the eigenspace corner family at Delta_B = 1.0 with 0.5 as the
+  moderation sensitivity, through the same injection; the independent-latent
+  (white) variant only as a labeled sensitivity diagnostic, never the primary
+  band. The injection conventions are section 3 unchanged (limiter-consistent
+  baseline anisotropy, running-k deferred-correction force).
+- Quantities of interest, grounded in what this dataset measures. The dense
+  DNS field carries mean velocity and Reynolds stresses; it carries NO
+  measured wall skin-friction or wall-pressure distribution, so the
+  wall-shear-derived quantities are the SIGN-based bubble geometry and the
+  recovery-region quantity is the mean velocity itself:
+  1. Reattachment x_r/h on the bottom wall, from the wall-shear sign
+     structure, using the SAME crossing rule as the baseline record (the
+     first negative-to-positive crossing downstream of the separation onset).
+     DNS truth: the end of the longest contiguous run of negative near-wall
+     streamwise velocity in the dense field (the loader's reading), with the
+     crossing linearly interpolated.
+  2. Separation point x_s/h (the onset crossing of the same run, both sides
+     read with the same interpolation rule) and the bubble length x_r - x_s.
+  3. Mean streamwise velocity at pinned probe points: streamwise stations
+     x/h = 1, 2, 3, 4, 5, 6, 7, 8 crossed with heights y/h = 0.5, 1.0, 2.0,
+     keeping only probes at least 0.2 h above the data-extracted local hill
+     surface and at least 0.5 h below the top wall (the admissible set is
+     deterministic given the case). The DNS field and every member field are
+     interpolated at the same admissible probes; scored with coverage,
+     sharpness and CRPS pooled over probes plus the multivariate energy score,
+     exactly as the first geometry's station-Cf vector.
+- Cross-geometry propagation (the propagated form of PRE_REGISTRATION.md
+  positive-shape clause 4; the section-8 a-priori transfer is its precursor):
+  train on ALL valid points of one geometry, sample coherent realizable
+  members at the OTHER geometry's solver cells (the models condition on the
+  five invariant features only, no geometry label), inject through the other
+  geometry's production forward model, and score on that geometry's pinned
+  quantity set. BOTH directions, both probabilistic methods, 24 members,
+  seed 0, the same exclusion handling. Graceful degradation against the
+  within-geometry ensembles is the pre-registered expectation; a silent
+  collapse is the negative signal.
