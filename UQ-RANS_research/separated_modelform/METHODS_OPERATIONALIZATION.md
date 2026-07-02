@@ -70,3 +70,37 @@ pressure at the six profile stations, and the mean-velocity profiles at the six
 stations. Region-resolved reporting follows the pre-registration (recirculation,
 reattachment, recovery); coverage, sharpness, CRPS and the multivariate energy
 score come from the existing evaluation harness.
+
+## 8. Periodic-hills a-priori and cross-geometry protocol (added 2026-07-02,
+## before any hills discrepancy or transfer result was computed)
+
+The dense-field second geometry and the cross-geometry clause
+(PRE_REGISTRATION.md positive-shape clause 4), fixed before any of the
+following was run:
+
+- Point set: interior fluid points of the dense field (the loader's interior
+  mask, a clean gradient stencil), subsampled at a FIXED stride of 3 in each
+  grid direction (a compute-budget choice made now; the dense field
+  oversamples smooth regions). The discrepancy recipe matches the first
+  geometry: b_DNS from the DNS stress at those points, b_baseline and the five
+  invariant conditioning features from the converged RANS baseline field
+  interpolated to them, with the limiter-consistent, floor-capped Boussinesq
+  convention of section 3 and the wall-adaptive gradient step measured from
+  the local hill surface and the top wall.
+- Within-hills held-out unit: six equal streamwise bands (the analog of the
+  first geometry's stations; wall-normal columns are internally correlated).
+  Leave-one-band-out over the six bands plus the train-on-all in-distribution
+  machinery check; nominal level 0.90, fixed seed 0, 400 training epochs, 128
+  samples per point, exactly as section 5.
+- Cross-geometry transfer (the pre-registered clause): train on ALL valid
+  points of one geometry, score on ALL valid points of the other, BOTH
+  directions, the generative flow and the Gaussian baseline through the
+  identical fit / sample / project / score path. The conditioning features are
+  the same five Galilean-invariant scalars with no geometry label, which is
+  the property that makes the transfer question meaningful. Metrics as in
+  section 5; graceful degradation is the pre-registered expectation, silent
+  collapse the negative signal.
+- The steepness family (alpha 0.5 to 1.5) is available through the same
+  loaders; the primary protocol uses the alpha = 1.0 case (the benchmark
+  configuration), with the family reserved for the parametric axis if the
+  phase verdict motivates it.
