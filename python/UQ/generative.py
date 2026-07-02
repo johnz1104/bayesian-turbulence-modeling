@@ -95,12 +95,16 @@ def _make_flow(dy, dc, n_layers, hidden):
             base = -0.5 * (z ** 2).sum(-1) - 0.5 * dy * np.log(2 * np.pi)
             return base + logdet
 
-        def sample(self, ctx):
-            z = torch.randn(ctx.shape[0], dy)
+        def push(self, z, ctx):
+            # pushforward of a GIVEN latent through the conditional flow; a
+            # single z shared across rows yields a coherent field realization
             x = z
             for layer in self.layers:
                 x, _ = layer.forward(x, ctx)
             return x
+
+        def sample(self, ctx):
+            return self.push(torch.randn(ctx.shape[0], dy), ctx)
 
     return RealNVP()
 
@@ -153,8 +157,15 @@ class GenerativeDiscrepancyModel:
                 print(f"epoch {ep}  nll {tot / n:.4f}")
         return self
 
-    def sample(self, features, n_per=1):
-        """Draw n_per samples of the target per feature row. Returns (N, n_per, dy)."""
+    def sample(self, features, n_per=1, shared_latent=False):
+        """Draw n_per samples of the target per feature row. Returns (N, n_per, dy).
+
+        shared_latent=True pushes ONE latent draw per sample index through the
+        conditional flow at every feature row, so each draw is a coherent field
+        realization (one closure hypothesis applied everywhere), the ensemble
+        construction the a-posteriori study pins in its methods note. The
+        default draws an independent latent per row (the pointwise law).
+        """
         torch = _torch()
         X = np.asarray(features, dtype=np.float32).reshape(len(features), -1)
         Xs = (X - self._x_mean) / self._x_std
@@ -162,7 +173,11 @@ class GenerativeDiscrepancyModel:
         with torch.no_grad():
             for j in range(n_per):
                 ctx = torch.tensor(Xs)
-                ys = self.flow.sample(ctx).numpy()
+                if shared_latent:
+                    z = torch.randn(1, self.dy).expand(len(X), self.dy)
+                    ys = self.flow.push(z, ctx).numpy()
+                else:
+                    ys = self.flow.sample(ctx).numpy()
                 out[:, j, :] = ys * self._y_std + self._y_mean
         return out
 
@@ -195,14 +210,17 @@ class GenerativeDiscrepancyModel:
         b[..., 1, 2] = b[..., 2, 1] = byz
         return b
 
-    def sample_realizable_anisotropy(self, features, base_anisotropy=None, n_per=1):
+    def sample_realizable_anisotropy(self, features, base_anisotropy=None,
+                                     n_per=1, shared_latent=False):
         """Sample discrepancy components, add an optional base anisotropy, and
         project every draw into the realizable barycentric set.
 
         Returns the projected anisotropy batch (N, n_per, 3, 3); every entry is
-        realizable by construction.
+        realizable by construction. shared_latent gives coherent field
+        realizations (see sample).
         """
-        comp = self.sample(features, n_per=n_per)             # (N, n_per, 5)
+        comp = self.sample(features, n_per=n_per,
+                           shared_latent=shared_latent)       # (N, n_per, 5)
         b = self.components_to_anisotropy(comp)               # (N, n_per, 3, 3)
         if base_anisotropy is not None:
             b = b + base_anisotropy[:, None, :, :]
