@@ -53,8 +53,16 @@ class SeparatedAPriori:
         self.b_base = disc.b_baseline[m]
         # b_DNS = b_baseline + db by construction of the discrepancy
         self.b_dns = disc.b_baseline[m] + disc.db[m]
-        self.station = disc.station[m]
-        self.station_xh = disc.dns.station_xh
+        # the held-out unit: profile stations on the backward-facing step,
+        # streamwise bands on the dense periodic-hills field (the pinned
+        # spatially-correlated grouping of each geometry's protocol)
+        if hasattr(disc, "station"):
+            self.station = disc.station[m]
+            self.station_xh = disc.dns.station_xh
+        else:
+            self.station = disc.band[m]
+            self.station_xh = np.arange(int(self.station.max()) + 1,
+                                        dtype=float)
         self.disc = disc
 
     @staticmethod
@@ -85,19 +93,9 @@ class SeparatedAPriori:
                   epochs=epochs, **kw)
         return model
 
-    def evaluate(self, model, test_mask, n_samples=128, level=0.9):
-        """Score realizable predictive anisotropies against the DNS anisotropy.
-
-        Samples db from the model at the test features, adds the baseline
-        anisotropy, projects every draw into the realizable set (the same
-        projection every method's injection targets pass through), and scores
-        component-wise coverage/sharpness/CRPS plus the multivariate energy
-        score and the realizable fraction (1.0 by construction).
-        """
-        feats = self.features[test_mask]
-        b_base = self.b_base[test_mask]
-        b_true = self.b_dns[test_mask]
-
+    @staticmethod
+    def _score(model, feats, b_base, b_true, n_samples, level):
+        """Score a fitted model against DNS anisotropy at arbitrary points."""
         b_samp = model.sample_realizable_anisotropy(feats, base_anisotropy=b_base,
                                                     n_per=n_samples)
         R = 2.0 * (b_samp + np.eye(3) / 3.0)
@@ -115,7 +113,7 @@ class SeparatedAPriori:
 
         return {
             "level": level,
-            "n_test": int(np.count_nonzero(test_mask)),
+            "n_test": int(feats.shape[0]),
             "n_samples": int(n_samples),
             "coverage": coverage,
             "sharpness": sharpness,
@@ -124,6 +122,30 @@ class SeparatedAPriori:
             "energy_score": ev.energy_score(y, s),
             "realizable_fraction": realizable_fraction,
         }
+
+    def evaluate(self, model, test_mask, n_samples=128, level=0.9):
+        """Score realizable predictive anisotropies against the DNS anisotropy.
+
+        Samples db from the model at the test features, adds the baseline
+        anisotropy, projects every draw into the realizable set (the same
+        projection every method's injection targets pass through), and scores
+        component-wise coverage/sharpness/CRPS plus the multivariate energy
+        score and the realizable fraction (1.0 by construction).
+        """
+        return self._score(model, self.features[test_mask],
+                           self.b_base[test_mask], self.b_dns[test_mask],
+                           n_samples, level)
+
+    def evaluate_external(self, model, other, n_samples=128, level=0.9):
+        """Score a model fitted on THIS geometry against ANOTHER geometry.
+
+        The cross-geometry transfer of the pinned protocol (methods note
+        section 8): the model conditions only on the five invariant features
+        (no geometry label), and its realizable predictive anisotropy is scored
+        on every valid point of the other geometry's record.
+        """
+        return self._score(model, other.features, other.b_base, other.b_dns,
+                           n_samples, level)
 
     def leave_one_station_out(self, kinds=("flow", "gauss"), seed=0,
                               epochs=400, n_samples=128, level=0.9):
