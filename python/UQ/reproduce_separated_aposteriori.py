@@ -58,10 +58,22 @@ def _quick(cfg):
     return cfg
 
 
-def _member_summary(members):
-    return [{k: (float(v) if isinstance(v, (int, float, np.floating)) else v)
-             for k, v in m.items() if k not in ("cf_x", "cf")}
-            for m in members]
+def _member_summary(members, cf_stations=None):
+    """Per-member record; wall-Cf curves reduce to the measured stations.
+
+    cf_stations are the downstream station locations; the interpolated
+    per-member Cf there is what the pinned conformal overlay calibrates on
+    (METHODS_OPERATIONALIZATION.md section 7), so it is persisted.
+    """
+    out = []
+    for m in members:
+        rec = {k: (float(v) if isinstance(v, (int, float, np.floating)) else v)
+               for k, v in m.items() if k not in ("cf_x", "cf")}
+        if cf_stations is not None:
+            rec["cf_at_stations"] = np.interp(cf_stations, m["cf_x"],
+                                              m["cf"]).tolist()
+        out.append(rec)
+    return out
 
 
 def main():
@@ -84,6 +96,9 @@ def main():
           f"(DNS {truth})")
     study = BFSAPosteriori.build(cfg=CONFIG["bfs_cfg"], dns=dns,
                                  baseline=baseline)
+    xs_all, cf_dns = dns.cf_stations()
+    keep = xs_all > 0.0
+    cf_stations = xs_all[keep]
 
     numbers = {
         "config": {k: v for k, v in CONFIG.items()},
@@ -106,7 +121,9 @@ def main():
             "reattachment": BFSAPosteriori.score_reattachment(
                 members, truth, level=CONFIG["level"]),
             "cf": study.score_cf(members, level=CONFIG["level"]),
-            "members": _member_summary(members),
+            "members": _member_summary(members, cf_stations=cf_stations),
+            "cf_stations_xh": cf_stations.tolist(),
+            "cf_measured": cf_dns[keep].tolist(),
         }
         if args.sensitivity:
             torch.manual_seed(CONFIG["seed"])

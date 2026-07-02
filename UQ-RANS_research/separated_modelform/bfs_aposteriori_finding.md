@@ -138,3 +138,84 @@ python3 UQ-RANS_research/separated_modelform/make_bfs_figures.py
 
 Fixed seed 0 throughout; raw ensembles cache under the gitignored
 `results/separated/`; the curated numbers here are `finding_numbers.json`.
+
+## 6. Dated addendum (2026-07-02): pinned post-result diagnostics
+
+Three diagnostics were requested on review of the result above; their protocols
+were fixed in METHODS_OPERATIONALIZATION.md section 7 BEFORE any of them ran.
+Numbers: the `diagnostics` block of `finding_numbers.json`. They attribute the
+recorded result; none changes it.
+
+### 6.1 Grid attribution of the baseline error
+
+Same corrected boundary conditions and the same inlet profile (inlet_delta =
+0.6784) at three resolutions:
+
+| grid | reattachment x_r/h | delta_999 at x/h = -3 |
+|---|---|---|
+| 20+26 x 14+10 (coarse) | 5.716 | (coupled-test config) |
+| 40+48 x 24+18 (production) | 6.611 | 1.186 |
+| 60+72 x 36+27 (fine) | 6.877 | 0.933 |
+
+The prediction is still moving under refinement (+0.90 then +0.27; apparent
+order about 3, crude extrapolation to roughly 7.0). The same inlet develops a
+thinner layer on the fine grid (0.933 against the matched 1.186; the inflow
+match is resolution-dependent), so the fine number conflates resolution with an
+inflow under-match and the pure-resolution shift is AT LEAST +0.27.
+
+Consequence, stated against section 1: the production-grid baseline error
+(+5.3 percent) UNDERSTATES the grid-converged closure error, which is an
+over-prediction of roughly ten percent. The ensemble-against-baseline
+comparisons of section 3 were run at the fixed production grid and stand as
+recorded; any absolute statement about the closure carries a numerical
+uncertainty of order 0.3 in x_r/h. Per the pinned protocol there is no further
+refinement chasing; the attribution is the deliverable.
+
+### 6.2 Region attribution of the ensemble shift, and a correction
+
+The generative model's expected correction (per-cell conditional mean, 256
+pointwise samples), injected on the production grid:
+
+| injection mask | x_r/h | shift from baseline |
+|---|---|---|
+| full field | 6.905 | +0.294 |
+| separated region only (0 <= x/h <= 10, y/h <= 1.5) | 6.923 | +0.312 |
+| attached complement only | 6.630 | +0.020 |
+
+This FALSIFIES the mechanism proposed in section 4: the attached-region
+contribution is negligible, and the separated-region correction itself drives
+the upward shift. Section 4's sentence attributing the displacement to the
+attached, channel-like training component is withdrawn; the measured statement
+is that the anisotropy discrepancy of the separated region, injected through
+the momentum equation while the turbulence-transport equations keep their
+baseline closure, lengthens the predicted bubble. A candidate mechanism
+consistent with the literature (the conditioning concerns of Wu et al. 2019)
+is that anisotropy-only injection is a partial substitution whose mean-flow
+response need not move toward the DNS; it is stated here as untested. Also
+measured: the expected-correction shift (+0.29) is under half the flow
+ensemble's mean shift (+0.68), so the coupled response amplifies coherent
+fluctuations asymmetrically.
+
+### 6.3 Conformal calibration overlay (the standing coverage layer)
+
+Calibrated on the five measured downstream wall-friction stations (never on
+the reattachment being judged), scale-normalized split conformal at alpha =
+0.10; with five calibration points the exact conformal quantile exceeds the
+sample, so the reported bands are LOWER BOUNDS on the width the guarantee
+requires:
+
+| method | station scores | multiplier q | raw band | overlay band | contains truth |
+|---|---|---|---|---|---|
+| generative flow | 2.3, 2.8, 3.1, 6.9, 10.5 | 10.5 | [6.50, 8.65] (no) | [2.91, 11.12] | yes |
+| Gaussian model-form | 1.1, 2.0, 2.7, 5.3, 7.9 | 7.9 | [6.11, 7.70] (yes) | [4.50, 9.18] | yes |
+
+The overlay restores containment for both methods, and the price is the
+finding: the wall-friction scores reveal both ensembles to be severely
+overconfident on Cf (scores up to 10.5 where a calibrated ensemble would sit
+near 1), so honest bands must be roughly five times wider than the raw ones,
+at which width the reattachment interval spans much of the physically
+plausible range and carries little information. Coverage is repairable by the
+standing correction layer; sharpness is not, at this calibration-data
+sparsity. The informative repair is a better-dispersed or better-directed
+model-form rather than a wider multiplier, which is what the dense-field
+second geometry tests.
