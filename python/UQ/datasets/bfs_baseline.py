@@ -205,6 +205,10 @@ class BFSBaselineRANS:
         settings = _bfs_solver_settings(rs)
         settings.max_iterations = cfg["max_iter"]
         settings.convergence_tol = cfg["conv_tol"]
+        # under-relaxation of the explicit Reynolds-stress-injection source
+        # (harmless when nothing is injected); strongly perturbed sampled
+        # closures may need a smaller value than the 0.3 default
+        settings.alpha_injection = cfg.get("alpha_injection", 0.3)
 
         fm = rs.ForwardModel(mesh, ps, obs, bcs, nu, settings,
                              rs.Vec3(Ub, 0.0, 0.0), 0.0, kIn, omIn)

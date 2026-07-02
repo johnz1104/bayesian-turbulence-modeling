@@ -92,16 +92,23 @@ class GaussianDiscrepancyModel:
         sigma = np.exp(0.5 * logv)
         return mu, sigma
 
-    def sample(self, features, n_per=1):
+    def sample(self, features, n_per=1, shared_latent=False):
         """Draw n_per Gaussian samples per feature row. Returns (N, n_per, dy).
 
         Uses the torch generator (seeded at construction), exactly as the
         generative flow does, so fixed-seed reproduce scripts govern both.
+        shared_latent=True uses one standard-normal draw per sample index at
+        every row (mu(x) + sigma(x) z, a coherent field realization), the same
+        ensemble construction the a-posteriori methods note pins for the flow.
         """
         torch = _torch()
         mu, sigma = self._mu_sigma(features)
         with torch.no_grad():
-            eps = torch.randn(mu.shape[0], n_per, self.dy).numpy()
+            if shared_latent:
+                eps = torch.randn(1, n_per, self.dy).expand(
+                    mu.shape[0], n_per, self.dy).numpy()
+            else:
+                eps = torch.randn(mu.shape[0], n_per, self.dy).numpy()
         ys = mu[:, None, :] + sigma[:, None, :] * eps
         return ys * self._y_std + self._y_mean
 
@@ -119,14 +126,17 @@ class GaussianDiscrepancyModel:
         """Five independent components to a symmetric traceless 3x3 batch."""
         return GenerativeDiscrepancyModel.components_to_anisotropy(comp)
 
-    def sample_realizable_anisotropy(self, features, base_anisotropy=None, n_per=1):
+    def sample_realizable_anisotropy(self, features, base_anisotropy=None,
+                                     n_per=1, shared_latent=False):
         """Sample, add the base anisotropy, and project into the realizable set.
 
         The projection is the same barycentric projection every method's
         samples pass through before injection; without it Gaussian draws leave
         the realizable set (the known Kennedy-O'Hagan deficiency).
+        shared_latent gives coherent field realizations (see sample).
         """
-        comp = self.sample(features, n_per=n_per)             # (N, n_per, 5)
+        comp = self.sample(features, n_per=n_per,
+                           shared_latent=shared_latent)       # (N, n_per, 5)
         b = self.components_to_anisotropy(comp)               # (N, n_per, 3, 3)
         if base_anisotropy is not None:
             b = b + base_anisotropy[:, None, :, :]
