@@ -1,4 +1,5 @@
 #include "SIMPLESolver.hpp"
+#include "AnisotropyTools.hpp"
 #include <iostream>
 #include <cmath>
 #include <algorithm>
@@ -134,6 +135,9 @@ void SIMPLESolver::assembleMomentum(LinearSystem& sys, const FlowFields& f, int 
         sys.source[ci] -= dpdx * vol;
     }
 
+    // a-posteriori Reynolds-stress injection (explicit deferred-correction)
+    if (bTarget6_) addInjectionSource(sys, f, component);
+
     // In SIMPLE, the momentum equation is usually under-relaxed to improve stability.
     // under-relaxation: numerical stabilization technique - prevents solution from changing too drastically between iterations
     // makes small adjustments to allow for smooth convergence
@@ -150,6 +154,115 @@ void SIMPLESolver::assembleMomentum(LinearSystem& sys, const FlowFields& f, int 
         sys.source[ci] += (1.0 - alphaU) / alphaU * sys.diag[ci] * phi_old;
         sys.diag[ci] /= alphaU;
         aP[ci] = sys.diag[ci];   // store RELAXED diagonal (after /alphaU) for velocity correction
+    }
+}
+
+// A-posteriori Reynolds-stress injection source (explicit deferred-correction).
+//
+// Adds to the momentum source of `component` the body force
+//   f_inj V = -[ sum_f (D_f . n_f)_i A_f ],   D = 2 k b_target + 2 nuT dev(S),
+// i.e. the Green-Gauss divergence of the difference between the injected
+// deviatoric Reynolds stress 2 k b_target and the Boussinesq-modeled deviatoric
+// stress -2 nuT dev(S) the implicit nuEff diffusion stands for. k and S are the
+// RUNNING fields, so the force vanishes identically when b_target equals the
+// solver's own Boussinesq anisotropy b_B = -(nuT/k) dev(S), and the injected
+// difference from the baseline solve is exactly -div(2 k (b_target - b_B)).
+// Face values of D are distance-weight interpolated; boundary faces take the
+// owner value (the wall rows carry k ~ 0, so their stress contribution is
+// negligible there). nuT diffusion stays implicit as the stabilizer.
+//
+// On the x-component pass the target anisotropy is re-checked for realizability
+// (barycentric margin of its eigenvalues), fulfilling the every-outer-iteration
+// realizability assertion of the pre-registered injection scheme; violations are
+// recorded in injDiag_ rather than silently projected, so a study can report
+// them (the caller projects before setting the target).
+void SIMPLESolver::addInjectionSource(LinearSystem& sys, const FlowFields& f,
+                                      int component) {
+    const int nc = mesh_.nCells();
+
+    // The x-component pass recomputes the full Vec3 source from the current
+    // fields, blends it into injSrcBlend_ at injRelax_, and re-asserts
+    // realizability; the y and z passes reuse the stored blend. This relies on
+    // the momentum components being assembled in order 0, 1, 2, which both
+    // solve() and assembleResidual() do.
+    if (component == 0) {
+        // per-cell deferred-correction tensor D = 2 k b_target + 2 nuT dev(S),
+        // stored as xx, yy, zz, xy, xz, yz
+        VelocityGradients vg = computeVelocityGradients(f.U);
+        std::vector<double> D(6 * nc);
+        for (int ci = 0; ci < nc; ++ci) {
+            const double S11 = vg.dudx[ci].x;
+            const double S22 = vg.dvdx[ci].y;
+            const double S33 = vg.dwdx[ci].z;
+            const double S12 = 0.5 * (vg.dudx[ci].y + vg.dvdx[ci].x);
+            const double S13 = 0.5 * (vg.dudx[ci].z + vg.dwdx[ci].x);
+            const double S23 = 0.5 * (vg.dvdx[ci].z + vg.dwdx[ci].y);
+            const double trS3 = (S11 + S22 + S33) / 3.0;   // discrete div(U)/3 residue
+
+            const double twoK  = 2.0 * f.k[ci];
+            const double twoNu = 2.0 * f.nuT[ci];
+            const double* bt = bTarget6_->data() + 6 * ci;
+            D[6 * ci + 0] = twoK * bt[0] + twoNu * (S11 - trS3);
+            D[6 * ci + 1] = twoK * bt[1] + twoNu * (S22 - trS3);
+            D[6 * ci + 2] = twoK * bt[2] + twoNu * (S33 - trS3);
+            D[6 * ci + 3] = twoK * bt[3] + twoNu * S12;
+            D[6 * ci + 4] = twoK * bt[4] + twoNu * S13;
+            D[6 * ci + 5] = twoK * bt[5] + twoNu * S23;
+        }
+
+        // fresh force per cell: (f_inj V)_i = -sum_f (D_f . n_f)_i A_f
+        std::vector<Vec3> q(nc, Vec3(0.0, 0.0, 0.0));
+        auto dDotN = [](const double* d, const Vec3& n) {
+            return Vec3(d[0] * n.x + d[3] * n.y + d[4] * n.z,
+                        d[3] * n.x + d[1] * n.y + d[5] * n.z,
+                        d[4] * n.x + d[5] * n.y + d[2] * n.z);
+        };
+        const int nIF = mesh_.nInternalFaces();
+        for (int fi = 0; fi < nIF; ++fi) {
+            const Face& face = mesh_.face(fi);
+            const int o = face.owner;
+            const int n = face.neighbor;
+            double Df[6];
+            for (int c = 0; c < 6; ++c)
+                Df[c] = face.weight * D[6 * o + c]
+                      + (1.0 - face.weight) * D[6 * n + c];
+            const Vec3 flux = dDotN(Df, face.normal) * face.area;
+            q[o] = q[o] - flux;     // f_inj = -div(D): outflux lowers the owner
+            q[n] = q[n] + flux;     // normal points owner -> neighbor
+        }
+        // boundary faces: owner-value extrapolation
+        for (int fi = nIF; fi < mesh_.nFaces(); ++fi) {
+            const Face& face = mesh_.face(fi);
+            q[face.owner] = q[face.owner]
+                - dDotN(D.data() + 6 * face.owner, face.normal) * face.area;
+        }
+
+        // blend (the first pass of a solve, or a fresh evaluation, has
+        // injSrcBlend_ empty or injRelax_ = 1 and takes q as-is)
+        if (injSrcBlend_.size() != static_cast<size_t>(nc) || injRelax_ >= 1.0) {
+            injSrcBlend_ = q;
+        } else {
+            for (int ci = 0; ci < nc; ++ci)
+                injSrcBlend_[ci] = injSrcBlend_[ci] * (1.0 - injRelax_)
+                                 + q[ci] * injRelax_;
+        }
+
+        // realizability re-assertion, once per outer iteration
+        injDiag_.active = true;
+        injDiag_.checkedIters += 1;
+        for (int ci = 0; ci < nc; ++ci) {
+            const double margin = aniso::barycentricMargin(bTarget6_->data() + 6 * ci);
+            if (margin < -1e-9) {
+                injDiag_.allRealizable = false;
+                injDiag_.maxViolation = std::max(injDiag_.maxViolation, -margin);
+            }
+        }
+    }
+
+    for (int ci = 0; ci < nc; ++ci) {
+        if (component == 0)      sys.source[ci] += injSrcBlend_[ci].x;
+        else if (component == 1) sys.source[ci] += injSrcBlend_[ci].y;
+        else                     sys.source[ci] += injSrcBlend_[ci].z;
     }
 }
 
@@ -462,6 +575,12 @@ double SIMPLESolver::computeResidual(const FlowFields& f, int component) {
 // SIMPLE algorithm runs until flow solution converges or diverges
 ConvergenceHistory SIMPLESolver::solve(FlowFields& f) { // input: FlowField object / flow variables
     ConvergenceHistory hist;
+    // Reynolds-stress injection: fresh blend state and diagnostics per solve;
+    // the explicit source is under-relaxed inside the outer loop (see
+    // addInjectionSource)
+    injSrcBlend_.clear();
+    injDiag_ = InjectionDiagnostics{};
+    injRelax_ = settings_.alphaInjection;
     // Create working linear systems
     LinearSystem momSys  = makeSystem(mesh_);
     LinearSystem pSys    = makeSystem(mesh_);
@@ -680,8 +799,15 @@ ConvergenceHistory SIMPLESolver::solve(FlowFields& f) { // input: FlowField obje
             if (ref < 1e-20) return 0.0; // equation has no forcing; always "converged"
             return val / ref;
         };
-        double nUx = safeNorm(entry.Ux, normUx0_);
-        double nUy = safeNorm(entry.Uy, normUy0_);
+        // Both momentum components are judged against the common momentum
+        // scale max(normUx0_, normUy0_). Normalising Uy by its own iter-0
+        // value is meaningless when that value is tiny but nonzero (e.g. the
+        // Reynolds-stress injection contributes a small y-force at iter 0):
+        // the y-equation would be held to a reference orders of magnitude
+        // below the momentum balance of the problem and never "converge".
+        const double normMom0 = std::max(normUx0_, normUy0_);
+        double nUx = safeNorm(entry.Ux, normMom0);
+        double nUy = safeNorm(entry.Uy, normMom0);
         double nP  = safeNorm(entry.p,  normP0_);
         // k and omega: field-change norms are already normalised (no iter-0 reference needed)
         double nK  = kChangeNorm;
@@ -763,6 +889,11 @@ std::vector<double> SIMPLESolver::assembleResidual(const FlowFields& state,
     const int nc = mesh_.nCells();
     SSTCoefficients saved = sst_.coeffs;
     sst_.coeffs = theta;
+
+    // residuals must be state-consistent: the injection source (if any) is
+    // evaluated fresh from `state`, not blended across calls
+    injRelax_ = 1.0;
+    injSrcBlend_.clear();
 
     FlowFields work = state;
     ScalarField Smag(mesh_, "Smag");

@@ -100,6 +100,20 @@ public:
     const FlowFields& lastFields() const { return lastFields_; }
     bool hasLastFields() const { return hasLastFields_; }
 
+    // ---- a-posteriori Reynolds-stress injection ----
+    // Set a per-cell target anisotropy (nCells*6 values, xx yy zz xy xz yz per
+    // cell); every subsequent evaluate() solves with the explicit
+    // deferred-correction source (see SIMPLESolver::addInjectionSource) until
+    // cleared. The vector is stored by value (no external lifetime to manage).
+    // Injected solves skip the warm-start cache store, so the plain theta ->
+    // solution cache is not polluted by closure-perturbed states.
+    void setTargetAnisotropy(std::vector<double> b6);
+    void clearTargetAnisotropy() { bTarget6_.clear(); }
+    bool hasTargetAnisotropy() const { return !bTarget6_.empty(); }
+    const SIMPLESolver::InjectionDiagnostics& injectionDiagnostics() const {
+        return lastInjection_;
+    }
+
 private:
     const Mesh& mesh_;
     InferenceParameterSet paramSet_;
@@ -113,4 +127,7 @@ private:
     WarmStartCache cache_;
     FlowFields lastFields_;
     bool hasLastFields_ = false;
+
+    std::vector<double> bTarget6_;
+    SIMPLESolver::InjectionDiagnostics lastInjection_;
 };

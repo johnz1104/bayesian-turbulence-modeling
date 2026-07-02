@@ -1,0 +1,69 @@
+#pragma once
+
+#include <cmath>
+#include <algorithm>
+
+// Small analytic tools for the Reynolds-stress anisotropy b_ij, used by the
+// a-posteriori Reynolds-stress injection to verify realizability of the target
+// anisotropy in the running solve. This is the realizability constraint only;
+// the Galilean-invariant feature construction is a separate concern (Python
+// UQ.discrepancy) and is deliberately not represented here.
+//
+// Barycentric map (Banerjee et al. 2007) from the sorted eigenvalues
+// l1 >= l2 >= l3 of b:
+//   C1c = l1 - l2,   C2c = 2 (l2 - l3),   C3c = 3 l3 + 1,   sum = 1
+// The realizable states are exactly the simplex {C_i >= 0}.
+
+namespace aniso {
+
+// Eigenvalues of a symmetric 3x3 tensor, descending, by the trigonometric
+// closed form (Smith 1961): for A = p Q + q I the eigenvalues follow from the
+// characteristic equation of the deviator via acos of its normalised
+// determinant. Components ordered xx, yy, zz, xy, xz, yz.
+inline void sym3Eigenvalues(const double b[6], double lam[3]) {
+    const double xx = b[0], yy = b[1], zz = b[2];
+    const double xy = b[3], xz = b[4], yz = b[5];
+
+    const double q = (xx + yy + zz) / 3.0;                  // mean eigenvalue
+    const double dxx = xx - q, dyy = yy - q, dzz = zz - q;  // deviator diagonal
+    const double p2 = (dxx * dxx + dyy * dyy + dzz * dzz
+                       + 2.0 * (xy * xy + xz * xz + yz * yz)) / 6.0;
+    const double p = std::sqrt(std::max(p2, 0.0));
+
+    if (p < 1e-30) {                        // isotropic: triple eigenvalue q
+        lam[0] = lam[1] = lam[2] = q;
+        return;
+    }
+
+    // r = det(deviator/p) / 2, clamped into [-1, 1] against round-off
+    const double inv = 1.0 / p;
+    const double m00 = dxx * inv, m11 = dyy * inv, m22 = dzz * inv;
+    const double m01 = xy * inv, m02 = xz * inv, m12 = yz * inv;
+    double r = 0.5 * (m00 * (m11 * m22 - m12 * m12)
+                      - m01 * (m01 * m22 - m12 * m02)
+                      + m02 * (m01 * m12 - m11 * m02));
+    r = std::max(-1.0, std::min(1.0, r));
+
+    const double twoPiOver3 = 2.0943951023931953;
+    const double phi = std::acos(r) / 3.0;
+    // eigenvalues of A: q + 2 p cos(phi + 2 pi k / 3), k = 0, 1, 2 (descending)
+    lam[0] = q + 2.0 * p * std::cos(phi);
+    lam[2] = q + 2.0 * p * std::cos(phi + twoPiOver3);
+    lam[1] = 3.0 * q - lam[0] - lam[2];     // trace identity
+}
+
+// Most negative barycentric coordinate of the anisotropy (>= 0 iff realizable).
+inline double barycentricMargin(const double b[6]) {
+    double lam[3];
+    sym3Eigenvalues(b, lam);
+    const double c1 = lam[0] - lam[1];
+    const double c2 = 2.0 * (lam[1] - lam[2]);
+    const double c3 = 3.0 * lam[2] + 1.0;
+    return std::min(c1, std::min(c2, c3));
+}
+
+inline bool isRealizable(const double b[6], double tol = 1e-9) {
+    return barycentricMargin(b) >= -tol;
+}
+
+}  // namespace aniso

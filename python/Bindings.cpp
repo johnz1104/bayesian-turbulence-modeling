@@ -379,6 +379,7 @@ PYBIND11_MODULE(rans_sst_py, m) {
         .def_readwrite("inner_tolerance",   &SolverSettings::innerTolerance)
         .def_readwrite("turb_start_iter",   &SolverSettings::turbStartIter)
         .def_readwrite("turb_update_interval", &SolverSettings::turbUpdateInterval)
+        .def_readwrite("alpha_injection",   &SolverSettings::alphaInjection)
         .def_readwrite("k_min",             &SolverSettings::kMin)
         .def_readwrite("omega_min",         &SolverSettings::omegaMin)
         .def_readwrite("verbose",           &SolverSettings::verbose)
@@ -432,7 +433,42 @@ PYBIND11_MODULE(rans_sst_py, m) {
         .def("penalized_log_likelihood", &ForwardModel::penalizedLogLikelihood)
         .def("param_set", &ForwardModel::paramSet, py::return_value_policy::reference)
         .def("has_last_fields", &ForwardModel::hasLastFields)
-        .def("last_fields", &extractFields);
+        .def("last_fields", &extractFields)
+        // a-posteriori Reynolds-stress injection: (nCells, 3, 3) symmetric
+        // anisotropy batch (project it into the realizable set first); stored
+        // by value, applied by every subsequent evaluate() until cleared
+        .def("set_target_anisotropy",
+             [](ForwardModel& fm,
+                py::array_t<double, py::array::c_style | py::array::forcecast> b) {
+                 auto v = b.unchecked<3>();
+                 if (v.shape(1) != 3 || v.shape(2) != 3)
+                     throw std::runtime_error(
+                         "set_target_anisotropy: expected (n_cells, 3, 3)");
+                 const py::ssize_t n = v.shape(0);
+                 std::vector<double> b6(6 * n);
+                 for (py::ssize_t i = 0; i < n; ++i) {
+                     // xx, yy, zz, xy, xz, yz (symmetrised off-diagonals)
+                     b6[6 * i + 0] = v(i, 0, 0);
+                     b6[6 * i + 1] = v(i, 1, 1);
+                     b6[6 * i + 2] = v(i, 2, 2);
+                     b6[6 * i + 3] = 0.5 * (v(i, 0, 1) + v(i, 1, 0));
+                     b6[6 * i + 4] = 0.5 * (v(i, 0, 2) + v(i, 2, 0));
+                     b6[6 * i + 5] = 0.5 * (v(i, 1, 2) + v(i, 2, 1));
+                 }
+                 fm.setTargetAnisotropy(std::move(b6));
+             }, py::arg("b_target"))
+        .def("clear_target_anisotropy", &ForwardModel::clearTargetAnisotropy)
+        .def("has_target_anisotropy", &ForwardModel::hasTargetAnisotropy)
+        .def("injection_diagnostics",
+             [](const ForwardModel& fm) {
+                 const auto& d = fm.injectionDiagnostics();
+                 py::dict out;
+                 out["active"] = d.active;
+                 out["checked_iters"] = d.checkedIters;
+                 out["all_realizable"] = d.allRealizable;
+                 out["max_violation"] = d.maxViolation;
+                 return out;
+             });
 
     // TangentGradientResult — output of the RUNG-1 semi-analytic gradient eta_jacobian_tangent
     // (full ∂η/∂θ via the matrix-free tangent solve + per-coefficient Krylov diagnostics).
