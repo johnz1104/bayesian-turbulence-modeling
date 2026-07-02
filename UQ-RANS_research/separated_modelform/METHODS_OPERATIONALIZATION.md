@@ -70,3 +70,26 @@ pressure at the six profile stations, and the mean-velocity profiles at the six
 stations. Region-resolved reporting follows the pre-registration (recirculation,
 reattachment, recovery); coverage, sharpness, CRPS and the multivariate energy
 score come from the existing evaluation harness.
+
+## 5. A-priori checkpoint protocol (added 2026-07-01, before any full fit ran)
+
+The precursor checkpoint (PRE_REGISTRATION.md scope decision 1: "the a-priori
+discrepancy fit and its coverage are the precursor") is scored as follows,
+fixed before any conditional model was fit to the real separated data at full
+training length:
+
+- Held-out unit: a profile STATION. The six wall-normal profiles are
+  internally correlated, so a point-level split would leak the test station
+  into training; the protocol is leave-one-station-out over the six stations,
+  plus a train-on-all in-distribution machinery check.
+- Target: the DNS anisotropy at the held-out station. Predictions are
+  b_baseline + db_model with every draw projected into the barycentric
+  realizable set, the same projection the a-posteriori injection applies.
+- Metrics: per-component coverage and sharpness of the central 90 percent
+  band, per-component CRPS, the multivariate energy score over the five
+  independent components, and the realizable fraction (1.0 by construction).
+- Both the generative flow and the Gaussian model-form baseline are scored
+  through the identical fit / sample / project / score path, isolating the
+  distribution family. Fixed seed 0, 128 samples per point, 400 training
+  epochs; no learning rate, feature set, or model is tuned toward any test
+  number.
