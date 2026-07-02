@@ -119,3 +119,47 @@ solve consumes, fixed before any ensemble ran:
 - Scored quantities per section 4 against the DNS truths (reattachment 6.28
   and the measured station Cf), with coverage, CRPS and the energy score from
   the standard harness.
+
+## 7. Post-result diagnostics and the calibration overlay (added 2026-07-02,
+## after the first-geometry a-posteriori result, BEFORE any of these ran)
+
+The backward-facing-step a-posteriori result (bfs_aposteriori_finding.md) is
+already recorded; the three follow-ups below were requested on review and their
+protocols are fixed here before any of them is computed. None changes the
+recorded result or the criterion; they attribute it and apply the standing
+correction layer.
+
+1. Grid attribution of the baseline error. The corrected baseline is solved on
+   a grid refined 1.5x in each direction (nx_up 60, nx_down 72, ny_up 36,
+   ny_down 27, same inlet profile with the SAME inlet_delta = 0.6784 so only
+   resolution changes), and the reattachment and delta_999 at x/h = -3 are
+   reported for coarse / production / fine. The purpose is attribution of the
+   0.33 baseline gap between discretization and closure, not accuracy tuning:
+   whatever fraction moves with the grid is numerical and is reported alongside
+   every claim that normalizes against the baseline error. No further
+   refinement chasing.
+
+2. Region attribution of the ensemble shift. The generative model's expected
+   correction (the per-cell mean of its conditional over db, deterministic) is
+   injected three ways on the production grid: full field; separated region
+   only (the recirculation, shear layer and reattachment zone, cells with
+   0 <= x/h <= 10 and y/h <= 1.5); attached complement only. The three
+   reattachment shifts attribute the systematic upward displacement of the
+   ensembles. This is a diagnostic with no retraining and no new criterion; a
+   scope change it might motivate (for example region-restricted training) is a
+   separate decision taken before any such training runs.
+
+3. Calibration overlay (the standing coverage-correction layer), conformal
+   form. Calibration data are the five measured downstream wall-friction
+   stations, NOT the reattachment length being judged: per converged ensemble
+   member the Cf at the stations is recorded; the nonconformity score at each
+   station is |Cf_measured - median_ensemble| / MAD_ensemble (scale-normalized
+   so scores pool across quantities); the split-conformal multiplier q is the
+   ceil((n+1)(1-alpha))/n quantile of the five station scores at alpha = 0.10.
+   The corrected reattachment band is median +/- q * MAD of the reattachment
+   ensemble. Applied identically to the generative and Gaussian ensembles.
+   Honest caveats stated with the result: five calibration points quantize the
+   achievable quantile; exchangeability across quantity types (Cf stations to
+   reattachment) is an approximation this diagnostic tests rather than assumes
+   proven. The overlay corrects COVERAGE only; it cannot and does not repair
+   the proper-score clauses already recorded.
