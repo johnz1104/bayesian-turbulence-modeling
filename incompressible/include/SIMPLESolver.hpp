@@ -55,7 +55,52 @@ public:
 
     int residualSize() const { return 4 * mesh_.nCells(); }   // length of one residual vector
 
+    // ---- A-POSTERIORI REYNOLDS-STRESS INJECTION (explicit deferred-correction) ----
+    // Inject a prescribed per-cell target anisotropy b_target into the momentum
+    // equation. The turbulent stress the baseline applies is the implicit
+    // Boussinesq diffusion div((nu+nuT) grad U); the injection adds the explicit
+    // body force
+    //     f_inj = -div( 2 k b_target + 2 nuT dev(S) )  =  -div( 2 k (b_target - b_B) )
+    // with b_B = -(nuT/k) dev(S) the solver's own Boussinesq anisotropy, k the
+    // RUNNING turbulent kinetic energy, and nuT kept implicit as the stabilizer.
+    // The force vanishes identically when b_target equals b_B (the baseline solve
+    // is recovered exactly), and the injected difference from the baseline is
+    // exactly -div(2 k db). This avoids the ill-conditioning of full explicit
+    // Reynolds-stress substitution (Wu et al. 2019).
+    //
+    // b6 points at nCells*6 values ordered xx, yy, zz, xy, xz, yz per cell; the
+    // caller keeps the storage alive across solve(). Realizability of b_target is
+    // re-checked every outer iteration (barycentric margin, AnisotropyTools) and
+    // recorded in the diagnostics; the check is separate from the (Python-side)
+    // Galilean-invariant feature construction.
+    struct InjectionDiagnostics {
+        bool   active = false;          // a target was set
+        int    checkedIters = 0;        // outer iterations the check ran on
+        bool   allRealizable = true;    // barycentric margin >= -tol everywhere, always
+        double maxViolation = 0.0;      // worst barycentric violation seen (>= 0)
+    };
+    void setTargetAnisotropy(const std::vector<double>* b6) { bTarget6_ = b6; }
+    const InjectionDiagnostics& injectionDiagnostics() const { return injDiag_; }
+
 private:
+    const std::vector<double>* bTarget6_ = nullptr;
+    InjectionDiagnostics injDiag_;
+
+    // Under-relaxed injection source, persistent across the outer iterations of
+    // one solve: q_blend <- (1 - alpha) q_blend + alpha q(U^n, k^n). The
+    // explicit correction cancels a first-order part of the implicit nuT
+    // stabilizer, and feeding it back unrelaxed leaves a residual oscillation
+    // floor at the tolerance level (the Wu et al. 2019 explicit-treatment
+    // ill-conditioning); the blend damps the feedback and leaves the fixed
+    // point unchanged. Fresh (unblended) evaluation is used outside solve()
+    // (assembleResidual), where the source must be state-consistent.
+    std::vector<Vec3> injSrcBlend_;
+    double injRelax_ = 1.0;      // solve() sets the blend factor; 1 = fresh
+
+    // Adds the explicit deferred-correction source for `component` to sys and,
+    // on the x-component pass, re-checks realizability of b_target.
+    void addInjectionSource(LinearSystem& sys, const FlowFields& f, int component);
+
     const Mesh& mesh_;
     SSTModel sst_;
     FlowBoundaryConditions bcs_;

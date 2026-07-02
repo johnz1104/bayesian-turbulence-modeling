@@ -18,6 +18,13 @@ ForwardModel::ForwardModel(const Mesh& mesh,
       cache_(50, 0.5)
 {}
 
+// set the injected per-cell target anisotropy (validated length, stored by value)
+void ForwardModel::setTargetAnisotropy(std::vector<double> b6) {
+    if (static_cast<int>(b6.size()) != 6 * mesh_.nCells())
+        throw std::runtime_error("setTargetAnisotropy: expected nCells*6 values");
+    bTarget6_ = std::move(b6);
+}
+
 // evaluate: θ -> EvaluationResult
 EvaluationResult ForwardModel::evaluate(const std::vector<double>& theta) {
     EvaluationResult result;
@@ -38,10 +45,16 @@ EvaluationResult ForwardModel::evaluate(const std::vector<double>& theta) {
 
         // set up solver
         SIMPLESolver solver(mesh_, sst, bcs_, nu_, settings_);
+        if (!bTarget6_.empty()) solver.setTargetAnisotropy(&bTarget6_);
         FlowFields fields(mesh_);
 
-        // warm start: check cache for nearby solution
-        const WarmStartCache::CacheEntry* cached = cache_.findNearest(theta);
+        // warm start: check cache for nearby solution. Injected solves are
+        // fully cache-independent (no lookup, no store): a warm start from a
+        // nearby state makes the iter-0 residual normalisation, and with it
+        // the convergence classification, depend on what ran before, and an
+        // ensemble study needs every member reproducible in isolation.
+        const WarmStartCache::CacheEntry* cached =
+            bTarget6_.empty() ? cache_.findNearest(theta) : nullptr;
         if (cached) {
             // copy cached fields as initial condition
             fields = cached->fields;
@@ -52,6 +65,7 @@ EvaluationResult ForwardModel::evaluate(const std::vector<double>& theta) {
         // solve
         ConvergenceHistory hist = solver.solve(fields);
         result.simpleIters = hist.finalIter;
+        lastInjection_ = solver.injectionDiagnostics();
 
         // classify convergence
         if (hist.diverged) {
@@ -60,8 +74,9 @@ EvaluationResult ForwardModel::evaluate(const std::vector<double>& theta) {
             return result;
         } else if (hist.converged) {
             result.status = EvaluationStatus::Converged;
-            // cache the converged solution
-            cache_.store(theta, fields);
+            // cache the converged solution (plain solves only: injected states
+            // must not pollute the theta -> solution warm-start cache)
+            if (bTarget6_.empty()) cache_.store(theta, fields);
         } else {
             result.status = EvaluationStatus::Unconverged;
             // still evaluate - don't bias posterior toward easy regions

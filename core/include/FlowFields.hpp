@@ -59,6 +59,13 @@ struct SolverSettings {
     int turbStartIter      = 5;
     int turbUpdateInterval = 1;
 
+    // Under-relaxation of the explicit Reynolds-stress-injection source (the
+    // deferred-correction body force is blended across outer iterations at
+    // this factor; 1.0 disables blending). The explicit correction cancels a
+    // first-order part of the implicit nuT stabilizer, so unrelaxed feedback
+    // leaves a residual floor near the tolerance.
+    double alphaInjection = 0.3;
+
     double kMin     = 1e-10;
     double kMax     = 1e10;
     double omegaMin = 1e-6;

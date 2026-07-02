@@ -146,8 +146,15 @@ class BFSBaselineRANS:
         return U, k, omega
 
     @staticmethod
-    def solve(cfg=None, dns=None):
-        """Solve the Le-Moin BFS at Menter defaults, return the baseline field."""
+    def build_forward(cfg=None, dns=None):
+        """Build the Le-Moin BFS forward model without solving.
+
+        Returns a dict holding the ForwardModel and every object it references
+        (mesh, bcs, obs, ps, settings), which the caller must keep alive as one
+        unit while the model is used (the model stores references, not copies).
+        Shared by the baseline solve and the a-posteriori injection wrapper so
+        both run the identical setup.
+        """
         cfg = {**BFSBaselineRANS.DEFAULT_CONFIG, **(cfg or {})}
         rs = _rs()
         h, H, Re, Ub = (BFSBaselineRANS.STEP_H, BFSBaselineRANS.EXPANSION_H,
@@ -201,6 +208,17 @@ class BFSBaselineRANS:
 
         fm = rs.ForwardModel(mesh, ps, obs, bcs, nu, settings,
                              rs.Vec3(Ub, 0.0, 0.0), 0.0, kIn, omIn)
+        return {"rs": rs, "fm": fm, "mesh": mesh, "bcs": bcs, "obs": obs,
+                "ps": ps, "settings": settings, "nu": nu, "kIn": kIn,
+                "omIn": omIn, "cfg": cfg}
+
+    @staticmethod
+    def solve(cfg=None, dns=None):
+        """Solve the Le-Moin BFS at Menter defaults, return the baseline field."""
+        fwd = BFSBaselineRANS.build_forward(cfg, dns=dns)
+        rs, fm, mesh, cfg = fwd["rs"], fwd["fm"], fwd["mesh"], fwd["cfg"]
+        nu = fwd["nu"]
+        ps = fwd["ps"]
         theta = list(ps.pack(rs.SSTCoefficients()))
         result = fm.evaluate(theta)
         status = str(result.status).split(".")[-1]
@@ -212,6 +230,7 @@ class BFSBaselineRANS:
         Uf = np.asarray(ff["U"])
         if Uf.ndim == 1:
             Uf = Uf.reshape(-1, 3)
+        delta_in = cfg.get("inlet_delta", None)
         meta = {
             "config": dict(cfg),
             "case": "backward_facing_step",
