@@ -386,6 +386,217 @@ void Mesh::setPatchType(const std::string& name, const std::string& type) {
     patches_[patchByName(name)].type = type;
 }
 
+// Streamwise-periodic curved-bottom channel (see the header note). All cell and
+// face geometry is computed HERE, exactly, from the quad corners: the generic
+// helpers cannot be used because (a) the wrap face's geometric center sits at
+// x = Lx while its neighbor cell sits at x ~ 0, so face-center-averaged cell
+// centers and center-to-center distances would span the whole domain, and (b)
+// the wrap face's d/delta/weight must use the PERIODIC IMAGE of the neighbor.
+Mesh Mesh::makeCurvedChannelPeriodic2D(const std::vector<double>& xNodes,
+                                       const std::vector<double>& yBottom,
+                                       double yTop, int ny,
+                                       double Re, double yPlusTarget) {
+    const int nx = static_cast<int>(xNodes.size()) - 1;
+    if (nx < 3 || static_cast<int>(yBottom.size()) != nx + 1)
+        throw std::runtime_error("makeCurvedChannelPeriodic2D: need nx+1 x nodes "
+                                 "and matching yBottom samples");
+    if (std::abs(yBottom.front() - yBottom.back()) > 1e-12)
+        throw std::runtime_error("makeCurvedChannelPeriodic2D: yBottom must be "
+                                 "periodic (first == last sample)");
+    const double Lx = xNodes.back() - xNodes.front();
+    const double dz = 1.0;
+
+    // wall-normal distribution eta_j in [0,1], symmetric tanh clustering toward
+    // both walls; the stretch is solved on the MEAN channel height so every
+    // column shares the same eta (smooth terrain-following grid lines)
+    double meanH = 0.0;
+    for (int i = 0; i <= nx; ++i) meanH += (yTop - yBottom[i]);
+    meanH /= (nx + 1);
+    double stretch = 2.0;
+    if (Re > 0) {
+        double Cf    = 0.058 * std::pow(Re, -0.2);
+        double uTau  = std::sqrt(Cf / 2.0);
+        double nu    = meanH / Re;
+        double y1t   = yPlusTarget * nu / uTau;
+        auto fc = [&](double s) {
+            return 0.5 * meanH * (1.0 + std::tanh(s * (2.0 / ny - 1.0))
+                                        / std::tanh(s));
+        };
+        if (y1t < meanH / ny) {
+            double sLo = 0.1, sHi = 20.0;
+            if (y1t < fc(sHi)) {
+                stretch = sHi;
+            } else {
+                for (int it = 0; it < 100; ++it) {
+                    double sm = 0.5 * (sLo + sHi);
+                    if (fc(sm) > y1t) sLo = sm; else sHi = sm;
+                    if (sHi - sLo < 1e-10) break;
+                }
+                stretch = 0.5 * (sLo + sHi);
+            }
+        }
+    }
+    std::vector<double> eta(ny + 1);
+    for (int j = 0; j <= ny; ++j) {
+        double e = static_cast<double>(j) / ny;
+        eta[j] = 0.5 * (1.0 + std::tanh(stretch * (2.0 * e - 1.0))
+                              / std::tanh(stretch));
+    }
+
+    // node coordinates (front plane; back plane duplicated at z = dz)
+    auto ynode = [&](int i, int j) {
+        return yBottom[i] + (yTop - yBottom[i]) * eta[j];
+    };
+    Mesh m;
+    const int ptsPerPlane = (nx + 1) * (ny + 1);
+    m.nodes_.resize(2 * ptsPerPlane);
+    auto nid = [&](int i, int j, int k) {
+        return k * ptsPerPlane + j * (nx + 1) + i;
+    };
+    for (int j = 0; j <= ny; ++j)
+        for (int i = 0; i <= nx; ++i) {
+            m.nodes_[nid(i, j, 0)] = Vec3(xNodes[i], ynode(i, j), 0.0);
+            m.nodes_[nid(i, j, 1)] = Vec3(xNodes[i], ynode(i, j), dz);
+        }
+
+    // cells: exact quad centroid and area (shoelace), volume = area * dz
+    const int nC = nx * ny;
+    m.cells_.resize(nC);
+    auto cid = [&](int i, int j) { return j * nx + i; };
+    for (int j = 0; j < ny; ++j)
+        for (int i = 0; i < nx; ++i) {
+            const double px[4] = {xNodes[i], xNodes[i + 1], xNodes[i + 1], xNodes[i]};
+            const double py[4] = {ynode(i, j), ynode(i + 1, j),
+                                  ynode(i + 1, j + 1), ynode(i, j + 1)};
+            double A2 = 0.0, cxA = 0.0, cyA = 0.0;
+            for (int kv = 0; kv < 4; ++kv) {
+                int kn = (kv + 1) % 4;
+                double cross = px[kv] * py[kn] - px[kn] * py[kv];
+                A2  += cross;
+                cxA += (px[kv] + px[kn]) * cross;
+                cyA += (py[kv] + py[kn]) * cross;
+            }
+            double A = 0.5 * A2;                 // positive for CCW corners
+            Cell& c = m.cells_[cid(i, j)];
+            c.center = Vec3(cxA / (6.0 * A), cyA / (6.0 * A), 0.5 * dz);
+            c.volume = std::abs(A) * dz;
+        }
+
+    // face counts: vertical internal (nx-1 columns + nx wrap? no: nx-1 interior
+    // columns plus ONE wrap column) + horizontal internal + boundaries
+    const int nVint  = (nx - 1) * ny;    // between columns i and i+1
+    const int nWrap  = ny;               // between column nx-1 and column 0
+    const int nHint  = nx * (ny - 1);    // between rows j and j+1
+    m.nInternal_ = nVint + nWrap + nHint;
+    const int nBnd = 2 * nx;             // bottom + top
+    m.faces_.resize(m.nInternal_ + nBnd);
+
+    int fi = 0;
+    auto edgeFace = [&](Face& f, double x0, double y0, double x1, double y1,
+                        bool normalPlusX) {
+        // 2D edge (x0,y0)-(x1,y1) extruded by dz; unit normal in-plane
+        double ex = x1 - x0, ey = y1 - y0;
+        double len = std::sqrt(ex * ex + ey * ey);
+        f.center = Vec3(0.5 * (x0 + x1), 0.5 * (y0 + y1), 0.5 * dz);
+        f.area   = len * dz;
+        // the two in-plane normals are (ey,-ex)/len and (-ey,ex)/len
+        if (normalPlusX) f.normal = Vec3(ey / len, -ex / len, 0.0);
+        else             f.normal = Vec3(-ey / len, ex / len, 0.0);
+    };
+    auto setDW = [&](Face& f, const Vec3& cO, const Vec3& cN) {
+        f.d      = cN - cO;
+        f.delta  = std::max(f.d.norm(), 1e-20);
+        double dP = (f.center - cO).norm();
+        double dN = (f.center - cN).norm();
+        double sum = dP + dN;
+        f.weight = (sum > 1e-30) ? dN / sum : 0.5;
+    };
+
+    // internal vertical faces (columns are straight: edge along +y at x_{i+1},
+    // normal exactly +x, orthogonal to the column direction)
+    for (int j = 0; j < ny; ++j)
+        for (int i = 0; i < nx - 1; ++i) {
+            Face& f = m.faces_[fi];
+            f.owner = cid(i, j); f.neighbor = cid(i + 1, j);
+            edgeFace(f, xNodes[i + 1], ynode(i + 1, j),
+                        xNodes[i + 1], ynode(i + 1, j + 1), true);
+            setDW(f, m.cells_[f.owner].center, m.cells_[f.neighbor].center);
+            m.cells_[f.owner].faces.push_back(fi);
+            m.cells_[f.neighbor].faces.push_back(fi); ++fi;
+        }
+    // wrap faces: owner = last column, neighbor = first column; the geometric
+    // face sits at x = Lx and every distance uses the neighbor's PERIODIC IMAGE
+    for (int j = 0; j < ny; ++j) {
+        Face& f = m.faces_[fi];
+        f.owner = cid(nx - 1, j); f.neighbor = cid(0, j);
+        edgeFace(f, xNodes[nx], ynode(nx, j),
+                    xNodes[nx], ynode(nx, j + 1), true);
+        Vec3 cNimage = m.cells_[f.neighbor].center + Vec3(Lx, 0.0, 0.0);
+        setDW(f, m.cells_[f.owner].center, cNimage);
+        m.cells_[f.owner].faces.push_back(fi);
+        m.cells_[f.neighbor].faces.push_back(fi); ++fi;
+    }
+    // internal horizontal faces (terrain-following: tilted near the slope)
+    for (int j = 0; j < ny - 1; ++j)
+        for (int i = 0; i < nx; ++i) {
+            Face& f = m.faces_[fi];
+            f.owner = cid(i, j); f.neighbor = cid(i, j + 1);
+            edgeFace(f, xNodes[i], ynode(i, j + 1),
+                        xNodes[i + 1], ynode(i + 1, j + 1), false);
+            setDW(f, m.cells_[f.owner].center, m.cells_[f.neighbor].center);
+            m.cells_[f.owner].faces.push_back(fi);
+            m.cells_[f.neighbor].faces.push_back(fi); ++fi;
+        }
+
+    // bottom wall (curved), outward normal points down-slope-outward
+    {
+        Patch p; p.name = "bottom_wall"; p.type = "wall";
+        for (int i = 0; i < nx; ++i) {
+            Face& f = m.faces_[fi];
+            f.owner = cid(i, 0); f.neighbor = -1;
+            f.patchID = static_cast<int>(m.patches_.size());
+            edgeFace(f, xNodes[i], ynode(i, 0),
+                        xNodes[i + 1], ynode(i + 1, 0), true);
+            // normalPlusX=true gives (ey,-ex): ey ~ slope, -ex < 0 so it points
+            // DOWN out of the domain as required for the bottom boundary
+            f.d = f.center - m.cells_[f.owner].center;
+            f.delta = std::max(f.d.norm(), 1e-20);
+            m.cells_[f.owner].faces.push_back(fi);
+            p.faces.push_back(fi); ++fi;
+        }
+        m.patches_.push_back(std::move(p));
+    }
+    // top wall (flat), outward normal +y
+    {
+        Patch p; p.name = "top_wall"; p.type = "wall";
+        for (int i = 0; i < nx; ++i) {
+            Face& f = m.faces_[fi];
+            f.owner = cid(i, ny - 1); f.neighbor = -1;
+            f.patchID = static_cast<int>(m.patches_.size());
+            edgeFace(f, xNodes[i], ynode(i, ny),
+                        xNodes[i + 1], ynode(i + 1, ny), false);
+            f.d = f.center - m.cells_[f.owner].center;
+            f.delta = std::max(f.d.norm(), 1e-20);
+            m.cells_[f.owner].faces.push_back(fi);
+            p.faces.push_back(fi); ++fi;
+        }
+        m.patches_.push_back(std::move(p));
+    }
+
+    // owner/neighbor lists for the linear solver
+    m.ownerList_.resize(m.nInternal_);
+    m.neighborList_.resize(m.nInternal_);
+    for (int f = 0; f < m.nInternal_; ++f) {
+        m.ownerList_[f]    = m.faces_[f].owner;
+        m.neighborList_[f] = m.faces_[f].neighbor;
+    }
+
+    std::cout << "CurvedChannelPeriodic2D: " << nx << "x" << ny << " ("
+              << nC << " cells, " << m.faces_.size() << " faces, "
+              << nWrap << " wrap faces)\n";
+    return m;
+}
+
 // save/load binary mesh code
 // binary serialization layer
 static const uint32_t MESH_MAGIC = 0x4D534831; // "MSH1"

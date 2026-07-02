@@ -135,6 +135,15 @@ void SIMPLESolver::assembleMomentum(LinearSystem& sys, const FlowFields& f, int 
         sys.source[ci] -= dpdx * vol;
     }
 
+    // constant body force (drives streamwise-periodic domains, which have no
+    // inlet; represents the mean pressure gradient)
+    const double fb = (component == 0) ? settings_.bodyForce.x
+                    : (component == 1) ? settings_.bodyForce.y
+                                       : settings_.bodyForce.z;
+    if (fb != 0.0)
+        for (int ci = 0; ci < mesh_.nCells(); ++ci)
+            sys.source[ci] += fb * mesh_.cell(ci).volume;
+
     // a-posteriori Reynolds-stress injection (explicit deferred-correction)
     if (bTarget6_) addInjectionSource(sys, f, component);
 
@@ -282,6 +291,22 @@ void SIMPLESolver::assemblePressureCorrection(LinearSystem& sys,
     pPrime.setUniform(0.0);
     int nIF = mesh_.nInternalFaces();
 
+    // Outlet-free (streamwise-periodic) domains need two guards a bounded
+    // domain does not: the Rhie-Chow face-flux dissipation (the periodic
+    // direction carries an exact odd-even null mode that boundaries otherwise
+    // break) and a pressure reference pin (the all-Neumann Poisson system is
+    // singular). Both are gated on the domain type so every bounded case keeps
+    // the legacy discretization bit-for-bit (the semi-analytic coupled tangent
+    // linearizes exactly that operator).
+    bool hasOutlet = false;
+    for (int pi = 0; pi < mesh_.nPatches(); ++pi)
+        if (mesh_.patch(pi).type == "outlet" && !mesh_.patch(pi).faces.empty())
+            hasOutlet = true;
+
+    // cell pressure gradient for the Rhie-Chow face-flux dissipation below
+    VectorField gradP(mesh_, "gradP");
+    if (!hasOutlet) gradP = greenGaussGrad(f.p);
+
     // internal faces
     for (int fi = 0; fi < nIF; ++fi) {
         const Face& face = mesh_.face(fi);
@@ -307,10 +332,23 @@ void SIMPLESolver::assemblePressureCorrection(LinearSystem& sys,
         sys.upper[fi] = -coeff;
         sys.lower[fi] = -coeff;
 
-        // mass flux source: U*.Sf
+        // mass flux source: U*.Sf with the Rhie-Chow dissipation
+        //   m_f = Ubar_f.Sf - dP_f A_f [ (p_N - p_O)/delta - grad(p)bar_f . e ]
+        // The added term vanishes on smooth pressure ((p_N-p_O)/delta equals the
+        // interpolated gradient along e to truncation order) and penalises only
+        // the odd-even component, which the compact Laplacian cannot see through
+        // centrally interpolated fluxes. Without it a fully periodic direction
+        // has an exact checkerboard null mode that grows from round-off (bounded
+        // inlet/outlet domains break the mode at their boundaries, which is why
+        // this solver never needed it before).
         Vec3 Uf = f.U[o] * face.weight + f.U[n] * (1.0 - face.weight);
         double massFlux = (Uf.x * face.normal.x + Uf.y * face.normal.y
                          + Uf.z * face.normal.z) * Sf;
+        if (!hasOutlet) {
+            Vec3 ehat = face.d / std::max(face.delta, 1e-30);
+            Vec3 gbar = gradP[o] * face.weight + gradP[n] * (1.0 - face.weight);
+            massFlux += -dP_f * Sf * ((f.p[n] - f.p[o]) / delta - gbar.dot(ehat));
+        }
 
         // Source = -div(U*)*V: FV Laplacian sum(coeff*(p'_P - p'_N)) = -∇²p'*V,
         // so the Poisson equation rAP*∇²p' = div(U*) maps to source = -div(U*)*V.
@@ -348,6 +386,14 @@ void SIMPLESolver::assemblePressureCorrection(LinearSystem& sys,
             }
         }
     }
+
+    // Pressure reference for domains with NO outlet (streamwise-periodic
+    // channels bounded by walls and wrap faces): the all-Neumann p' Poisson
+    // system is singular up to a constant, so pin cell 0 by doubling its
+    // diagonal, a Dirichlet-strength link to p' = 0 at the natural scale of
+    // its own row. The physical pressure level is arbitrary in such domains.
+    if (!hasOutlet && mesh_.nCells() > 0)
+        sys.diag[0] += std::abs(sys.diag[0]) > 1e-30 ? sys.diag[0] : 1.0;
 }
 
 // Correction step of the SIMPLE Algorithm
@@ -787,11 +833,19 @@ ConvergenceHistory SIMPLESolver::solve(FlowFields& f) { // input: FlowField obje
         entry.k     = kChangeNorm;
         entry.omega = omChangeNorm;
 
-        // store iter-0 norms for normalisation
+        // store iter-0 norms for normalisation. The pressure norm keeps a
+        // running max over a short warmup: on a fully periodic domain a
+        // uniform initial field is EXACTLY divergence-free, so the iter-0 mass
+        // imbalance is machine round-off and normalising by it turns every
+        // later tiny residual into a false divergence alarm; the true residual
+        // scale only appears once the flow develops. Bounded inlet/outlet
+        // cases peak at iter 0 anyway, so their behaviour is unchanged.
         if (iter == 0) {
             normUx0_ = std::max(entry.Ux, 1e-30);
             normUy0_ = std::max(entry.Uy, 1e-30);
             normP0_  = std::max(entry.p,  1e-30);
+        } else if (iter < 50) {
+            normP0_  = std::max(normP0_, entry.p);
         }
 
         // normalised residuals (skip equations with negligible iter-0 residual)

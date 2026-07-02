@@ -35,6 +35,12 @@ target_link_libraries(test_injection_source PRIVATE btm_incompressible)
 add_test(NAME injection_source COMMAND test_injection_source)
 set_tests_properties(injection_source PROPERTIES TIMEOUT 30 LABELS "unit;injection")
 
+# ---- periodic_channel: streamwise-periodic curved-channel mesh + body force ----
+add_executable(test_periodic_channel cpp/test_periodic_channel.cpp)
+target_link_libraries(test_periodic_channel PRIVATE btm_incompressible)
+add_test(NAME periodic_channel COMMAND test_periodic_channel)
+set_tests_properties(periodic_channel PROPERTIES TIMEOUT 240 LABELS "unit;mesh;solver")
+
 # ---- compressible_smoke: Ma=0.1 channel smoke convergence ----
 add_executable(test_compressible_smoke cpp/test_compressible_smoke.cpp)
 target_link_libraries(test_compressible_smoke PRIVATE btm_compressible)
