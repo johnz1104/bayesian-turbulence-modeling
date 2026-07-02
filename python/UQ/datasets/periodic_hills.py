@@ -287,6 +287,36 @@ class PeriodicHillsDNS:
         x_r = xi[j] + (0.0 - ui[j]) * (xi[j + 1] - xi[j]) / (ui[j + 1] - ui[j])
         return float(x_r)
 
+    def bottom_wall_bubble(self):
+        """(x_s, x_r, length) of the main bubble, both ends interpolated.
+
+        The same longest-negative-run rule as bottom_wall_reattachment; the
+        separation point x_s is the interpolated zero crossing at the run's
+        upstream end (the column itself when the run starts at the first valid
+        column). Returns None if the flow does not separate.
+        """
+        xi, ui = self.near_wall_streamwise_velocity()
+        valid = ~np.isnan(ui)
+        xi, ui = xi[valid], ui[valid]
+        neg = ui < 0
+        best_len, best_end = 0, None
+        run = 0
+        for i in range(neg.size):
+            run = run + 1 if neg[i] else 0
+            if run > best_len and i + 1 < neg.size and ui[i + 1] > 0:
+                best_len, best_end = run, i
+        if best_end is None:
+            return None
+        j0 = best_end - best_len + 1                  # first negative column
+        if j0 > 0:                                    # ui[j0-1] >= 0 > ui[j0]
+            x_s = xi[j0 - 1] + (0.0 - ui[j0 - 1]) * (xi[j0] - xi[j0 - 1]) \
+                / (ui[j0] - ui[j0 - 1])
+        else:
+            x_s = xi[0]
+        j = best_end
+        x_r = xi[j] + (0.0 - ui[j]) * (xi[j + 1] - xi[j]) / (ui[j + 1] - ui[j])
+        return float(x_s), float(x_r), float(x_r - x_s)
+
     def to_dnsfield_at(self, idx, grad_u=None, timescale=None, nu_t=None,
                        k_baseline=None):
         """Build a UQ DNSField at an arbitrary point subset (flat indices).
