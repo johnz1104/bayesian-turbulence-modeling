@@ -75,7 +75,7 @@ def physics_anchor(dns):
         rms = dns.budget_residual_level()
         return {"kind": "rste_budget_residual", "rms": rms,
                 "description": "rms of the file's res_*+ budget-closure columns"}
-    if case == "gv_compressible_channel":
+    if case in ("gv_compressible_channel", "ckm_supersonic_channel"):
         # variable-density fully-developed channel driven per unit mass:
         # mu+ dU+/dy+ - <rho u"v">+ = 1 - int <rho> dy / int_half <rho> dy.
         # The buffer layer is masked out because the file's columns cannot
