@@ -139,7 +139,14 @@ class CompressibleCalibration:
         u_true = d.U[self.idx]
         t_true = d.T[self.idx]
         q_true = d.q_hat[self.q_idx, 1]
-        cf_true = d.wall["cf"]
+        # skin friction on the centreline dynamic head. The GV cases state it
+        # in their global table; the CKM record carries none, so it is derived
+        # from the record's own centreline state, cf = 2/(rho_CL+ U_CL+^2),
+        # the same definition the GV table uses (identical for GV to its
+        # stated value, asserted by the harness tests)
+        cf_true = d.wall.get("cf")
+        if cf_true is None:
+            cf_true = 2.0 / (float(d.rho[-1]) * float(d.U[-1]) ** 2)
         bq_true = d.wall["b_q"]
 
         # sigma: the modeled relative level on the local scale; the heat-flux

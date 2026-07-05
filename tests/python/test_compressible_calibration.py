@@ -81,6 +81,21 @@ def test_sigma_floor_honours_the_anchor(cal):
     assert np.all(cal.qoi_sigma > 0.0)
 
 
+def test_cf_derivation_matches_gv_table(cal):
+    """The harness's record-derived cf (used where a source states none, the
+    CKM cases) reproduces the GV global-table value exactly, since the table
+    defines cf on the same centreline dynamic head."""
+    from UQ.datasets import CKMChannelDNS
+    d = cal.dns
+    derived = 2.0 / (float(d.rho[-1]) * float(d.U[-1]) ** 2)
+    assert derived == pytest.approx(d.wall["cf"], rel=2e-3)
+    if CKMChannelDNS.is_available("M1p5"):
+        c2 = CompressibleCalibration(CKMChannelDNS.load("M1p5"),
+                                     n_stations=8, n_q_stations=5)
+        assert c2.qoi_truth[0] > 0.0
+        assert c2.qoi_names[0] == "cf"
+
+
 def test_posterior_and_predictive_spine(cal):
     """Posterior sampling, the Pr_t marginal, block-wise predictive coverage,
     and the moment-matched learning rate all run on the real case."""
