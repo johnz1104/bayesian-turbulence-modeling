@@ -570,9 +570,15 @@ absent condition is recorded here as a count delta, not by name).
   Mach series) and Reynolds number (Re_tau* 97 to 985 at matched Mach), among
   attached compressible flows.
 - Observation uncertainty: MODELED relative value (the files carry no per-point
-  statistical uncertainty), anchored by a data-only physics residual (the
-  variable-density total-stress balance across the channel); the level and anchor
-  are pinned in the study's pre-registration before any calibration result.
+  statistical uncertainty), anchored by the variable-density total-stress balance.
+  The forcing form is pinned by the data itself: the outer-region balance closes
+  two orders of magnitude better under the per-unit-mass (density-weighted linear)
+  target than under the uniform-force target at the highest Mach, so the identity
+  is mu+ dU+/dy+ - <rho u"v">+ = 1 - int <rho> dy / int_half <rho> dy, evaluated
+  outside the buffer layer (y+ > 40), where the neglected viscosity-fluctuation
+  correlation <mu'(du/dy)'>, an O(M^2) physical term the files cannot close, does
+  not enter. Measured anchor rms 0.02 to 0.56 percent across the 24 cases (the
+  largest box, Re_tau* 985, is the 0.56).
 - Used by: the compressible attached-flow study (calibration matrix and the
   cross-Mach and cross-Reynolds generalization axes).
 - License and notes: CC BY 4.0 (Mendeley distribution); cite Gerolymos and Vallet
@@ -618,9 +624,19 @@ the Gerolymos-Vallet matrix span.
 - OOD axis it populates: Mach number (two named bulk-Mach conditions); primarily an
   independent-code cross-check anchor rather than a calibration set.
 - Observation uncertainty: MODELED relative value (no per-point uncertainty in the
-  files), anchored by the variable-density total-stress balance.
+  files), anchored by the variable-density total-stress balance. The forcing form
+  is pinned from the data as for the Gerolymos-Vallet matrix: at bulk M 3.0 the
+  per-unit-mass target closes the outer balance five times better than the
+  uniform-force target (0.5 versus 2.8 percent rms); at bulk M 1.5 the closure is
+  form-insensitive at that case's own ~1 percent convergence level (the
+  three-digit header u_tau contributes), which is then its honest anchor.
+- Derived quantity (labeled derived): the wall-heat-flux parameter B_q is not in
+  the headers; it is recovered from the file's own wall temperature gradient with
+  the reference's Pr = 0.7, giving -0.050 (M 1.5) and -0.135 (M 3.0), consistent
+  with the Gerolymos-Vallet family at matched Mach (-0.049 at M_CLx 1.5).
 - Used by: the compressible attached-flow study (loader and discrepancy cross-check
-  at the named canonical conditions).
+  at the named canonical conditions; never calibrated on, per the study's
+  pre-registration).
 - License and notes: research use with citation (Coleman, Kim and Moser 1995);
   hosted by the migrated TMR.
 
@@ -683,10 +699,16 @@ compared against.
 - OOD axes it populates: Mach number (2.5 to 13.64) and wall cooling (Tw/Tr 0.18 to
   1.0) among attached flows.
 - Observation uncertainty: MODELED relative value (no per-point uncertainty in the
-  files), anchored by a data-only physics residual (candidates: the
-  strong-Reynolds-analogy consistency carried by the file's own SRA column and the
-  anisotropy trace identity b11+b22+b33 = 0); the choice is pinned in the study's
-  pre-registration.
+  files), anchored by the van-Driest-transform reconstruction residual (recomputing
+  u_VD+ from the file's own u+ and density columns against its u_VD+ column, a
+  data-only cross-column identity; measured median 0.06 to 0.9 percent per case by
+  the loader). The anisotropy trace identity b11+b22+b33 = 0 closes to 4e-10, exact
+  by construction, and serves as a parse guard rather than the anchor.
+- Wall-temperature note (verified at load): the M6Tw076 file's wall row gives
+  295.7 K against the header's nominal Tw = 300.0 K (a 1.4 percent difference; the
+  other four cases agree to their printed rounding). Loaders normalize temperature
+  by the file's own wall row, which is the isothermal wall temperature by
+  definition.
 - Used by: the compressible attached-flow study (hypersonic extension, wall-cooling
   axis, and the measured Pr_t reference profiles).
 - License and notes: research use with citation (Zhang, Duan and Choudhari 2018);
