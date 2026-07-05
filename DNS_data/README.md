@@ -122,7 +122,9 @@ thermodynamic modes the anisotropy tensor cannot hold.
   and other space-time-resolved DNS with a query interface.
 - **NASA Turbulence Modeling Resource (TMR).** Separated and SBLI verification and
   validation cases with reference CFD and experiment, including the wall-mounted hump
-  and 2D bump.
+  and 2D bump. Migrated from turbmodels.larc.nasa.gov to tmbwg.github.io/turbmodels
+  (same page paths; verified 2026-07-03); the compressible DNS collections cited
+  below are hosted there under Other_DNS_Data.
 - **ERCOFTAC Classic Database and SIG15.** Periodic hills and other separated
   benchmarks.
 - **Polimi group (Pirozzoli, Bernardini).** Compressible channel, supersonic and
@@ -486,3 +488,235 @@ velocity, the full Reynolds-stress tensor and k, the per-station wall quantities
 a wall-normal-resolved velocity gradient (the streamwise gradient is left zero because
 the stations are too sparse to difference in x). Downstream layers consume it exactly
 as they consume the dense and wall-bounded records.
+
+## Compiled dataset 7: compressible plane channel matrix (Gerolymos and Vallet 2023)
+
+Status: uploaded and verified 2026-07-04; third-party data, not produced by this
+project. The workhorse calibration matrix for the compressible attached-flow study
+(heat-flux and turbulent-Prandtl-number calibration with cross-Mach and cross-Reynolds
+generalization axes). 24 of the 25 distributed flow conditions are present in the
+local copy (the Mendeley landing page states 25 and does not enumerate them, so the
+absent condition is recorded here as a count delta, not by name).
+
+### Provenance
+
+- Source or URL: Mendeley Data, doi:10.17632/wt8t5kxzbs.1 (distribution); computed
+  with the aerodynamics.3.1.3 code per the file headers.
+- Reference (stated in every file header): G.A. Gerolymos and I. Vallet, J. Fluid
+  Mech. 958 (2023) A19, doi:10.1017/jfm.2023.42, and/or J. Fluid Mech. 978 (2024)
+  A25, doi:10.1017/jfm.2023.1034. Flow model AIR0 (constant gamma and cp air):
+  J. Fluid Mech. 757 (2014) 701-746, doi:10.1017/jfm.2014.431.
+- Regime: compressible; strictly isothermal walls at 298 K; air (AIR0).
+- Cases and per-case parameters (from each case's GD global-data file; case tag is
+  the directory's nominal Re_tau* / M_CLx pair, full directory names are
+  Retaus_NNNN_MCLx_MpMM_isoTw_0298_MB_AIR0 under compressible_channel_gv/GV_TPC_MB_AIR0/):
+
+  | case (Re_tau* / M_CLx) | Re_tau* | M_CLx | Re_tau_w | B_qw | cf | stations | MF sha256 (16) |
+  |---|---|---|---|---|---|---|---|
+  | 0097 / 2p11 | 97.3 | 2.110 | 237.7 | -0.11229 | 0.00568 | 85 | 0d957f808a63f34f |
+  | 0098 / 2p22 | 98.5 | 2.218 | 275.7 | -0.13278 | 0.00577 | 85 | 435d7282b70df306 |
+  | 0099 / 2p01 | 98.9 | 2.015 | 218.7 | -0.09912 | 0.00576 | 85 | 679fe159bd71977f |
+  | 0100 / 1p82 | 100.3 | 1.819 | 186.0 | -0.07570 | 0.00582 | 85 | aa07e822cda5d72f |
+  | 0100 / 1p92 | 100.4 | 1.918 | 203.1 | -0.08752 | 0.00587 | 85 | 73fff07019d69276 |
+  | 0103 / 1p51 | 102.7 | 1.506 | 153.0 | -0.04887 | 0.00610 | 85 | 12d8353ce0a05364 |
+  | 0105 / 0p32 | 104.8 | 0.324 | 106.5 | -0.00202 | 0.00654 | 65 | e24c00a930fab256 |
+  | 0106 / 0p79 | 106.0 | 0.793 | 117.3 | -0.01241 | 0.00641 | 65 | 0807bec2caa6d25d |
+  | 0112 / 2p02 | 111.7 | 2.020 | 252.1 | -0.10095 | 0.00569 | 89 | 2a7cfb983840abd6 |
+  | 0113 / 2p49 | 112.7 | 2.488 | 490.6 | -0.19976 | 0.00552 | 121 | c343c1fe4a3bcb4e |
+  | 0114 / 1p51 | 113.6 | 1.507 | 169.9 | -0.04918 | 0.00605 | 65 | 0ecf8f747afca372 |
+  | 0134 / 1p99 | 134.2 | 1.991 | 297.9 | -0.09894 | 0.00572 | 91 | 238fa82cae80fa58 |
+  | 0143 / 0p32 | 143.1 | 0.324 | 145.5 | -0.00202 | 0.00630 | 65 | fd158dd15341e73f |
+  | 0151 / 0p79 | 151.4 | 0.792 | 167.8 | -0.01231 | 0.00609 | 75 | b7bc436710e75cf3 |
+  | 0151 / 1p50 | 151.5 | 1.503 | 227.6 | -0.04897 | 0.00586 | 69 | bafb508185ecfa82 |
+  | 0177 / 0p35 | 176.6 | 0.347 | 180.0 | -0.00230 | 0.00607 | 65 | 118b589b5240f57e |
+  | 0245 / 1p99 | 245.3 | 1.988 | 554.6 | -0.09630 | 0.00515 | 141 | f714187794a9c244 |
+  | 0251 / 0p83 | 251.1 | 0.828 | 281.6 | -0.01294 | 0.00545 | 89 | 0dacf9e659972d61 |
+  | 0254 / 1p47 | 253.9 | 1.471 | 377.0 | -0.04511 | 0.00531 | 105 | 322c9d32f113d422 |
+  | 0340 / 0p80 | 339.6 | 0.798 | 378.0 | -0.01166 | 0.00510 | 117 | ff2b6d31cb042415 |
+  | 0341 / 1p98 | 341.0 | 1.978 | 767.8 | -0.09222 | 0.00478 | 141 | 5ce413db18c719b6 |
+  | 0342 / 1p51 | 341.8 | 1.513 | 522.9 | -0.04680 | 0.00493 | 121 | d97f3ae3062ef5da |
+  | 0965 / 1p50 | 965.2 | 1.505 | 1479.0 | -0.04140 | 0.00385 | 321 | 9bb32fec89d62c81 |
+  | 0985 / 0p81 | 984.5 | 0.806 | 1100.5 | -0.01056 | 0.00391 | 241 | 90b994e3846a3e38 |
+
+  Re_tau* is the HCB (semi-local) friction Reynolds number, M_CLx the Reynolds-averaged
+  streamwise centreline Mach number, Re_tau_w the wall-unit friction Reynolds number,
+  B_qw := <q_w>/(sqrt(<tau_w><rho_w>) <cp_w> <T_w>) the wall-heat-flux parameter, and
+  cf the skin-friction coefficient, all read from the GD file. The sha256 is of the
+  case's MF_meanflow.txt.
+
+- Fields provided, per case, in four subdirectories:
+  - 0_GD_global_data (consumed): 42 tabulated global parameters (Re_tau*, M_CLx,
+    Re_tau_w, B_qw, M_tau, cf, bulk-to-centreline ratios, integral thicknesses,
+    molecular Prandtl numbers). This is the wall-flux source.
+  - 1_PBs_profiles_and_budgets (consumed): MF_meanflow.txt (50 columns: y/delta and
+    y*, y#, y+ wall-distance conventions; mean density, velocity, pressure,
+    temperature, viscosity, conductivity, Mach profiles; Reynolds and Favre averages
+    side by side; van-Driest-free wall-unit and Trettel-Larsson transformed
+    velocities); TRBFLXs_turbulent_transport.txt (98 columns, including the FAVRE
+    REYNOLDS-STRESS TENSOR <rho u_i"u_j">* in columns 5 to 10 and the FAVRE TURBULENT
+    ENTHALPY-FLUX VECTOR <rho h"u_i">* in columns 72 to 74, with the *-to-+ unit
+    conversion columns <rho>+ |97| and <u_CL>/V_unit* |98| stated in the header);
+    budgets_r{xx,xy,yy,zz}.txt (Reynolds-stress budgets); TTS_thrm_trblnc_strctr.txt
+    (40 columns of thermodynamic-fluctuation correlations, raw material for
+    compressibility-aware conditioning features).
+  - 2_pdfsq and 3_pdfs2q (present, NOT consumed by the attached-flow study): single
+    and joint probability density functions.
+- File format: plain text; every header states lines_of_comments, columns_of_data,
+  lines_of_data and per-column definitions with the normalization of each quantity.
+  Loaders parse the header counts and column labels rather than hardcoding them.
+  Turbulence quantities are in *-units (semi-local: <tau_w>, <rho(y)>, <mu(y)>);
+  the conversion to wall (+) units is by the stated powers of <rho>+.
+- OOD axes it populates: Mach number (M_CLx 0.32 to 2.49, with matched-Re_tau*
+  Mach series) and Reynolds number (Re_tau* 97 to 985 at matched Mach), among
+  attached compressible flows.
+- Observation uncertainty: MODELED relative value (the files carry no per-point
+  statistical uncertainty), anchored by a data-only physics residual (the
+  variable-density total-stress balance across the channel); the level and anchor
+  are pinned in the study's pre-registration before any calibration result.
+- Used by: the compressible attached-flow study (calibration matrix and the
+  cross-Mach and cross-Reynolds generalization axes).
+- License and notes: CC BY 4.0 (Mendeley distribution); cite Gerolymos and Vallet
+  as stated in the headers. The 6.6 GB bulk stays local and gitignored.
+
+## Compiled dataset 8: isothermal-wall supersonic channel (Coleman, Kim and Moser 1995)
+
+Status: uploaded and verified 2026-07-04; third-party data, not produced by this
+project. The canonical named supersonic-channel anchors and an independent-code
+cross-check of the compressible loader and discrepancy pipeline at conditions inside
+the Gerolymos-Vallet matrix span.
+
+### Provenance
+
+- Source or URL: NASA Turbulence Modeling Resource (migrated to
+  tmbwg.github.io/turbmodels), Other_DNS_Data/supersonic-channel.html.
+- Reference: G.N. Coleman, J. Kim and R.D. Moser, "A numerical study of turbulent
+  supersonic isothermal-wall channel flow", J. Fluid Mech. 305 (1995) 159-183 (and
+  the TSF9 1993 proceedings version cited in the file headers).
+- Regime: compressible; isothermal walls; bulk Mach 1.5 (Case A) and 3.0 (Case B).
+- Cases and per-case parameters (from the file headers):
+
+  | file | case | u_tau | Re_tau | stations (full channel) | sha256 (16) |
+  |---|---|---|---|---|---|
+  | M=1x5.dist            | A (M=1.5) | 0.0545 | 221.6 | 119 | 889e74c93cbf9d16 |
+  | M=1x5.dist_additional | A (M=1.5) | 0.0545 | 221.6 | 119 | ecffb36f0aac5ded |
+  | M=3.dist              | B (M=3.0) | 0.0387 | 451.2 | 119 | 9067056a151394c9 |
+  | M=3.dist_additional   | B (M=3.0) | 0.0387 | 451.2 | 119 | fb1470f50f156174 |
+
+- Fields provided (grouped tables in each .dist file, y spanning both walls): Group I
+  mean rho, p, T, u, v, w, mu; Favre means <rho.T>/<rho> and <rho.u_i>/<rho>; the
+  Favre fluctuations <T">, <u_i">; Group II.a second moments in THREE averaging
+  conventions side by side: Reynolds (<u'u'>, <v'v'>, <w'w'>, <u'v'>, <T'T'>,
+  <v'T'>), density-weighted Favre (<rho.u"u">/<rho> and companions including
+  <rho.v"T">/<rho>), and the mixed <rho'...'> triple correlations, plus <u"u"> to
+  <v"T">. The temperature-velocity covariance IS carried (Reynolds and Favre forms),
+  verified at compile time, so this set cross-checks both the stress leg and the
+  heat-flux leg of the pipeline. The _additional files carry mass fluxes and
+  Reynolds-stress-budget groups.
+- File format: plain text with prose headers and "Group" separator banners; columns
+  named in each group's own header line; normalization as in the TSF9 / JFM 1995
+  papers (stated in the header).
+- OOD axis it populates: Mach number (two named bulk-Mach conditions); primarily an
+  independent-code cross-check anchor rather than a calibration set.
+- Observation uncertainty: MODELED relative value (no per-point uncertainty in the
+  files), anchored by the variable-density total-stress balance.
+- Used by: the compressible attached-flow study (loader and discrepancy cross-check
+  at the named canonical conditions).
+- License and notes: research use with citation (Coleman, Kim and Moser 1995);
+  hosted by the migrated TMR.
+
+## Compiled dataset 9: supersonic and hypersonic flat-plate boundary layers (Zhang, Duan and Choudhari 2018)
+
+Status: uploaded and verified 2026-07-04; third-party data, not produced by this
+project. Extends the attached compressible axis into the hypersonic regime and adds
+wall cooling as a second out-of-distribution dimension; carries a MEASURED turbulent
+Prandtl-number profile per case, the reference the calibrated Pr_t posterior is
+compared against.
+
+### Provenance
+
+- Source or URL: NASA Turbulence Modeling Resource (migrated to
+  tmbwg.github.io/turbmodels), Other_DNS_Data/supersonic_hypersonic_flatplate.html.
+- Reference: C. Zhang, L. Duan and M.M. Choudhari, "Direct numerical simulation
+  database for supersonic and hypersonic turbulent boundary layers", AIAA Journal
+  56(11) (2018) 4297-4311, doi:10.2514/1.J057296.
+- Regime: compressible; zero-pressure-gradient flat plate; nominal freestream Mach
+  2.5 to 14; wall-to-recovery temperature ratio 0.18 to 1.0.
+- Cases and per-case parameters (from each _Stat.dat README header, at the analysis
+  station x_a):
+
+  | case | M_inf | Tw/Tr | Re_tau | Re_tau* | -B_q | M_tau | stations | Stat sha256 (16) |
+  |---|---|---|---|---|---|---|---|---|
+  | M2p5     | 2.5   | 1.00 | 510 | 1187 | 0    | 0.08 | 260 | f2f87a2678b34565 |
+  | M6Tw025  | 5.84  | 0.25 | 450 | 932  | 0.14 | 0.17 | 330 | 29b132ba72b72677 |
+  | M6Tw076  | 5.86  | 0.76 | 453 | 4130 | 0.02 | 0.13 | 310 | a2841068713a7d08 |
+  | M8Tw048  | 7.87  | 0.48 | 480 | 4092 | 0.06 | 0.15 | 310 | 8d80f053f0373d05 |
+  | M14Tw018 | 13.64 | 0.18 | 646 | 4925 | 0.19 | 0.19 | 430 | 070840785b9fd75f |
+
+  The companion _TKEBudget.dat files (present, budgets not consumed initially):
+  M2p5 4af36c618265fa56, M6Tw025 e9715f9ed5a50bdc, M6Tw076 17962471dba187c2,
+  M8Tw048 bbaee147cfd3b1b5, M14Tw018 30cea34cc3906984.
+
+- Fields provided (28 documented columns per _Stat.dat, Tecplot POINT format with an
+  extensive README header): wall-normal coordinate in four conventions (z, z/delta,
+  z+, z*); mean u, p, T, rho; rms velocity, pressure, temperature, density and Mach
+  fluctuation intensities; the Reynolds shear covariance <u'w'>/u_tau^2; vorticity
+  rms; entropy rms; the FAVRE ANISOTROPY components b11, b22, b33, b13 as ready-made
+  columns; van Driest and Trettel-Larsson transformed velocities; the MEASURED
+  turbulent Prandtl number profile Pr_t; and the strong-Reynolds-analogy check
+  (SRA_Huang). Per-case wall parameters in the header: B_q, M_tau, u_tau, z_tau and
+  the boundary-layer thicknesses.
+- Coordinate convention of the source (stated in the header): x streamwise, y
+  SPANWISE, z WALL-NORMAL, so v is the spanwise and w the wall-normal velocity
+  fluctuation; the loader maps this to the pipeline's x-streamwise, y-wall-normal,
+  z-spanwise convention (the <u'w'> column is the streamwise/wall-normal shear
+  covariance, b13 the corresponding anisotropy component).
+- Derived quantity (documented, labeled derived, never measured): the wall-normal
+  turbulent heat flux is NOT a raw column; it is recovered from the file's own
+  definition of the turbulent Prandtl number,
+  Pr_t = (<rho u'w'> dT/dz) / (<rho w'T'> du/dz), solved for <rho w'T'> using the
+  given <u'w'>, the given Pr_t profile, and mean gradients finite-differenced from
+  the mean profiles.
+- Thermal roles: M2p5 has Tw/Tr = 1.0, so its wall heat flux is essentially zero
+  (B_q = 0); it is the thermally quiescent attached control. The cold-wall heat-flux
+  physics lives in the M6/M8/M14 cases, which also extend the Mach axis into the
+  hypersonic regime and populate the wall-cooling (Tw/Tr) axis.
+- OOD axes it populates: Mach number (2.5 to 13.64) and wall cooling (Tw/Tr 0.18 to
+  1.0) among attached flows.
+- Observation uncertainty: MODELED relative value (no per-point uncertainty in the
+  files), anchored by a data-only physics residual (candidates: the
+  strong-Reynolds-analogy consistency carried by the file's own SRA column and the
+  anisotropy trace identity b11+b22+b33 = 0); the choice is pinned in the study's
+  pre-registration.
+- Used by: the compressible attached-flow study (hypersonic extension, wall-cooling
+  axis, and the measured Pr_t reference profiles).
+- License and notes: research use with citation (Zhang, Duan and Choudhari 2018);
+  hosted by the migrated TMR.
+
+## Compiled dataset 10: Mach 4.9 curved-wall boundary layers (Nicholson, Duan and Bisek 2024)
+
+Status: uploaded 2026-07-04; third-party data, not produced by this project. PRESENT
+BUT NOT CONSUMED by the compressible attached-flow study: this is the
+pressure-gradient-separation candidate for the high-speed separated direction, and
+nothing is built against it yet. The provenance is recorded now so the manifest is
+complete; per-case parameter tables are added when a loader is built.
+
+### Provenance
+
+- Source or URL: NASA Turbulence Modeling Resource (migrated to
+  tmbwg.github.io/turbmodels), Other_DNS_Data/highspeed_curvedwalls.html.
+- Reference (stated in the file headers): G. Nicholson, L. Duan and N.J. Bisek,
+  "Direct numerical simulation database for high-speed turbulent boundary layers
+  over parameterized curved walls", AIAA Journal (2024), doi:10.2514/1.J063456.
+- Regime: compressible; Mach 4.9, Tw/Tr = 0.91 (the M5Tw091 file labels); turbulent
+  boundary layers over parameterized backward-facing (BF) and forward-facing (FF)
+  curved walls spanning attached to fully separated states.
+- Cases present: BF-wall_alpha=1.0, BF-wall_alpha=0.42, BF-wall_alpha=0.20,
+  FF-wall_alpha=1.0, FF-wall_alpha=0.26, FF-wall_alpha=0.20; each directory carries
+  a _Stat.dat, a _TKE_budget.dat and a _wallParams.dat (9.4 MB total).
+- OOD axis it will populate: wall-shape steepness (attached through fully separated)
+  at fixed Mach, the smooth-wall pressure-gradient-separation axis.
+- Used by: none yet (reserved for the high-speed separated study).
+- License and notes: research use with citation (Nicholson, Duan and Bisek 2024);
+  hosted by the migrated TMR. Smooth-wall pressure-gradient separation, not a
+  sharp-shock impingement; the framing is a scope decision for the study that
+  consumes it.
