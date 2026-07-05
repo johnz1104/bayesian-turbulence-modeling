@@ -79,7 +79,9 @@ class CompressibleProfileDNS(_common.WallBoundedProfileDNS):
                          y=y_outer, y_outer=y_outer)
         self.T = np.asarray(T, dtype=float)
         self.rho = np.asarray(rho, dtype=float)
-        self.mu = np.asarray(mu, dtype=float)
+        # mu is None where the source gives no viscosity profile (the flat
+        # plate); the total-stress identities then do not apply to that case
+        self.mu = None if mu is None else np.asarray(mu, dtype=float)
         self.ystar = None if ystar is None else np.asarray(ystar, dtype=float)
         self.q_hat = None if q_hat is None else np.asarray(q_hat, dtype=float)
         self.mach = None if mach is None else np.asarray(mach, dtype=float)
