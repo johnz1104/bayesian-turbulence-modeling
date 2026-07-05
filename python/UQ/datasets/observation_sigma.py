@@ -75,6 +75,19 @@ def physics_anchor(dns):
         rms = dns.budget_residual_level()
         return {"kind": "rste_budget_residual", "rms": rms,
                 "description": "rms of the file's res_*+ budget-closure columns"}
+    if case == "gv_compressible_channel":
+        # variable-density fully-developed channel driven per unit mass:
+        # mu+ dU+/dy+ - <rho u"v">+ = 1 - int <rho> dy / int_half <rho> dy.
+        # The buffer layer is masked out because the file's columns cannot
+        # close the viscosity-fluctuation correlation <mu'(du/dy)'> that
+        # peaks there (an O(M^2) physical term, not a convergence error).
+        residual = np.asarray(dns.total_stress_residual())
+        mask = (dns.yplus > 40.0) & (np.abs(dns.y_outer) < 0.95)
+        rms = float(np.sqrt(np.mean(residual[mask] ** 2)))
+        return {"kind": "variable_density_total_stress", "rms": rms,
+                "description": "rms| mu+ dU+/dy+ - <rho u\"v\">+ - "
+                               "(1 - mass-weighted y) |, y+ > 40 "
+                               "(compressible channel, per-unit-mass forcing)"}
     raise ValueError(f"no physics anchor defined for case '{case}'")
 
 

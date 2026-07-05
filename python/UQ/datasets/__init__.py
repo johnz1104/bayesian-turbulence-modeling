@@ -13,6 +13,7 @@ from .pipe import PipeDNS, PIPE_CASES
 from .rotating_channel import RotatingChannelDNS, ROTATING_CASES
 from .backward_facing_step import BackwardFacingStepDNS, BFS_STATIONS
 from .periodic_hills import PeriodicHillsDNS, PEHILL_CASES
+from .gv_channel import GVChannelDNS, GV_CASES
 
 __all__ = [
     "ChannelDNS", "CHANNEL_CASES",
@@ -21,4 +22,5 @@ __all__ = [
     "RotatingChannelDNS", "ROTATING_CASES",
     "BackwardFacingStepDNS", "BFS_STATIONS",
     "PeriodicHillsDNS", "PEHILL_CASES",
+    "GVChannelDNS", "GV_CASES",
 ]
