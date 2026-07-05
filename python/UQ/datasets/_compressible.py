@@ -157,14 +157,17 @@ class CompressibleProfileDNS(_common.WallBoundedProfileDNS):
 
     # ---- DNSField adapter ---------------------------------------------------
 
-    def to_dnsfield(self, timescale_plus, nu_t_plus=None, Pr_t=0.9):
+    def to_dnsfield(self, timescale_plus, nu_t_plus=None, Pr_t=0.9,
+                    k_baseline_plus=None):
         """Build a UQ DNSField carrying both discrepancy legs.
 
         The anisotropy leg needs only the record (b is unit-free); the
         heat-flux leg becomes active when the caller supplies the baseline
         nu_t^+ (heatflux_discrepancy then compares q_hat against the
         gradient-diffusion flux -(nu_t^+/Pr_t) grad(T/T_w), consistently in
-        (u_tau, T_w) units per the module convention).
+        (u_tau, T_w) units per the module convention). Supplying the
+        baseline's own k^+ as well switches the Boussinesq anisotropy to its
+        limiter-consistent actual-eddy-viscosity form (DNSField.k_baseline).
         """
         return DNSField(
             grad_u=self.velocity_gradient(),
@@ -175,5 +178,7 @@ class CompressibleProfileDNS(_common.WallBoundedProfileDNS):
             heat_flux=self.q_hat,
             nu_t=None if nu_t_plus is None else np.asarray(nu_t_plus, dtype=float),
             Pr_t=Pr_t,
+            k_baseline=None if k_baseline_plus is None
+            else np.asarray(k_baseline_plus, dtype=float),
             meta=dict(self.meta),
         )
