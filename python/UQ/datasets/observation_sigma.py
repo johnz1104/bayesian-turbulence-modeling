@@ -88,6 +88,18 @@ def physics_anchor(dns):
                 "description": "rms| mu+ dU+/dy+ - <rho u\"v\">+ - "
                                "(1 - mass-weighted y) |, y+ > 40 "
                                "(compressible channel, per-unit-mass forcing)"}
+    if case == "zdc_flatplate":
+        # no exact momentum identity exists for the developing plate, so the
+        # anchor is the data-only cross-column identity: the van Driest
+        # transform recomputed from the file's own u+ and density columns
+        # against its u_VD+ column (the trace identity is a parse guard,
+        # exact by construction, and carries no convergence information)
+        residual = np.asarray(dns.van_driest_residual())
+        mask = _interior_mask(dns)
+        rms = float(np.sqrt(np.mean(residual[mask] ** 2)))
+        return {"kind": "van_driest_reconstruction", "rms": rms,
+                "description": "relative rms| int sqrt(rho+) du+ - u_VD+ | "
+                               "(flat plate, cross-column identity)"}
     raise ValueError(f"no physics anchor defined for case '{case}'")
 
 

@@ -14,6 +14,7 @@ from .rotating_channel import RotatingChannelDNS, ROTATING_CASES
 from .backward_facing_step import BackwardFacingStepDNS, BFS_STATIONS
 from .periodic_hills import PeriodicHillsDNS, PEHILL_CASES
 from .gv_channel import GVChannelDNS, GV_CASES
+from .zdc_flatplate import FlatPlateDNS, ZDC_CASES
 
 __all__ = [
     "ChannelDNS", "CHANNEL_CASES",
@@ -23,4 +24,5 @@ __all__ = [
     "BackwardFacingStepDNS", "BFS_STATIONS",
     "PeriodicHillsDNS", "PEHILL_CASES",
     "GVChannelDNS", "GV_CASES",
+    "FlatPlateDNS", "ZDC_CASES",
 ]
