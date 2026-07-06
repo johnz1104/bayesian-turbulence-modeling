@@ -29,6 +29,16 @@ this repository.
   source repository, so it is treated as research-use with citation.
 - Backward-facing step (separated-flow model-form): Le, Moin and Kim (1997), J.
   Fluid Mech. 330, 349-374, research-use with citation.
+- Compressible plane-channel matrix (compressible attached): Gerolymos and
+  Vallet (2023), J. Fluid Mech. 958, A19 (Mendeley Data,
+  doi:10.17632/wt8t5kxzbs.1), CC BY 4.0.
+- Isothermal-wall supersonic channel (compressible attached, external check):
+  Coleman, Kim and Moser (1995), J. Fluid Mech. 305, 159-183 (hosted by the
+  migrated NASA Turbulence Modeling Resource), research-use with citation.
+- Supersonic and hypersonic flat plates (compressible attached, wall-cooling
+  axis and measured Pr_t reference): Zhang, Duan and Choudhari (2018), AIAA
+  Journal 56(11), 4297-4311 (hosted by the migrated NASA Turbulence Modeling
+  Resource), research-use with citation.
 
 ## What goes here (tracked)
 
@@ -59,10 +69,9 @@ UQ-RANS_research/
     finding_numbers.json      a1-betaStar in-distribution + cross-Re + evaluation
     nw4_in_distribution.json  four-coefficient robustness check
     figures/                  reliability, coverage, PIT
-  step2_couette/              (cross-flow OOD, when run)
-  step3_separated/            (generative model-form, when run)
-  step4_compressible_attached/
-  step5_sbli_apriori/         (compressible SBLI, a-priori)
+  step2_couette/              cross-flow generalization (Couette a-posteriori)
+  separated_modelform/        separated-flow generative model-form
+  compressible_attached/      compressible heat-flux and Prandtl UQ
   ...
 ```
 
@@ -72,3 +81,4 @@ UQ-RANS_research/
 |---|---|---|---|
 | 1 | Plane channel, 5 Re_tau | standard Bayesian calibration is overconfident on real channel DNS; generalized Bayes and conformal restore coverage in distribution and across held-out Reynolds numbers | positive (coverage 0.20 -> 0.87/0.91 in distribution; graceful cross-Re degradation, conformal gap <= 0.10) |
 | 2 | Plane Couette (a-posteriori) + pipe / rotating companions | the channel calibration plus calibrated UQ transfers to the held-out Couette flow type through a real moving-wall solve; standard Bayes is overconfident, generalized Bayes and conformal restore coverage gracefully; the rotating channel motivates the separated-flow model-form | positive, graceful (cross-flow coverage 0.05-0.26 -> restored fully at low Couette Re, partially at high Re; conformal gap up to +0.22 at the 0.5% band, within-Couette correction reaches nominal; rotating <uw> is structurally unrepresentable, global correction is diffuse) |
+| - | Compressible attached matrix (24-case channel family, CKM external check, hypersonic plates) | can the heat-flux discrepancy and the turbulent Prandtl number be calibrated with honest UQ on real compressible attached data, and does the calibrated UQ transfer across Mach and wall cooling | mixed, per the pre-registered shapes: overconfidence confirmed (held-out thermal coverage 0.17 in distribution, 0.01 cross-Mach at nominal 0.90); the global correction restores the likelihood block (0.96) but NOT the held-out thermal block (0.42 in distribution, 0.18 cross-Mach; intervals widen x14 so not silent); Pr_t is unidentifiable from attached mean observables (edge-piled pseudo-true posteriors; the measured plate profiles are tight around 0.9); the thermal block needs a correction reaching the heat-flux quantities, triangulating with the separated-flow and rotating-channel diagnoses |
