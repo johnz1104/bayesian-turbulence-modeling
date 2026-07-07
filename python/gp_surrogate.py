@@ -35,7 +35,8 @@ class GPSurrogate:
         self.trained = False
         self._train_time = 0.0
 
-    def train(self, X, y, optimize_restarts=3, noise_floor=None):
+    def train(self, X, y, optimize_restarts=3, noise_floor=None,
+              lengthscale_bounds=None):
         """
         Train GP on ensemble data
 
@@ -54,6 +55,13 @@ class GPSurrogate:
             posterior (the V.1 surrogate breakdown).  A small floor (e.g. 1e-3) keeps the
             predictive variance calibrated and the mean lightly regularized.  Default
             ``None`` preserves the legacy (interpolating) behaviour.
+        lengthscale_bounds : (float, float) | None
+            Bounds on the ARD lengthscales, in the raw units of X.  On a
+            near-noiseless target the marginal-likelihood optimizer can drive a
+            lengthscale toward zero, where the kernel's r = d/l overflows and the
+            restart loop spins without terminating (a wedged fit at full CPU).
+            Bounds make that corner infeasible.  Default ``None`` preserves the
+            legacy unconstrained behaviour for existing callers.
         """
         self.X_train = X.copy()
 
@@ -74,6 +82,10 @@ class GPSurrogate:
             # bound the noise variance below so it cannot collapse to interpolation
             self.gp.likelihood.variance.constrain_bounded(
                 float(noise_floor), 1e6, warning=False)
+        if lengthscale_bounds is not None:
+            kernel.lengthscale.constrain_bounded(
+                float(lengthscale_bounds[0]), float(lengthscale_bounds[1]),
+                warning=False)
         self.gp.optimize_restarts(
             num_restarts=optimize_restarts,
             messages=False, verbose=False
@@ -175,13 +187,17 @@ class MultiOutputSurrogate:
         self.trained = False
         self._train_time = 0.0
 
-    def train(self, X, Y, optimize_restarts=3, noise_floor=None):
+    def train(self, X, Y, optimize_restarts=3, noise_floor=None,
+              lengthscale_bounds=None):
         """
         X: (n, d_theta)
         Y: (n, n_obs)  — raw CFD predictions, one column per observable
         noise_floor : float | None
             Per-output lower bound on the GP noise variance (normalized units) — the
             V.1 surrogate-trust fix (prevents the interpolating/overconfident η fit).
+        lengthscale_bounds : (float, float) | None
+            ARD lengthscale bounds in the raw units of X (see GPSurrogate.train);
+            guards the optimizer against the zero-lengthscale overflow wedge.
         """
         n, d = X.shape
         self.n_outputs = Y.shape[1]
@@ -200,6 +216,10 @@ class MultiOutputSurrogate:
             if noise_floor is not None:
                 gp.likelihood.variance.constrain_bounded(
                     float(noise_floor), 1e6, warning=False)
+            if lengthscale_bounds is not None:
+                kernel.lengthscale.constrain_bounded(
+                    float(lengthscale_bounds[0]), float(lengthscale_bounds[1]),
+                    warning=False)
             with warnings.catch_warnings():
                 warnings.simplefilter('ignore')
                 gp.optimize_restarts(num_restarts=optimize_restarts,
