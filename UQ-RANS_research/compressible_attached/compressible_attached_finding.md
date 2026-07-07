@@ -148,9 +148,63 @@ B_q; the plate leg evaluates the heat-flux profile.
 
 ## 7. Sigma-level sensitivity
 
-[to be filled from finding_numbers_rel01.json: the same tables at the 1
-percent sensitivity level; the direction of every clause is expected to be
-unchanged with milder magnitudes, as in the incompressible studies]
+The full pipeline rerun at the 1 percent modeled-sigma level (same seed, same
+splits, ensembles regenerated at this level with the same per-case anchor
+flooring, so the CKM bulk-M 1.5 case runs at its 1.5 percent anchor; the
+committed `finding_numbers_rel01.json` is the source of every value here).
+
+In distribution (24 cases, nominal 0.90):
+
+| block | standard Bayes | generalized Bayes |
+|---|---|---|
+| likelihood (U, T, cf)        | 0.505 [0.00, 0.91] | 0.944 [0.70, 1.00] |
+| held-out thermal (B_q, q profile) | 0.170 [0.00, 0.73] | 0.436 [0.09, 1.00] |
+
+The in-distribution clauses are level-independent: standard-Bayes thermal
+overconfidence 0.170 (0.174 at the primary level), the correction restoring
+the likelihood block to 0.944 (0.955) but the thermal block only to 0.436
+(0.417). The matched learning rate is milder at the wider sigma (median eta
+2.9e-2 against 7.7e-3), as expected. The Pr_t identifiability null is
+unchanged: median per-case posterior sd 0.198 against the prior's 0.289,
+means spanning 0.51 to 1.48, median edge fraction 0.41, while the measured
+plate profiles are the same data-only medians 0.883 to 0.935.
+
+Cross-Mach primary split (nominal 0.90, averaged over the sixteen held-out
+cases):
+
+| block | standard | generalized Bayes | conformal |
+|---|---|---|---|
+| likelihood | 0.178 | 0.451 | 0.758 |
+| held-out thermal | 0.153 | 0.148 | 0.011 |
+
+The transfer failure and the conformal scale collapse are level-independent
+(thermal coverage far below nominal in every column; conformal gap 0.889
+against 0.894), and leave-one-Re-family-out matches (standard thermal 0.053,
+tempered 0.402). What does NOT recur is the primary level's loud widening:
+the tempered thermal intervals change by a median factor of 0.94 (range 0.31
+to 1.35), not 14, because the pooled tempered posterior degenerates onto the
+upper prior edge (Pr_t 1.4964, sd 0.0036, against the diffuse 0.672, sd
+0.369 at the primary level). This is the pooled expression of the
+case-dependent edge-piling artifact of section 5, not a new behaviour (the
+leave-one-family pools sit near-degenerate at BOTH levels, median sd 0.0006
+and 0.002), and it propagates to every consumer of that posterior: the CKM
+inside-span advantage shrinks (bulk-M 1.5 tempered thermal 0.27 against
+0.82; bulk-M 3.0 stays low at 0.09), and the plate leg reshapes (standard
+coverage 0.35 to 1.00 against 0.00 to 0.06, tempered 0.19 to 0.44 against
+0.04 to 0.16, with the tempered bands about 12 times NARROWER than the
+standard ones where they were 8 times wider at the primary level, the direct
+imprint of the collapsed pooled posterior).
+
+The sensitivity reading, stated plainly: every verdict clause of section 8
+reads the same at both levels (thermal overconfidence confirmed; the
+correction restores the likelihood block only; the Pr_t null; transfer
+coverage far below nominal with an essentially unchanged conformal gap). The
+one characterisation that does not survive the doubling is the mechanism of
+clause 4: the widen-but-undercover shape at the primary level becomes an
+edge-collapsed, non-widening shape at 1 percent, so the "loud, not silent"
+qualifier is itself sigma-dependent and the sensitivity-level transfer sits
+nearer the silent shape. The coverage conclusions and the decision-point
+reading are unchanged.
 
 ## 8. Verdict against the criterion
 
