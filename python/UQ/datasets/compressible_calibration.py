@@ -222,11 +222,25 @@ class CompressibleCalibration:
         self.n_valid = int(valid.sum())
         return self.n_valid
 
-    def fit_surrogates(self, noise_floor=1e-3):
+    def fit_surrogates(self, noise_floor=1e-3, seed=0):
+        """Fit both surrogates with the fit RNG pinned and the ARD
+        lengthscales bounded.
+
+        The seed makes the GPy restart draws reproducible (they otherwise
+        consume the ambient global RNG, so a refit from cache is
+        run-to-run nondeterministic). The lengthscale bounds span raw theta
+        units (the box is order 0.1 to 1), making the zero-lengthscale
+        overflow corner infeasible; on healthy fits the optimum is interior
+        and the bound never binds.
+        """
+        np.random.seed(seed)
+        bounds = (1e-3, 1e2)
         self.gp = GPSurrogate()
-        self.gp.train(self.X, self.loglik, noise_floor=noise_floor)
+        self.gp.train(self.X, self.loglik, noise_floor=noise_floor,
+                      lengthscale_bounds=bounds)
         self.mo = MultiOutputSurrogate()
-        self.mo.train(self.X, self.preds, noise_floor=noise_floor)
+        self.mo.train(self.X, self.preds, noise_floor=noise_floor,
+                      lengthscale_bounds=bounds)
 
     def to_cache(self):
         return {"X": self.X, "loglik": self.loglik, "preds": self.preds,
