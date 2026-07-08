@@ -28,6 +28,8 @@ infrastructure here:
 Splits, hyperparameters, seeds, masks and score definitions are the
 pre-registered ones; nothing here is tuned toward any evaluated number.
 """
+import zlib
+
 import numpy as np
 
 from .. import conformal as cf
@@ -280,17 +282,22 @@ class HeatFluxAPriori:
         energy score on multivariate targets. Returns a JSON-ready dict; the
         PIT array rides under 'arrays' for the figure cache. sample_seed pins
         the predictive draws per evaluation, so a score depends only on the
-        (model, case, seed) triple and never on the call order."""
+        (model, case, seed) triple and never on the call order; when it is
+        left None a stable seed is derived from the evaluation identity
+        (tag, components), so the draws stay reproducible and call-order
+        independent even for a caller that omits it."""
         comps = list(self.target_columns(components))
+        if sample_seed is None:
+            sample_seed = int(zlib.crc32(
+                f"{tag}/{components}".encode())) & 0x7FFFFFFF
         rec = self.cases[tag]
         X = rec["features"]
         y = rec["dq"][:, comps]
         if isinstance(model, PooledGaussianDiagnostic):
             s = model.sample(X, n_per=n_samples, seed=sample_seed)
         else:
-            if sample_seed is not None:
-                import torch  # the conditional models already require torch
-                torch.manual_seed(sample_seed)
+            import torch  # the conditional models already require torch
+            torch.manual_seed(sample_seed)
             s = model.sample(X, n_per=n_samples)
         out = {"n_test": rec["n"], "m_t_max": rec["m_t_max"]}
         for j, c in enumerate(comps):
@@ -351,6 +358,13 @@ def thermal_score_weights(cal, score, b_q_base=None):
     if score == "absolute":
         return np.ones(n_thermal)
     if score == "bq_base":
+        # baseline_wall_flux returns None on a non-converged solve; classify
+        # that explicitly (the case's baseline scale is undefined) instead of
+        # letting abs(None) raise a cryptic TypeError deep in the run loop
+        if b_q_base is None:
+            raise ValueError(
+                "bq_base score needs a converged baseline wall flux; the "
+                "case's 1-D SST solve at nominal coefficients did not converge")
         return np.full(n_thermal, 1.0 / max(abs(b_q_base), 1e-4))
     if score == "semilocal":
         return np.concatenate([[1.0], np.sqrt(cal.dns.rho[cal.q_idx])])
@@ -361,13 +375,20 @@ class ThermalConformalRescore:
     """Normalized split-conformal re-scoring of the committed
     global-correction residuals on the held-out thermal block.
 
-    Reuses the committed cross-Mach protocol exactly: the pooled posterior
-    over the training cases with the learning rate moment-matched on their
-    likelihood stations, and the surrogate point predictions from the cached
-    ensembles. Only the nonconformity score changes (the pinned weights
-    above); nothing is recalibrated. The absolute score runs through the
-    identical pooled-calibration path as the control, so the normalized
-    against absolute comparison isolates the normalization itself.
+    Reuses the committed cross-Mach POSTERIOR construction: the pooled
+    posterior over the training cases with the learning rate moment-matched
+    on their likelihood stations, and the surrogate point predictions from
+    the cached ensembles; nothing is recalibrated (no new MCMC per score).
+    Two things differ from the committed CrossMachStudy conformal path, both
+    deliberate and both disclosed in the finding memo: the nonconformity
+    score carries the pinned physical weights above, and the calibration set
+    pools the thermal residuals over ALL training cases rather than the
+    single first-training-case stations CrossMachStudy used, so the absolute
+    score here (calibration-set matched, weight = 1) is the honest control
+    for the normalized scores and is NOT the committed CrossMachStudy
+    conformal number. The absolute and normalized scores run through the
+    identical pooled-calibration path, so their comparison isolates the
+    normalization itself.
     """
 
     SCORES = ("absolute", "bq_base", "semilocal")

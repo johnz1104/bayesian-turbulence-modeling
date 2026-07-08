@@ -179,6 +179,13 @@ def stage_conformal(numbers, cache_dirs, quick):
     numbers["conformal"] = {}
     for rel, cache_dir in cache_dirs:
         label = f"rel{rel:g}"
+        # the smoke path records the skip without loading and refitting the
+        # 24 cached surrogates it would only discard (the load is the
+        # expensive part of this stage)
+        if quick:
+            numbers["conformal"][label] = {"cache_dir": cache_dir,
+                                           "status": "quick_skip"}
+            continue
         cals, missing = {}, []
         for tag in GV_CASES:
             cache = os.path.join(cache_dir, f"ensemble_{tag}_rel{rel:g}.npz")
@@ -190,12 +197,20 @@ def stage_conformal(numbers, cache_dirs, quick):
             cal.load_cache({k: v for k, v in np.load(cache).items()})
             cals[tag] = cal
         rec = {"cache_dir": cache_dir, "missing": missing}
-        if missing:
-            print(f"  {label}: {len(missing)} ensemble caches missing; "
-                  f"conformal leg limited to the cached cases", flush=True)
-        if quick or len(cals) < 4:
-            rec["status"] = "skipped" if len(cals) < 4 else "quick_skip"
+        # the conformal secondary axis is defined on the committed 8/16 split;
+        # run it only when every case of that split is cache-backed, so a
+        # partially populated cache records an explicit skip rather than
+        # silently computing the pinned mean_coverage/gap keys on a subset
+        # (which would also NaN out if a whole side of the split were absent)
+        split = list(LOW_MACH) + list(HIGH_MACH)
+        have = [t for t in split if t in cals]
+        if len(have) < len(split):
+            rec["status"] = "incomplete_split"
+            rec["split_cases"] = f"{len(have)}/{len(split)}"
             numbers["conformal"][label] = rec
+            print(f"  {label}: split {len(have)}/{len(split)} cache-backed;"
+                  f" conformal leg skipped (needs the full 8/16 split)",
+                  flush=True)
             continue
         rsc = ThermalConformalRescore(cals, LOW_MACH, HIGH_MACH, seed=SEED)
         rec["eta"] = rsc.eta
@@ -261,7 +276,12 @@ def main():
     with open(path, "w") as fh:
         json.dump(numbers, fh, indent=1, default=float)
     if arrays:
-        np.savez(os.path.join(args.results, "figure_arrays.npz"), **arrays)
+        # quick-suffix the PIT array file exactly as the numbers JSON is
+        # suffixed, so a --quick smoke run never overwrites the production
+        # arrays the committed figures are built from
+        arr_name = "figure_arrays_quick.npz" if args.quick \
+            else "figure_arrays.npz"
+        np.savez(os.path.join(args.results, arr_name), **arrays)
     print(f"wrote {path}", flush=True)
 
 

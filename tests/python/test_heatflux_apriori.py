@@ -222,3 +222,11 @@ def test_fit_and_evaluate_smoke():
             out2 = study.evaluate(model, CASE_HIGH, target, n_samples=16,
                                   sample_seed=11)
             assert out2["crps_y"] == out["crps_y"]
+            # the default (sample_seed=None) derives a stable seed from the
+            # evaluation identity, so scores stay call-order independent even
+            # when the caller omits the seed: two calls agree, and an
+            # intervening draw on the shared global RNG does not perturb them
+            d1 = study.evaluate(model, CASE_HIGH, target, n_samples=16)
+            model.sample(study.cases[CASE_LOW]["features"], n_per=8)
+            d2 = study.evaluate(model, CASE_HIGH, target, n_samples=16)
+            assert d1["crps_y"] == d2["crps_y"]
