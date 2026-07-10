@@ -80,6 +80,12 @@ target_link_libraries(test_dbns_injection PRIVATE btm_dbns)
 add_test(NAME dbns_injection COMMAND test_dbns_injection)
 set_tests_properties(dbns_injection PROPERTIES TIMEOUT 480 LABELS "verification;dbns")
 
+# ---- dbns_sst_wall: omega wall anchoring sustains an imposed turbulent layer ----
+add_executable(test_dbns_sst_wall cpp/test_dbns_sst_wall.cpp)
+target_link_libraries(test_dbns_sst_wall PRIVATE btm_dbns)
+add_test(NAME dbns_sst_wall COMMAND test_dbns_sst_wall)
+set_tests_properties(dbns_sst_wall PROPERTIES TIMEOUT 600 LABELS "verification;dbns")
+
 # ---- pytest target ----
 # Optional convenience target; the canonical way to run Python tests is
 # `pytest tests/python` from the repo root after building the .so.

@@ -56,6 +56,35 @@ DBNSSolver::DBNSSolver(const Mesh& mesh, const IdealGasEOS& eos,
     limiter_.assign(nc, std::array<double, 6>{});
     res_.assign(nc, StateVec{});
     dtCell_.assign(nc, 0.0);
+
+    // wall distance to the no-slip patches of THESE boundary conditions
+    // (the mesh's own wallDistance() is lazily populated and was empty for
+    // every density-based run, silently breaking the SST blending; and the
+    // generator's patch types need not match the imposed conditions, e.g.
+    // an imposed-shock top on a channel mesh)
+    std::vector<Vec3> wallPts;
+    for (int pi = 0; pi < mesh_.nPatches(); ++pi) {
+        const Patch& pat = mesh_.patch(pi);
+        if (!bcs_.has(pat.name)) continue;
+        BoundaryKind kind = bcs_.get(pat.name).kind;
+        if (kind != BoundaryKind::NoSlipAdiabatic
+            && kind != BoundaryKind::NoSlipIsothermal) continue;
+        for (FaceID fi : pat.faces)
+            wallPts.push_back(mesh_.face(fi).center);
+    }
+    wallDist_.assign(nc, 1e10);
+    if (!wallPts.empty()) {
+        for (int ci = 0; ci < nc; ++ci) {
+            const Vec3& c = mesh_.cell(ci).center;
+            double best = 1e30;
+            for (const Vec3& wpt : wallPts) {
+                double dx = c.x - wpt.x, dy = c.y - wpt.y;
+                double d2 = dx * dx + dy * dy;
+                if (d2 < best) best = d2;
+            }
+            wallDist_[ci] = std::sqrt(best);
+        }
+    }
 }
 
 void DBNSSolver::initUniform(const Primitive& V) {
@@ -81,7 +110,7 @@ void DBNSSolver::initField(const std::vector<Primitive>& V) {
 // --- properties: laminar viscosity (Sutherland) and SST eddy viscosity ------
 void DBNSSolver::updateProperties() {
     double a1 = sstCoeffs_.a1, bStar = sstCoeffs_.betaStar;
-    const auto& wallDist = mesh_.wallDistance();
+    const auto& wallDist = wallDist_;
     for (int ci = 0; ci < mesh_.nCells(); ++ci) {
         Primitive V = GasState::toPrimitive(W_[ci], eos_);
         double T = GasState::temperature(V, eos_);
@@ -433,7 +462,7 @@ void DBNSSolver::addBoundaryFlux(int faceId, int patchIdx) {
 void DBNSSolver::addTurbulenceSources() {
     if (!settings_.turbulent) return;
     double bStar = sstCoeffs_.betaStar, a1 = sstCoeffs_.a1;
-    const auto& wallDist = mesh_.wallDistance();
+    const auto& wallDist = wallDist_;
     for (int ci = 0; ci < mesh_.nCells(); ++ci) {
         Primitive V = GasState::toPrimitive(W_[ci], eos_);
         double rho = V.rho;
@@ -978,6 +1007,21 @@ void DBNSSolver::clampPositivity() {
         if (settings_.turbulent) {
             if (V.k < settings_.kFloor) { V.k = settings_.kFloor; fix = true; }
             if (V.omega < settings_.omegaFloor) { V.omega = settings_.omegaFloor; fix = true; }
+            // omega wall anchoring: the SST omega equation needs its singular
+            // near-wall value, and the wall ghost is zero-gradient (the
+            // boundary comment promised a BC no code implemented), so the
+            // viscous-sublayer analytic solution omega = 6 nu / (beta1 y^2)
+            // is imposed as a floor. It decays as 1/y^2 and binds only inside
+            // the sublayer (the automatic-wall-treatment limit); without it
+            // an imposed turbulent layer LAMINARIZES, which the interaction
+            // baseline bring-up measured as a laminar-like Cf decay.
+            const auto& wd = wallDist_;
+            if (ci < (int)wd.size()) {
+                double y = std::max(wd[ci], 1e-12);
+                double nu = muLam_[ci] / std::max(V.rho, rhoFloor_);
+                double omegaVis = 6.0 * nu / (sstCoeffs_.beta1 * y * y);
+                if (V.omega < omegaVis) { V.omega = omegaVis; fix = true; }
+            }
         } else { V.k = 0.0; V.omega = 0.0; }
         if (fix) W_[ci] = GasState::toConserved(V, eos_);
         else { W_[ci][I_RHOK] = V.rho * V.k; W_[ci][I_RHOW] = V.rho * V.omega; }
