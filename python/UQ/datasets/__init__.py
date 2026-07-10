@@ -16,6 +16,8 @@ from .periodic_hills import PeriodicHillsDNS, PEHILL_CASES
 from .gv_channel import GVChannelDNS, GV_CASES
 from .zdc_flatplate import FlatPlateDNS, ZDC_CASES
 from .ckm_channel import CKMChannelDNS, CKM_CASES
+from .sbli_interaction import SBLIInteractionDNS, SBLI_S_CASES
+from .supersonic_tbl import SupersonicTBLDNS, TBL_CASES
 
 __all__ = [
     "ChannelDNS", "CHANNEL_CASES",
@@ -27,4 +29,6 @@ __all__ = [
     "GVChannelDNS", "GV_CASES",
     "FlatPlateDNS", "ZDC_CASES",
     "CKMChannelDNS", "CKM_CASES",
+    "SBLIInteractionDNS", "SBLI_S_CASES",
+    "SupersonicTBLDNS", "TBL_CASES",
 ]
