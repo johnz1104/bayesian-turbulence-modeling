@@ -16,10 +16,12 @@ namespace py = pybind11;
 static py::dict dbnsFields(const dbns::DBNSSolver& s) {
     int nc = s.nCells();
     py::array_t<double> rho(nc), u(nc), v(nc), p(nc), T(nc), mach(nc), muT(nc);
+    py::array_t<double> k(nc), omega(nc);
     auto r = rho.mutable_unchecked<1>(); auto uu = u.mutable_unchecked<1>();
     auto vv = v.mutable_unchecked<1>(); auto pp = p.mutable_unchecked<1>();
     auto tt = T.mutable_unchecked<1>(); auto mm = mach.mutable_unchecked<1>();
     auto mt = muT.mutable_unchecked<1>();
+    auto kk = k.mutable_unchecked<1>(); auto om = omega.mutable_unchecked<1>();
     const IdealGasEOS& eos = s.eos();
     for (int i = 0; i < nc; ++i) {
         dbns::Primitive V = s.primitive(i);
@@ -27,10 +29,12 @@ static py::dict dbnsFields(const dbns::DBNSSolver& s) {
         double a = std::sqrt(eos.gamma * V.p / V.rho);
         r(i) = V.rho; uu(i) = V.u; vv(i) = V.v; pp(i) = V.p;
         tt(i) = Tc; mm(i) = std::sqrt(V.u * V.u + V.v * V.v) / a; mt(i) = s.eddyViscosity(i);
+        kk(i) = V.k; om(i) = V.omega;
     }
     py::dict d;
     d["rho"] = rho; d["u"] = u; d["v"] = v; d["p"] = p;
     d["T"] = T; d["mach"] = mach; d["muT"] = muT;
+    d["k"] = k; d["omega"] = omega;
     return d;
 }
 

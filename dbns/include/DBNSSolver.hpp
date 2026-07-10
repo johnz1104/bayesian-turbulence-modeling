@@ -137,6 +137,13 @@ private:
     // patch-local ordinal of each boundary face (per-face boundary profiles)
     std::vector<int> patchLocalIdx_;
 
+    // wall distance measured to the patches the BOUNDARY CONDITIONS mark as
+    // no-slip walls (the mesh's own lazily-computed distance is empty unless
+    // a caller populates it, and its patch types are the generator's guess;
+    // the turbulent path needs the true viscous walls). Computed once in the
+    // constructor; 1e10 everywhere when no no-slip patch exists.
+    std::vector<double> wallDist_;
+
     // scale-aware positivity floors, captured at initialisation so the
     // rescue values are sane at any unit scale (nondimensional shock tubes
     // and dimensional wall flows share this solver)
