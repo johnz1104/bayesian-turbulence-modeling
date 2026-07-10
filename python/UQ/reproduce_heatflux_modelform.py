@@ -177,41 +177,44 @@ def stage_conformal(numbers, cache_dirs, quick):
     from UQ.datasets.compressible_calibration import CompressibleCalibration
 
     numbers["conformal"] = {}
+    split = list(LOW_MACH) + list(HIGH_MACH)
     for rel, cache_dir in cache_dirs:
         label = f"rel{rel:g}"
-        # the smoke path records the skip without loading and refitting the
-        # 24 cached surrogates it would only discard (the load is the
-        # expensive part of this stage)
+        # the smoke path records the skip without touching the cache (the
+        # per-case DNS load + surrogate refit is the expensive part here)
         if quick:
             numbers["conformal"][label] = {"cache_dir": cache_dir,
                                            "status": "quick_skip"}
             continue
-        cals, missing = {}, []
-        for tag in GV_CASES:
-            cache = os.path.join(cache_dir, f"ensemble_{tag}_rel{rel:g}.npz")
-            if not os.path.isfile(cache):
-                missing.append(tag)
-                continue
-            cal = CompressibleCalibration(GVChannelDNS.load(tag),
-                                          rel_sigma=rel)
-            cal.load_cache({k: v for k, v in np.load(cache).items()})
-            cals[tag] = cal
-        rec = {"cache_dir": cache_dir, "missing": missing}
         # the conformal secondary axis is defined on the committed 8/16 split;
-        # run it only when every case of that split is cache-backed, so a
-        # partially populated cache records an explicit skip rather than
-        # silently computing the pinned mean_coverage/gap keys on a subset
-        # (which would also NaN out if a whole side of the split were absent)
-        split = list(LOW_MACH) + list(HIGH_MACH)
-        have = [t for t in split if t in cals]
-        if len(have) < len(split):
-            rec["status"] = "incomplete_split"
-            rec["split_cases"] = f"{len(have)}/{len(split)}"
-            numbers["conformal"][label] = rec
-            print(f"  {label}: split {len(have)}/{len(split)} cache-backed;"
+        # check cache-file PRESENCE for that split BEFORE loading and fitting
+        # any surrogate, so a partially populated cache records an explicit
+        # skip without burning the ~24 GP refits it would only discard (a
+        # subset would also silently compute the pinned mean_coverage/gap keys
+        # on fewer cases, or NaN out if a whole side of the split were absent)
+        present = {t for t in GV_CASES if os.path.isfile(
+            os.path.join(cache_dir, f"ensemble_{t}_rel{rel:g}.npz"))}
+        missing = [t for t in GV_CASES if t not in present]
+        if not all(t in present for t in split):
+            n_have = sum(t in present for t in split)
+            numbers["conformal"][label] = {
+                "cache_dir": cache_dir, "status": "incomplete_split",
+                "split_cases": f"{n_have}/{len(split)}", "missing": missing}
+            print(f"  {label}: split {n_have}/{len(split)} cache-backed;"
                   f" conformal leg skipped (needs the full 8/16 split)",
                   flush=True)
             continue
+        # the full split is cache-backed: load and fit the surrogates only now
+        cals = {}
+        for tag in GV_CASES:
+            if tag not in present:
+                continue
+            cal = CompressibleCalibration(GVChannelDNS.load(tag),
+                                          rel_sigma=rel)
+            cal.load_cache({k: v for k, v in np.load(os.path.join(
+                cache_dir, f"ensemble_{tag}_rel{rel:g}.npz")).items()})
+            cals[tag] = cal
+        rec = {"cache_dir": cache_dir, "missing": missing}
         rsc = ThermalConformalRescore(cals, LOW_MACH, HIGH_MACH, seed=SEED)
         rec["eta"] = rsc.eta
         for score in ThermalConformalRescore.SCORES:
@@ -223,6 +226,21 @@ def stage_conformal(numbers, cache_dirs, quick):
                       f"coverage {run['mean_coverage']:.3f} "
                       f"(gap {run['gap']:.3f})", flush=True)
         numbers["conformal"][label] = rec
+
+
+def write_outputs(results_dir, name, numbers, arrays, quick):
+    """Persist the numbers JSON and the (quick-suffixed) PIT arrays. Called
+    after the a-priori stage AND at the end, so a failure in a later stage
+    (for example a non-converged baseline in the conformal leg) cannot discard
+    the expensive already-computed a-priori output."""
+    with open(os.path.join(results_dir, name), "w") as fh:
+        json.dump(numbers, fh, indent=1, default=float)
+    if arrays:
+        # quick-suffix the PIT array file exactly as the numbers JSON is
+        # suffixed, so a --quick smoke run never overwrites the production
+        # arrays the committed figures are built from
+        arr_name = "figure_arrays_quick.npz" if quick else "figure_arrays.npz"
+        np.savez(os.path.join(results_dir, arr_name), **arrays)
 
 
 def main():
@@ -267,21 +285,16 @@ def main():
 
     if args.stage in ("all", "apriori"):
         stage_apriori(study, numbers, arrays, args.quick)
+        # persist the expensive a-priori output before the conformal stage,
+        # so a conformal-stage failure cannot discard it
+        write_outputs(args.results, name, numbers, arrays, args.quick)
     if args.stage in ("all", "conformal"):
         print("stage 6: normalized conformal re-scoring", flush=True)
         stage_conformal(numbers,
                         ((0.005, args.cache), (0.01, args.cache_rel01)),
                         args.quick)
 
-    with open(path, "w") as fh:
-        json.dump(numbers, fh, indent=1, default=float)
-    if arrays:
-        # quick-suffix the PIT array file exactly as the numbers JSON is
-        # suffixed, so a --quick smoke run never overwrites the production
-        # arrays the committed figures are built from
-        arr_name = "figure_arrays_quick.npz" if args.quick \
-            else "figure_arrays.npz"
-        np.savez(os.path.join(args.results, arr_name), **arrays)
+    write_outputs(args.results, name, numbers, arrays, args.quick)
     print(f"wrote {path}", flush=True)
 
 
