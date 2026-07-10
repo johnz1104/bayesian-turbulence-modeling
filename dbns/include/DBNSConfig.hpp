@@ -90,6 +90,18 @@ struct BoundarySpec {
     double       wallTemp = 300; // for NoSlipIsothermal
     double       backPressure = 101325.0;  // for SubsonicOutflow
     Vec3         wallVelocity{}; // tangential wall velocity (moving wall / Couette)
+    // Optional spatially varying prescribed state for SupersonicInflow and
+    // FixedState patches (e.g. a measured incoming boundary-layer profile, or
+    // an imposed-shock top boundary with pre and post-shock segments), one
+    // Primitive per patch face in the patch's own face order. Empty means the
+    // uniform `freestream` state applies.
+    std::vector<Primitive> profile;
+    // Optional spatially varying wall temperature for NoSlipIsothermal
+    // patches, one value per patch face in the patch's own face order (the
+    // interaction data's measured wall-temperature row: recovery upstream of
+    // the thermal switch, the imposed s-condition downstream). Empty means
+    // the uniform `wallTemp` applies.
+    std::vector<double> wallTempProfile;
 };
 
 // Container mapping patch names to their boundary specs.

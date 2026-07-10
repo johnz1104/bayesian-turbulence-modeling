@@ -37,6 +37,19 @@ struct SolveReport {
     std::vector<double> residualHistory;   // density-equation L2 residual per report
 };
 
+// Diagnostics of the model-form injection (mirrors the incompressible
+// solver's record): the per-residual-evaluation realizability re-check of the
+// injected anisotropy target, recorded rather than silently projected, so a
+// study can report violations (the caller projects before setting).
+struct InjectionDiagnostics {
+    bool   active = false;
+    int    checkedIters = 0;
+    bool   allRealizable = true;
+    double maxViolation = 0.0;   // worst negative barycentric margin seen
+    double maxDb = 0.0;          // max |b_target| component magnitude
+    double maxDq = 0.0;          // max |dq_target| component magnitude
+};
+
 class DBNSSolver {
 public:
     DBNSSolver(const Mesh& mesh,
@@ -67,6 +80,27 @@ public:
     double laminarViscosity(int ci) const { return muLam_[ci]; } // mu [Pa s] (honours constMu)
     const Mesh& mesh() const { return mesh_; }
     const IdealGasEOS& eos() const { return eos_; }
+
+    // --- model-form injection (the deferred-correction coupling) ---
+    // Set the sampled closure correction: per-cell target anisotropy b
+    // (nCells x 6, ordered xx, yy, zz, xy, xz, yz) and per-cell turbulent
+    // heat-flux correction dq (nCells x 2, x and y components, SOLVER units
+    // of a Favre temperature flux, <rho u_i''T''>/<rho> [m/s K]). The stress
+    // difference enters the momentum fluxes as an explicit deferred
+    // correction against the Boussinesq term (running k, mu_t and strain, so
+    // a target equal to the solver's own Boussinesq anisotropy reproduces the
+    // baseline identically); with energyReach the consistent stress work and
+    // the injected heat flux (against the implicit gradient-diffusion term)
+    // enter the energy equation, the heat-flux reach of the pre-registered
+    // scheme. Values are COPIED (no caller lifetime coupling). The caller
+    // projects b into the realizable set first; the solver re-checks the
+    // barycentric margin every residual evaluation and records violations in
+    // the diagnostics rather than silently projecting.
+    void setTargetCorrection(const std::vector<double>& b6,
+                             const std::vector<double>& dq2,
+                             bool energyReach = true);
+    void clearTargetCorrection();
+    const InjectionDiagnostics& injectionDiagnostics() const { return injDiag_; }
 
     // --- MMS support ---
     // Inject a constant-in-time per-cell source S so the discrete residual
@@ -100,6 +134,9 @@ private:
     std::vector<StateVec>   res_;            // residual accumulator
     std::vector<double>     dtCell_;         // local time step
 
+    // patch-local ordinal of each boundary face (per-face boundary profiles)
+    std::vector<int> patchLocalIdx_;
+
     // scale-aware positivity floors, captured at initialisation so the
     // rescue values are sane at any unit scale (nondimensional shock tubes
     // and dimensional wall flows share this solver)
@@ -127,6 +164,13 @@ private:
     void computeFaceSpectralRadii();         // fills lamFace_
     std::vector<double>   lamFace_;          // face spectral radius (conv + visc)
     std::vector<StateVec> dW_;               // LU-SGS state-increment workspace
+
+    // model-form injection state (values owned by the solver)
+    void addInjectionFluxes();               // internal-face deferred correction
+    std::vector<double>   bTarget6_;         // nCells x 6 target anisotropy
+    std::vector<double>   dqTarget2_;        // nCells x 2 heat-flux correction
+    bool                  injectEnergyReach_ = true;
+    InjectionDiagnostics  injDiag_;
 
     // reconstruct primitive at a face from cell ci toward face center xf
     Primitive reconstruct(int ci, const Vec3& xf) const;

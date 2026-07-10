@@ -49,6 +49,14 @@ public:
 
     // Compute the wall records on a named patch (ordered by face index).
     WallRecord wall(const std::string& patchName, double wallTemp) const {
+        return wallProfile(patchName, {}, wallTemp);
+    }
+
+    // Per-face wall temperatures (the interaction data's measured
+    // wall-temperature row); entries beyond the vector fall back to wallTemp.
+    WallRecord wallProfile(const std::string& patchName,
+                           const std::vector<double>& wallTemps,
+                           double wallTemp) const {
         const Mesh& mesh = solver_.mesh();
         const IdealGasEOS& eos = solver_.eos();
         PatchID pid = mesh.patchByName(patchName);
@@ -60,9 +68,12 @@ public:
         double Taw = ref_.T * (1.0 + r * 0.5 * (eos.gamma - 1.0) * Minf * Minf);
 
         WallRecord rec;
+        size_t j = 0;
         for (FaceID fi : pat.faces) {
             const Face& f = mesh.face(fi);
             int P = f.owner;
+            double Tw = (j < wallTemps.size()) ? wallTemps[j] : wallTemp;
+            ++j;
             Primitive V = solver_.primitive(P);
             double T1 = V.p / (V.rho * eos.R);
             // use the solver's own viscosity (honours constMu) so the wall
@@ -82,9 +93,9 @@ public:
 
             // wall heat flux: conduction from the near-wall cell to the wall
             double lamEff = eos.Cp() * (muLam / eos.Pr + muT / eos.Pr_T);
-            double qw = lamEff * (T1 - wallTemp) / delta;
+            double qw = lamEff * (T1 - Tw) / delta;
 
-            double denomSt = ref_.rho * ref_.U * eos.Cp() * (Taw - wallTemp);
+            double denomSt = ref_.rho * ref_.U * eos.Cp() * (Taw - Tw);
             double St = (std::abs(denomSt) > 1e-30) ? qw / denomSt : 0.0;
 
             rec.x.push_back(f.center.x);
