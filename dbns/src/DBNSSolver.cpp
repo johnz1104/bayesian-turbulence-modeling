@@ -47,11 +47,21 @@ DBNSSolver::DBNSSolver(const Mesh& mesh, const IdealGasEOS& eos,
 void DBNSSolver::initUniform(const Primitive& V) {
     for (int ci = 0; ci < mesh_.nCells(); ++ci)
         W_[ci] = GasState::toConserved(V, eos_);
+    // scale-aware positivity floors (units differ by orders across the test
+    // ladder: nondimensional shock tubes against dimensional wall flows)
+    rhoFloor_ = 1e-6 * V.rho;
+    pFloor_ = 1e-6 * V.p;
 }
 
 void DBNSSolver::initField(const std::vector<Primitive>& V) {
-    for (int ci = 0; ci < mesh_.nCells(); ++ci)
+    double rhoMax = 0.0, pMax = 0.0;
+    for (int ci = 0; ci < mesh_.nCells(); ++ci) {
         W_[ci] = GasState::toConserved(V[ci], eos_);
+        rhoMax = std::max(rhoMax, V[ci].rho);
+        pMax = std::max(pMax, V[ci].p);
+    }
+    rhoFloor_ = 1e-6 * rhoMax;
+    pFloor_ = 1e-6 * pMax;
 }
 
 // --- properties: laminar viscosity (Sutherland) and SST eddy viscosity ------
@@ -342,10 +352,15 @@ void DBNSSolver::addBoundaryFlux(int faceId, int patchIdx) {
         // No-slip viscous wall flux from one-sided near-wall gradients.
         double delta = std::max(f.delta, 1e-12);
         double muEff = muLam_[P] + muT_[P];
-        // tangential velocity gradient relative to the (possibly moving) wall
+        // velocity gradient along the OUTWARD normal (cell value to wall
+        // value over delta), matching the energy line's dTdn convention;
+        // tau.n_out is then the force per area the wall exerts on the cell:
+        // a stationary wall decelerates, a moving wall drags toward its
+        // speed. (The inward-gradient form had the opposite sign, a latent
+        // defect no committed case exercised: every prior viscous-wall rung
+        // was gated on the implicit driver.)
         Vec3 Uw = spec.wallVelocity;
-        Vec3 Uc{VP.u - Uw.x, VP.v - Uw.y, 0.0};
-        Vec3 dUdn = Uc / delta;                  // (U_cell - U_wall)/delta
+        Vec3 dUdn{(Uw.x - VP.u) / delta, (Uw.y - VP.v) / delta, 0.0};
         double dUdn_n = dUdn.dot(f.normal);
         // tau.n = mu_eff [ dU/dn + 1/3 (dU/dn . n) n ]
         Vec3 taun = (dUdn + f.normal * (dUdn_n / 3.0)) * muEff;
@@ -472,7 +487,13 @@ void DBNSSolver::computeResidual() {
         }
 }
 
-void DBNSSolver::computeTimeStep() {
+void DBNSSolver::computeTimeStep(double cfl, bool includeViscous) {
+    // includeViscous: the explicit march must respect the viscous stability
+    // limit (spectral radius ~ 1/dy^2, the documented wall-clustered-mesh
+    // blocker); the implicit march drops it from the STEP SIZE and absorbs
+    // the stiffness in its diagonal instead, which is the whole point of the
+    // implicit driver (a viscous-limited pseudo-time step would freeze the
+    // wall cells at any Courant number).
     for (int ci = 0; ci < mesh_.nCells(); ++ci) {
         Primitive V = GasState::toPrimitive(W_[ci], eos_);
         double a = GasState::soundSpeed(V, eos_);
@@ -483,13 +504,43 @@ void DBNSSolver::computeTimeStep() {
             double sgn = (f.owner == ci) ? 1.0 : -1.0;
             double un = (V.u * f.normal.x + V.v * f.normal.y) * sgn;
             lamC += (std::abs(un) + a) * f.area;
-            if (settings_.viscous) {
+            if (settings_.viscous && includeViscous) {
                 double muEff = muLam_[ci] + muT_[ci];
                 double diff = std::max(4.0 / 3.0, eos_.gamma / eos_.Pr) * muEff / V.rho;
                 lamV += diff * f.area * f.area / std::max(Vol, 1e-30);
             }
         }
-        dtCell_[ci] = settings_.cfl * Vol / std::max(lamC + 2.0 * lamV, 1e-30);
+        dtCell_[ci] = cfl * Vol / std::max(lamC + 2.0 * lamV, 1e-30);
+    }
+}
+
+// face spectral radii for the LU-SGS diagonal and off-diagonal relaxation:
+// convective |u.n| + a from the larger side, viscous mirroring the explicit
+// stability estimate (diff A / V), both entering as lam with velocity units
+// so that lam * A matches the V/dt aggregate.
+void DBNSSolver::computeFaceSpectralRadii() {
+    int nF = mesh_.nFaces();
+    if ((int)lamFace_.size() != nF) lamFace_.assign(nF, 0.0);
+    double diffFac = std::max(4.0 / 3.0, eos_.gamma / eos_.Pr);
+    for (int fi = 0; fi < nF; ++fi) {
+        const Face& f = mesh_.face(fi);
+        Primitive VP = GasState::toPrimitive(W_[f.owner], eos_);
+        double unP = VP.u * f.normal.x + VP.v * f.normal.y;
+        double lam = std::abs(unP) + GasState::soundSpeed(VP, eos_);
+        double nuP = (muLam_[f.owner] + muT_[f.owner]) / VP.rho;
+        double volP = vol_[f.owner];
+        double nu = nuP, vol = volP;
+        if (f.neighbor >= 0) {
+            Primitive VN = GasState::toPrimitive(W_[f.neighbor], eos_);
+            double unN = VN.u * f.normal.x + VN.v * f.normal.y;
+            lam = std::max(lam, std::abs(unN) + GasState::soundSpeed(VN, eos_));
+            double nuN = (muLam_[f.neighbor] + muT_[f.neighbor]) / VN.rho;
+            nu = 0.5 * (nuP + nuN);
+            vol = 0.5 * (volP + vol_[f.neighbor]);
+        }
+        if (settings_.viscous)
+            lam += 2.0 * diffFac * nu * f.area / std::max(vol, 1e-30);
+        lamFace_[fi] = lam;
     }
 }
 
@@ -503,6 +554,9 @@ double DBNSSolver::rhoResidualNorm() const {
 }
 
 SolveReport DBNSSolver::solve() {
+    if (settings_.timeMode == TimeMode::Steady && settings_.implicitSteady)
+        return solveImplicitSteady();
+
     SolveReport rep;
     int nc = mesh_.nCells();
     double t = 0.0;
@@ -515,7 +569,7 @@ SolveReport DBNSSolver::solve() {
     int iter = 0;
     for (; iter < settings_.maxIterations; ++iter) {
         updateProperties();
-        computeTimeStep();
+        computeTimeStep(settings_.cfl, true);
         double dtGlobal = 1e30;
         if (settings_.timeMode == TimeMode::Unsteady) {
             for (int ci = 0; ci < nc; ++ci) dtGlobal = std::min(dtGlobal, dtCell_[ci]);
@@ -593,14 +647,186 @@ SolveReport DBNSSolver::solve() {
     return rep;
 }
 
+// --- implicit (LU-SGS) steady march ------------------------------------------
+// Backward-Euler pseudo-time on the second-order residual:
+//   (V/dt) dW + dRes(dW) = -Res(W^n),
+// with the face-flux Jacobian replaced by its spectral-radius-split
+// first-order (Rusanov) form (Yoon and Jameson 1988). Per face between i and
+// its neighbor j (outward normal n from i):
+//   dRes_i ~= 0.5 A [ dFn(W_i) + lam I ] dW_i + 0.5 A [ dFn(W_j) - lam I ] dW_j,
+// the diagonal bounded by its spectral radius (drop dFn(W_i), keep lam), the
+// off-diagonal applied matrix-free as Fn(W_j + dW_j) - Fn(W_j). Two sweeps:
+//   forward   dW*_i = D^-1 ( -Res_i - sum_{j<i} c_ij(dW*_j) )
+//   backward  dW_i  = dW*_i - D^-1 sum_{j>i} c_ij(dW_j)
+// with c_ij(dW_j) = 0.5 A ( Fn(W_j+dW_j) - Fn(W_j) - lam dW_j ) and
+//   D_i = V/dt + 0.5 sum_f lam_f A_f  (+ the point-implicit SST destruction
+// on the k and omega rows: d(beta* rho k w)/d(rho k) = beta* w and
+// d(beta rho w^2)/d(rho w) = 2 beta w, with beta bounded by max(beta1, beta2)
+// so the diagonal over-estimates the blended value, which only stabilizes).
+// Boundary faces couple to no unknown neighbor; their lam enters the diagonal.
+SolveReport DBNSSolver::solveImplicitSteady() {
+    SolveReport rep;
+    int nc = mesh_.nCells();
+    double res0 = -1.0;
+    if ((int)dW_.size() != nc) dW_.assign(nc, StateVec{});
+
+    double betaMax = std::max(sstCoeffs_.beta1, sstCoeffs_.beta2);
+    double bStar = sstCoeffs_.betaStar;
+
+    // matrix-free off-diagonal action of neighbor `other` on cell ci
+    auto neighborTerm = [&](int ci, int other, FaceID fi) -> StateVec {
+        const Face& f = mesh_.face(fi);
+        double sgn = (f.owner == ci) ? 1.0 : -1.0;
+        double nx = f.normal.x * sgn, ny = f.normal.y * sgn;
+        double A = f.area, lam = lamFace_[fi];
+        StateVec Wp;
+        for (int i = 0; i < NVAR; ++i) Wp[i] = W_[other][i] + dW_[other][i];
+        StateVec out{};
+        if (GasState::admissible(Wp, eos_)) {
+            Primitive V0 = GasState::toPrimitive(W_[other], eos_);
+            Primitive V1 = GasState::toPrimitive(Wp, eos_);
+            StateVec F0 = GasState::normalFlux(V0, nx, ny, eos_);
+            StateVec F1 = GasState::normalFlux(V1, nx, ny, eos_);
+            for (int i = 0; i < NVAR; ++i)
+                out[i] = 0.5 * A * (F1[i] - F0[i] - lam * dW_[other][i]);
+        } else {
+            // inadmissible perturbed state: keep only the relaxation part
+            for (int i = 0; i < NVAR; ++i)
+                out[i] = -0.5 * A * lam * dW_[other][i];
+        }
+        return out;
+    };
+
+    std::vector<StateVec> D(nc);
+    std::vector<StateVec> Wsave(nc);
+    // step-rejection backoff: an inadmissible update is rejected (state
+    // restored) and the CFL scaled down; it recovers multiplicatively on
+    // success. Persistent rejection classifies as Diverged.
+    double cflScale = 1.0;
+    int consecutiveRejects = 0;
+    // the uniform initial state has a machine-zero density residual, so the
+    // relative-convergence normalizer is the residual maximum over the ramp
+    // (frozen afterwards), not the first iterate
+    int freezeIter = std::max(settings_.cflRampIters, 50);
+    // the hard (eps = 0) Venkatakrishnan limiter chatters at steady state and
+    // stalls deep convergence; freezing it once the residual has dropped two
+    // orders is the standard remedy and changes no converged answer
+    bool limiterFrozen = false;
+    int iter = 0;
+    for (; iter < settings_.maxIterations; ++iter) {
+        // linear CFL ramp: low while the transient is strong, then the target
+        double frac = (settings_.cflRampIters > 0)
+            ? std::min(1.0, double(iter) / settings_.cflRampIters) : 1.0;
+        double cfl = cflScale * (settings_.cflRampStart
+                   + frac * (settings_.cflImplicit - settings_.cflRampStart));
+
+        updateProperties();
+        computeTimeStep(cfl, false);   // convective step; viscosity in the diagonal
+        computeGradients();
+        if (!limiterFrozen) computeLimiters();
+        computeResidual();
+        computeFaceSpectralRadii();
+
+        for (int ci = 0; ci < nc; ++ci) {
+            double sumLam = 0.0;
+            for (FaceID fi : mesh_.cell(ci).faces) {
+                const Face& f = mesh_.face(fi);
+                // boundary ghosts move with the interior state, so their
+                // Jacobian falls fully on this cell: full weight there,
+                // half on internal faces (the split Rusanov diagonal)
+                double weight = (f.neighbor < 0) ? 1.0 : 0.5;
+                sumLam += weight * lamFace_[fi] * f.area;
+            }
+            double base = vol_[ci] / std::max(dtCell_[ci], 1e-30)
+                        + sumLam;
+            for (int i = 0; i < NVAR; ++i) D[ci][i] = base;
+            if (settings_.turbulent) {
+                Primitive V = GasState::toPrimitive(W_[ci], eos_);
+                double w = std::max(V.omega, settings_.omegaFloor);
+                D[ci][I_RHOK] += vol_[ci] * bStar * w;
+                D[ci][I_RHOW] += vol_[ci] * 2.0 * betaMax * w;
+            }
+        }
+
+        // forward sweep (lower neighbors already updated this sweep)
+        for (int ci = 0; ci < nc; ++ci) {
+            StateVec rhs;
+            for (int i = 0; i < NVAR; ++i) rhs[i] = -res_[ci][i];
+            for (FaceID fi : mesh_.cell(ci).faces) {
+                const Face& f = mesh_.face(fi);
+                if (f.neighbor < 0) continue;
+                int other = (f.owner == ci) ? f.neighbor : f.owner;
+                if (other >= ci) continue;
+                StateVec c = neighborTerm(ci, other, fi);
+                for (int i = 0; i < NVAR; ++i) rhs[i] -= c[i];
+            }
+            for (int i = 0; i < NVAR; ++i) dW_[ci][i] = rhs[i] / D[ci][i];
+        }
+        // backward sweep (upper neighbors carry their final increments)
+        for (int ci = nc - 1; ci >= 0; --ci) {
+            StateVec corr{};
+            for (FaceID fi : mesh_.cell(ci).faces) {
+                const Face& f = mesh_.face(fi);
+                if (f.neighbor < 0) continue;
+                int other = (f.owner == ci) ? f.neighbor : f.owner;
+                if (other <= ci) continue;
+                StateVec c = neighborTerm(ci, other, fi);
+                for (int i = 0; i < NVAR; ++i) corr[i] += c[i];
+            }
+            for (int i = 0; i < NVAR; ++i) dW_[ci][i] -= corr[i] / D[ci][i];
+        }
+
+        Wsave = W_;
+        for (int ci = 0; ci < nc; ++ci)
+            for (int i = 0; i < NVAR; ++i) W_[ci][i] += dW_[ci][i];
+
+        bool admissible = true;
+        for (int ci = 0; ci < nc; ++ci)
+            if (!GasState::admissible(W_[ci], eos_)) { admissible = false; break; }
+        if (!admissible) {
+            W_ = Wsave;                     // reject the step, back the CFL off
+            cflScale *= 0.5;
+            if (++consecutiveRejects > 20) {
+                rep.status = EvaluationStatus::Diverged;
+                rep.iterations = iter;
+                return rep;
+            }
+            continue;
+        }
+        consecutiveRejects = 0;
+        cflScale = std::min(1.0, cflScale * 1.5);
+        clampPositivity();
+
+        double rn = rhoResidualNorm();
+        if (iter <= freezeIter || res0 < 0.0)
+            res0 = std::max(res0, std::max(rn, 1e-30));
+        if (settings_.verbose && (iter % settings_.reportInterval == 0))
+            std::printf("  [lusgs] iter %6d  cfl %.1f  res_rho %.3e (rel %.3e)\n",
+                        iter, cfl, rn, rn / res0);
+        if (iter % settings_.reportInterval == 0)
+            rep.residualHistory.push_back(rn);
+        if (iter > freezeIter && !limiterFrozen && rn / res0 < 1e-2)
+            limiterFrozen = true;
+        if (iter > freezeIter && rn / res0 < settings_.convergenceTol) {
+            rep.status = EvaluationStatus::Converged;
+            break;
+        }
+    }
+    if (rep.status == EvaluationStatus::Unknown)
+        rep.status = EvaluationStatus::Unconverged;
+    rep.iterations = iter;
+    rep.finalResidual = (res0 > 0.0) ? rhoResidualNorm() / res0 : 0.0;
+    return rep;
+}
+
 // floor density / pressure / turbulence to keep states physical
 void DBNSSolver::clampPositivity() {
     for (int ci = 0; ci < mesh_.nCells(); ++ci) {
         StateVec& W = W_[ci];
-        if (W[I_RHO] < 1e-10) W[I_RHO] = 1e-10;
+        if (W[I_RHO] < rhoFloor_) W[I_RHO] = rhoFloor_;
         Primitive V = GasState::toPrimitive(W, eos_);
         bool fix = false;
-        if (!(V.p > 0.0)) { V.p = 1.0; fix = true; }
+        if (!(V.p > pFloor_)) { V.p = pFloor_; fix = true; }
         if (settings_.turbulent) {
             if (V.k < settings_.kFloor) { V.k = settings_.kFloor; fix = true; }
             if (V.omega < settings_.omegaFloor) { V.omega = settings_.omegaFloor; fix = true; }

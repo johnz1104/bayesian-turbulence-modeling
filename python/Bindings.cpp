@@ -657,7 +657,11 @@ PYBIND11_MODULE(rans_sst_py, m) {
         .def_readwrite("const_mu", &DBNSSettings::constMu)
         .def_readwrite("compressibility", &DBNSSettings::compressibility)
         .def_readwrite("rk_stages", &DBNSSettings::rkStages)
-        .def_readwrite("verbose", &DBNSSettings::verbose);
+        .def_readwrite("verbose", &DBNSSettings::verbose)
+        .def_readwrite("implicit_steady", &DBNSSettings::implicitSteady)
+        .def_readwrite("cfl_implicit", &DBNSSettings::cflImplicit)
+        .def_readwrite("cfl_ramp_start", &DBNSSettings::cflRampStart)
+        .def_readwrite("cfl_ramp_iters", &DBNSSettings::cflRampIters);
 
     py::class_<ReferenceState>(m, "ReferenceState")
         .def(py::init<>())
