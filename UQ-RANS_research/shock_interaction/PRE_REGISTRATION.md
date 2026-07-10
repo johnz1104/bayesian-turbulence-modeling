@@ -591,3 +591,61 @@ Coleman, Kim and Moser, Journal of Fluid Mechanics 305 (1995) 159-183; Zhang,
 Duan and Choudhari, AIAA Journal 56(11) (2018) 4297-4311,
 doi:10.2514/1.J057296. Raw fields stay local and gitignored; only manifest
 entries and curated evidence are tracked.
+
+## Dated addendum (2026-07-10): loader-verification amendments, fixed before any extraction
+
+Confirmed 2026-07-10, after the loaders first read the raw files and before
+any discrepancy extraction, model fit, or coupled run existed. Every pinned
+constant below matches what the data supports; the criteria, splits,
+thresholds and claims above are unchanged.
+
+1. Upstream reference station x* = -7 (was -10). Measured with the loaders:
+   the heated campaign grows its layer under an adiabatic wall and switches
+   to the s-condition INSIDE the saved fields (wall at recovery temperature
+   for x* < -10.5, half-switch at -8.97, established by -8, matching the
+   paper's switch station converted to reference lengths), and the widest
+   interaction onset is -5.16 (s = 1.9). The pre-registered -10 sits on the
+   ramp; -7 is post-switch for every case and upstream of every onset.
+   Measured reference states at -7: wall temperatures within 0.1 percent of
+   s times the recovery value for every s; the adiabatic dataset's
+   cf-and-wall-density friction velocity agrees with its tabulated u_tau
+   column to 0.02 percent.
+2. Landmark source. Onset and shock position keep their pinned rules but are
+   read from the field's own wall-pressure row (validated against the
+   healthy wall series to 0.02 reference lengths), available for every case
+   and every solve. Reason: the s = 1.0 wall series' pressure column is
+   unusable as pressure (integer-quantized, drifting 30 percent where the
+   zero-pressure-gradient plateau belongs; its cf column is healthy), so
+   that case's wall-pressure truth comes from its field wall row and from
+   the adiabatic campaign's series, which the coupled leg already names as
+   the adiabatic fold's second truth surface.
+3. Region refinement for the heated fields. The upstream region splits at
+   the measured thermal switch: the scored upstream-attached region is
+   post-switch pre-onset; the pre-switch zone (the same adiabatic incoming
+   layer in all five cases) is a labeled cross-case consistency view, not a
+   scored region. The coupled baseline solves impose the same
+   adiabatic-then-isothermal wall switch at the measured station, so
+   upstream boundary-condition mismatch cannot masquerade as model-form
+   discrepancy.
+4. Anchor labeling. The per-dataset modeled-sigma floors use the
+   self-consistency anchors (the momentum-integral residual, measured 1.0
+   percent; the budget-closure residuals, measured 0.5 to 4.3 percent of
+   peak production; the incoming-profile van-Driest residual, 0.4 percent).
+   The cross-campaign adiabatic residual (median relative cf 9.3 percent,
+   median absolute Cp 0.013 over the shared window) is the between-campaigns
+   spread: it floors only comparisons that mix the two campaigns (the
+   adiabatic fold's borrowed wall-pressure truth), not within-dataset
+   scoring, since it compounds the campaigns' Reynolds-number difference
+   with statistical convergence.
+5. Scope decision 8 activated. The spatial strain-history feature ablation
+   is scoped IN as a labeled secondary a-priori leg exactly as specified
+   there: one added conditioning feature, the same splits, no a-posteriori
+   use; a null is a finding.
+
+Measured constants recorded for reuse (the loader tests assert them):
+recovery wall temperature 1.9318 T_inf (both campaigns agree to 0.1
+percent); interaction onsets -2.38 (adiabatic 2011) and -2.46, -2.93, -3.39,
+-4.15, -5.16 (s = 0.5, 0.75, 1.0, 1.4, 1.9); the separation bubble growing
+monotonically with wall heating (0.4 to 4.1 reference lengths between the cf
+sign crossings); the adiabatic 2011 interaction origin at raw x = 51.25 (its
+half-rise landmark).
