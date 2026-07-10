@@ -55,6 +55,18 @@ struct DBNSSettings {
 
     double kFloor     = 1e-12;      // turbulence positivity floors
     double omegaFloor = 1e-3;
+
+    // Implicit (LU-SGS) steady driver: matrix-free backward-Euler pseudo-time
+    // with lower-upper symmetric Gauss-Seidel sweeps (Yoon and Jameson 1988).
+    // The fix for the explicit march's viscous stiffness: the viscous spectral
+    // radius scales as 1/dy^2 on wall-clustered meshes, so explicit local time
+    // stepping cannot converge viscous-dominated steady states (documented in
+    // the verification suite); the implicit diagonal absorbs that stiffness.
+    // Only the Steady time mode consults these.
+    bool   implicitSteady = false;
+    double cflImplicit    = 100.0;  // target implicit CFL (orders above explicit)
+    double cflRampStart   = 2.0;    // CFL at the first iteration
+    int    cflRampIters   = 200;    // linear ramp length to cflImplicit
 };
 
 // Boundary-condition kinds.  Wall thermal condition is split into adiabatic and

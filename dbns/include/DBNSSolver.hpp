@@ -100,6 +100,12 @@ private:
     std::vector<StateVec>   res_;            // residual accumulator
     std::vector<double>     dtCell_;         // local time step
 
+    // scale-aware positivity floors, captured at initialisation so the
+    // rescue values are sane at any unit scale (nondimensional shock tubes
+    // and dimensional wall flows share this solver)
+    double rhoFloor_ = 1e-10;
+    double pFloor_ = 1e-10;
+
     // pipeline stages
     void updateProperties();                 // muLam, muT, SST blending
     void computeGradients();
@@ -110,9 +116,17 @@ private:
     void addViscousFace(int faceId);         // internal-face viscous contribution
     void addBoundaryFlux(int faceId, int patchIdx);
     void addTurbulenceSources();
-    void computeTimeStep();
+    void computeTimeStep(double cfl, bool includeViscous);
     void clampPositivity();
     double rhoResidualNorm() const;
+
+    // implicit (LU-SGS) steady march: matrix-free backward-Euler pseudo-time
+    // with lower-upper symmetric Gauss-Seidel sweeps on the spectral-radius-
+    // split first-order Jacobian, point-implicit SST destruction diagonal
+    SolveReport solveImplicitSteady();
+    void computeFaceSpectralRadii();         // fills lamFace_
+    std::vector<double>   lamFace_;          // face spectral radius (conv + visc)
+    std::vector<StateVec> dW_;               // LU-SGS state-increment workspace
 
     // reconstruct primitive at a face from cell ci toward face center xf
     Primitive reconstruct(int ci, const Vec3& xf) const;
