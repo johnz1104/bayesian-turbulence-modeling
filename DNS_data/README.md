@@ -858,10 +858,25 @@ out-of-distribution axis live here.
     components), which no other compiled interaction source provides.
   - wall_stat/wallstat_s.dat per s: x*, cf, pw, pwrms, St over x* in
     [-40, 15.2]. Verified quirks, load-bearing: the s = 1.0 file has FOUR
-    columns (no Stanton column at all, adiabatic wall), and its pw
-    normalization differs from the other four (order 132 versus order 1
-    upstream), so wall pressure is reduced to Cp against each file's own
-    upstream plateau rather than an assumed reference pressure.
+    columns (no Stanton column at all, adiabatic wall), and its pressure
+    column is UNUSABLE AS PRESSURE (integer-quantized values drifting about
+    30 percent across the upstream region where the zero-pressure-gradient
+    plateau requires a constant; verified at loader bring-up; its cf column
+    is healthy): that case's wall pressure and pressure landmarks come from
+    the field's own wall row and from the adiabatic campaign of dataset 11,
+    per the shock-interaction pre-registration addendum. For the other four
+    cases wall pressure is reduced to Cp against each file's own upstream
+    plateau rather than an assumed reference pressure.
+- Wall-thermal layout (measured at loader bring-up, load-bearing for any
+  consumer): the layer develops under an ADIABATIC wall and switches to the
+  imposed s-condition INSIDE the saved window: wall at the recovery
+  temperature (1.9318 T_inf, both campaigns agree) for x* < -10.5, half-switch
+  at -8.97, established by -8; the wall temperature at the post-switch plateau
+  equals s times the recovery value to 0.1 percent for every s. Interaction
+  onsets sit at -2.46, -2.93, -3.39, -4.15, -5.16 (s = 0.5 to 1.9), so the
+  post-switch pre-onset attached window is short for the heated cases.
+  Consumers split the upstream region at the switch, and coupled baseline
+  solves impose the same adiabatic-then-isothermal wall.
 - File format: plain text, Tecplot zone header on the 2-D fields; free-stream
   nondimensionalization as dataset 11. The two grid families (3001 x 284 for
   s = 0.5, 0.75; 1610 x 230 for the rest) are two campaigns of the same
