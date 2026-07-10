@@ -16,6 +16,7 @@
 #include "DBNSSolver.hpp"
 #include "DBNSObservation.hpp"
 #include "IdealGasEOS.hpp"
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
