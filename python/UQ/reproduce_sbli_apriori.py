@@ -189,21 +189,34 @@ def stage_insample(study, seeds, epochs):
             for leg in ("dq_y", "dq_joint", "db")}
 
 
-def _st_scale(study, case):
-    """|St_base(x*)| per test point of a case from its baseline wall record,
-    floored at the pinned Stanton floor; the extraction cache carries the
-    point coordinates and the baseline wall record is re-read from the gate
-    stage's JSON-adjacent npz."""
+RECOVERY_T_HAT = 1.9318    # measured recovery wall temperature, T/T_inf
+
+
+def _st_scale(study, case, record):
+    """The baseline's predicted local wall flux as the normalized-conformal
+    scale, CONVERTED into the same (u_tau_ref, T_w) flux units the residuals
+    carry (a raw Stanton number lives in free-stream units and would shrink
+    the scale by an order of magnitude for the cooled cases):
+
+        q_hat_scale(x) = |St(x)| (T_aw - T_w) / (rho_w u_tau T_w)
+
+    in free-stream nondimensional quantities from the record's own reference
+    state, with the measured turbulent recovery temperature. Floored at the
+    pinned Stanton floor AFTER conversion of the floor through the same
+    factor, so the adiabatic exclusion semantics survive the unit change."""
     ext = study.test_sets[case]
     wall_path = os.path.join(study.results_dir, f"wall_{case}.npz")
     if not os.path.isfile(wall_path):
         return None
     w = np.load(wall_path)
     st = np.interp(ext["x"], w["x_star"], w["St"])
-    return np.maximum(np.abs(st), ST_FLOOR)
+    ref = record.reference
+    conv = abs(RECOVERY_T_HAT - ref["T_w"]) / (
+        ref["rho_w"] * ref["u_tau_over_uinf"] * ref["T_w"])
+    return np.maximum(np.abs(st) * conv, ST_FLOOR * conv)
 
 
-def stage_far(study, seeds, epochs):
+def stage_far(study, seeds, epochs, records):
     out = {"transfer": {}, "control": {}, "conformal": {}}
     for leg in ("dq_y", "dq_joint"):
         out["transfer"][leg] = study.far_transfer(leg, seeds=seeds,
@@ -221,7 +234,7 @@ def stage_far(study, seeds, epochs):
     model.fit(X_tr, Y_tr, epochs=epochs, lr=1e-3, batch=256)
     import torch
     torch.manual_seed(DRIVER_SEED)
-    S_cal = np.asarray(model.sample(X_tr, n_per=64))
+    S_cal = np.asarray(model.sample(X_tr, n_per=128))
     m_cal = np.median(S_cal[:, :, 0], axis=1)
     resid_cal = np.abs(Y_tr[:, 0] - m_cal)
     # attached calibration scales: the case's own baseline wall flux
@@ -240,10 +253,10 @@ def stage_far(study, seeds, epochs):
         X_te = study._features(ext, history=False)
         Y_te = ext["dq"][:, 1]
         torch.manual_seed(DRIVER_SEED)
-        S_te = np.asarray(model.sample(X_te, n_per=64))
+        S_te = np.asarray(model.sample(X_te, n_per=128))
         m_te = np.median(S_te[:, :, 0], axis=1)
         resid = np.abs(Y_te - m_te)
-        scale = _st_scale(study, case)
+        scale = _st_scale(study, case, records[case])
         cover_abs = float(np.mean(resid <= q_abs))
         entry = {"absolute": cover_abs, "n": int(Y_te.size)}
         if scale is not None:
@@ -291,7 +304,7 @@ def main():
         numbers["insample"] = stage_insample(study, seeds, epochs)
         json.dump(numbers, open(numbers_path, "w"), indent=1)
     if args.stage in ("far", "all"):
-        numbers["far"] = stage_far(study, seeds, epochs)
+        numbers["far"] = stage_far(study, seeds, epochs, records)
         json.dump(numbers, open(numbers_path, "w"), indent=1)
 
     numbers["config"] = {

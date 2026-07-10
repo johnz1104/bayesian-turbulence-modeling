@@ -136,6 +136,16 @@ def oblique_shock_state(units, deflection_deg=INCIDENCE_DEG):
     return V, beta
 
 
+def _nearest_index(grid, query):
+    """True nearest-cell index (a bare searchsorted picks the upper
+    neighbor, a half-cell systematic bias that matters most in the clustered
+    wall-normal direction)."""
+    idx = np.clip(np.searchsorted(grid, query), 1, grid.size - 1)
+    lower = idx - 1
+    pick_lower = np.abs(query - grid[lower]) <= np.abs(grid[idx] - query)
+    return np.where(pick_lower, lower, idx)
+
+
 def _record_column(record, x_star):
     """Nearest field column of a loader record to the given coordinate."""
     return int(np.argmin(np.abs(record.x - x_star)))
@@ -333,6 +343,10 @@ class SBLIBaseline:
         ref.U = self.units.U_inf
         ref.T = self.units.T_inf
         ref.p = self.units.p_inf
+        # the data's own turbulent recovery (the measured wall temperature
+        # 1.9318 T_inf implies r = 0.896); the operator's default is the
+        # laminar sqrt(Pr), which would bias the heated cases' Stanton
+        ref.recovery_factor = (1.9318 - 1.0) / (0.2 * MACH ** 2)
         obs = rans.DBNSObservation(self.solver, ref)
         w = obs.wall_profile("bottom", self.wall_temps_dim,
                              float(self.wall_temps_dim[0]))
@@ -368,8 +382,8 @@ class SBLIBaseline:
 
         xq = u.length(np.asarray(x_star) - self.meta["x_lo"])
         yq = u.length(np.asarray(y_star))
-        ix = np.clip(np.searchsorted(xs, xq), 0, nxm - 1)
-        iy = np.clip(np.searchsorted(ys, yq), 0, nym - 1)
+        ix = _nearest_index(xs, xq)
+        iy = _nearest_index(ys, yq)
 
         dx = np.gradient(xs); dy = np.gradient(ys)
         dudx = np.gradient(gu, axis=0) / dx[:, None]

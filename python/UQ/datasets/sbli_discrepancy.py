@@ -51,8 +51,9 @@ def turbulent_mach(record, pts_x, pts_y):
     """M_t = sqrt(2 k) / a from the record itself at the flattened points:
     with k in free-stream velocity units and a/U_inf = sqrt(T_hat)/M_inf,
     M_t = sqrt(2 k_hat) M_inf / sqrt(T_hat)."""
-    ix = np.clip(np.searchsorted(record.x, pts_x), 0, record.nx - 1)
-    iy = np.clip(np.searchsorted(record.y, pts_y), 0, record.ny - 1)
+    from .sbli_baseline import _nearest_index
+    ix = _nearest_index(record.x, np.asarray(pts_x, dtype=float))
+    iy = _nearest_index(record.y, np.asarray(pts_y, dtype=float))
     k_hat = record.k[ix, iy]
     T_hat = np.maximum(record.T[ix, iy], 1e-6)
     m_inf = record.meta["mach"]
