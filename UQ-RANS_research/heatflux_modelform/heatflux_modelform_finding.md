@@ -96,7 +96,7 @@ cases (nominal 0.90, case means of seed means, per-case span in brackets):
 |---|---|---|---|
 | flow    | 0.128 [0.02, 0.29] | 0.19 / 0.04 | 0.02 [0.00, 0.10] |
 | Gaussian | 0.664 [0.28, 0.96] | 0.88 / 0.39 | 0.12 [0.00, 0.56] |
-| pooled unconditional | 0.249 [0.01, 0.68] | 0.25 / 0.25 | 0.03 [0.00, 0.14] |
+| pooled unconditional | 0.249 [0.01, 0.68] | 0.43 / 0.07 | 0.03 [0.00, 0.14] |
 
 Figure: `figures/heatflux_crossmach_coverage.png`. Three measured facts:
 

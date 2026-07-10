@@ -125,7 +125,11 @@ class HeatFluxAPriori:
     def interior_mask(dns):
         """The committed extraction convention: outside the buffer layer
         (y+ > 30, where the baseline interpolation and the anchor are
-        trusted) and inside the outer 90 percent (y/delta < 0.9)."""
+        trusted) and inside the outer 90 percent (y/delta < 0.9). This must
+        stay identical to the interior convention in
+        compressible_discrepancy._extract (the source of the study's
+        realizability and GDH-misfit summaries); the two are duplicated
+        rather than shared because that module is consumed unchanged."""
         return (dns.yplus > 30.0) & (dns.y_outer < 0.9)
 
     @staticmethod
