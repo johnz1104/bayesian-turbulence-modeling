@@ -1,0 +1,593 @@
+# Shock-interaction model-form UQ: pre-registration
+
+Fixed 2026-07-10, before any discrepancy was extracted from the interaction
+data and before any model-form or coupled result was computed on it. This file
+records the scope decisions and the success and null criteria in advance, so
+they are timestamped ahead of every result and are not tuned toward afterwards
+(the no-tuning-toward-the-number rule). It is committed first; nothing
+downstream of these decisions is built before this file is merged.
+
+## The work
+
+The direct test, at a shock-boundary-layer interaction, of the requirement
+three completed studies fixed. The compressible attached-flow study measured
+standard Bayesian calibration severely overconfident on held-out thermal
+targets (coverage 0.17 in distribution and 0.01 under the cross-Mach shift, at
+nominal 0.90) and its global coverage correction unable to reach the thermal
+block (0.42 in distribution, 0.18 under transfer). The separated-flow
+model-form study located its propagated failure in the anisotropy-only
+injection channel (magnitude-capped by the running turbulence energy), with
+the conditional distribution family exonerated on the dense field. The
+heat-flux model-form study found the conditional generative route
+data-volume-limited before family-limited (434 training rows), and measured a
+wall-flux-normalized conformal score recovering over half the cross-Mach
+transfer gap at zero model cost. Together they fix one requirement: a usable
+correction must reach the heat-flux quantities themselves, carry a Mach-aware
+scale, and be tested where the misspecification is severe, which is the
+interaction regime.
+
+This study tests whether a stochastic, realizability-constrained,
+feature-conditioned model-form correction improves shock-boundary-layer
+interaction prediction over baseline RANS with quantified uncertainty. Two
+legs are fixed here together:
+
+- A-priori (the discrepancy-distribution leg, no coupled claim): train the
+  conditional generative model and the honest Gaussian conditional baseline on
+  attached compressible discrepancy data and score the held-out interaction
+  discrepancy (stress anisotropy db and turbulent heat flux dq), conditioned
+  on the M_t-extended invariant features; and, within the interaction, run the
+  wall-thermal cross-validation at the data density the attached matrix
+  lacked, which is where the family question is live.
+- A-posteriori (the coupled-prediction leg, the primary result): propagate
+  sampled realizable closures through the shock-capturing solve to the
+  predicted wall quantities (Stanton number, wall pressure including the shock
+  jump, skin friction, separation and reattachment, shock position), measure
+  predictive coverage and error change against baseline SST, against the
+  eigenspace-perturbation envelope and the Gaussian conditional propagated
+  through the identical injection, and measure the attached-flow control.
+
+## Data (verified at study start; full provenance blocks go in DNS_data/README.md)
+
+Both interaction datasets are the same impinging oblique-shock configuration:
+free-stream Mach 2.28, shock-generator incidence 8 degrees, gamma 1.4,
+statistically two-dimensional (span-homogeneous) fields, lengths in incoming
+boundary-layer thickness units. The shock strength is therefore fixed and the
+interaction generalization axis is the wall thermal condition.
+
+- Adiabatic interaction (Pirozzoli and Bernardini, AIAA J. 49(6), 2011,
+  doi:10.2514/1.J050901). Re = 16750 on the inlet thickness. Verified layout:
+  32 Tecplot block files for each averaging (favre_33 to favre_64, reynolds_33
+  to reynolds_64), each zone 61 x 344 with shared edge columns, tiling the
+  downstream half of the 80.58 x 12.89 domain (x in [40.29, 80.58]); Favre
+  files carry 8 columns (x, y, u, v, u''v'', u''u'', v''v'', w''w''), Reynolds
+  files 14 columns (x, y, rho, u, v, p, T, rho'rho', u'u', v'v', w'w', u'v',
+  p'p', T'T'; the readme's read loop says 13, the files hold 14, so loaders
+  count columns from the data). Wall series stat.dat: 13 columns (x, cf, pw,
+  pwrms, utau, deltav, delta99, delta*, theta, delta*inc, thetainc, H, Hinc),
+  3904 rows spanning the full domain (block-edge x values duplicated, deduped
+  at load). Incoming-boundary-layer profile blinc.dat at x = 43.6 (Re_tau 466,
+  Re_theta 2344, cf 2.56e-3, H 3.55), 153 rows, 12 columns. Turbulence
+  kinetic-energy budget at three interaction stations x* = -1.93, -0.05, 2.10
+  (7 columns; the pressure-dilatation term is lumped with mass diffusion).
+  No temperature-velocity covariance and no wall heat flux (adiabatic): this
+  dataset carries the stress leg, Cf, Cp, the inflow anchor and the budget
+  anchor, not the heat-flux leg.
+- Heated and cooled interaction (Bernardini, Asproulias, Larsson, Pirozzoli
+  and Grasso, Phys. Rev. Fluids 1, 084403, 2016). The same interaction at five
+  wall-to-recovery-temperature ratios s = 0.5, 0.75, 1.0, 1.4, 1.9 (strongly
+  cooled through adiabatic to heated); incoming Re_theta about 2500 at the
+  reference station; nominal impingement at 69.5 inlet thicknesses. Verified
+  layout: one 13-column Tecplot Favre field per s (x*, y*, rho, u, v, p, T,
+  u''u'', v''v'', w''w'', u''v'', u''T'', v''T''), zones 3001 x 284 (s = 0.5,
+  0.75) and 1610 x 230 (s = 1.0, 1.4, 1.9), x* in [-13.5, 8.2] about the
+  impingement point, y* in [0, 2.5]. This is the only source of the turbulent
+  heat-flux vector, so the dq leg lives here. Wall series wallstat_s.dat per
+  s: x*, cf, pw, pwrms, St, x* in [-40, 15.2]; verified quirks: the s = 1.0
+  file has four columns (no Stanton column at all, adiabatic) and its pw
+  normalization differs from the other four (order 132 versus order 1
+  upstream), so wall pressure is reduced to Cp against each file's own
+  upstream plateau rather than an assumed reference.
+- Attached supersonic boundary layers (Pirozzoli and Bernardini, JFM 688,
+  2011, and Phys. Fluids 25, 021704, 2013; reynolds.dma.uniroma1.it/dnsm2).
+  Twelve flat-plate cases: M2 at eight friction Reynolds numbers (nominal
+  Re_tau 200 to 1110), M3 and M4 at Re_tau 400 and 500. Verified format: a
+  prose header (cf, friction Mach number, four Reynolds numbers, shape
+  factors) and 20 profile columns (y/delta99, y+, u+, u_vd+, urms+, vrms+,
+  wrms+, uv+, sqrt(rho/rho_w), prms+, trms+, rhorms+, the indicator function,
+  skewness and flatness of u and T, vorticity intensities). Verified
+  limitation, load-bearing: these files carry no turbulent heat-flux vector,
+  no wall heat flux and no mean temperature column (adiabatic-wall cases;
+  mean density is recovered from the sqrt(rho/rho_w) column, mean temperature
+  by the constant-pressure boundary-layer relation, stated as a
+  reconstruction). This set therefore serves the attached stress axis and the
+  attached-flow control, and does not enter heat-flux training or heat-flux
+  generalization claims (per the acceptance gate for compressible heat-flux
+  generalization).
+
+The attached heat-flux training side reuses the committed compressible
+attached matrix: the Gerolymos-Vallet 24-case channel matrix (the only
+attached source carrying the full turbulent heat-flux vector), with the
+Coleman-Kim-Moser supersonic channel kept as the never-trained
+independent-code spot check and the Zhang-Duan-Choudhari plates as a
+pre-named sensitivity pool (derived wall-normal flux only), exactly as those
+roles were fixed in the attached studies.
+
+## Scope decisions fixed at study start
+
+### 1. Out-of-distribution axis and splits
+
+The data resolves the axis: shock strength is fixed (one Mach, one incidence)
+and the interaction generalization axis is the wall-to-recovery-temperature
+ratio, five conditions, meeting the at-least-two-conditions acceptance gate.
+Splits, all pinned now:
+
+- Within-interaction (the primary conditional-transfer axis):
+  leave-one-wall-thermal-out over the five heated-set Favre fields. Train on
+  four s conditions, score the held-out fifth; five folds; the held-out unit
+  is the s condition (2-D fields are internally correlated; point-level
+  splits would leak). The dq targets exist in all five fields; the db targets
+  additionally use the adiabatic 32-block dataset as an independent-campaign
+  test surface for the s = 1.0 fold.
+- Attached-to-interaction (the far-transfer axis): train on the attached
+  matrix, score the interaction fields. For dq the training pool is the
+  24-case channel matrix through the committed extraction; for db the pool is
+  the channel matrix plus the twelve attached boundary-layer cases (the
+  flow-type match to the interaction boundary layer), with the plates'
+  ready-made anisotropy as a labeled sensitivity variant. This axis compounds
+  flow type, pressure-gradient state and turbulence regime at once; the
+  compound nature is stated in advance (the analogous compound plate shift
+  collapsed every conditional model in the attached heat-flux study), and the
+  region-graded reading below applies.
+- Attached in-distribution control for the far-transfer axis:
+  leave-one-Mach-family-out over the channel matrix (the five committed
+  families). If this control fails its band, the degenerate-control branch
+  applies to the far-transfer clause exactly as in the heat-flux study.
+- In-sample machinery check: train on all five interaction fields, score in
+  sample (near-nominal coverage expected; a fitting-capacity check, not a
+  claim).
+- Region grading, pinned from each configuration's wall series: separation
+  x_s and reattachment x_r are the Cf sign crossings (linear interpolation);
+  the interaction onset x_onset is where the smoothed wall pressure first
+  exceeds 1.05 times its upstream plateau (centered moving average of width
+  0.5 reference lengths); regions are upstream attached (x* < x_onset),
+  interaction (x_onset <= x* <= x_r + 2), and relaxation (x* > x_r + 2).
+  Every coverage and error number is reported per region as well as pooled;
+  the interaction heat-flux error is never quoted as a single flat figure.
+
+### 2. Baseline route for forming db and dq (and the solver prerequisite)
+
+Measured facts first. The one-dimensional fully-developed channel solve has no
+analogue at an interaction. The frozen-mean algebraic plate reconstruction
+breaks exactly through separation, shock foot and reattachment (sign-changing
+shear, no transported k, no streamwise strain). The shock-capturing
+density-based solver on the trunk is verified on its convective core (shock
+tube, manufactured-solution order, oblique-shock reflection, wall observation
+operator) but its committed test suite records that the explicit pseudo-time
+march does not converge viscous-dominated steady states on near-wall meshes
+(the viscous spectral radius scales as the inverse square of the wall-normal
+spacing); an implicit steady driver is the documented fix.
+
+Decision: the baseline for both legs is the two-dimensional density-based SST
+solve of the interaction, one solve per wall-thermal configuration, with
+
+- an implicit steady driver (LU-SGS) added to the density-based solver as a
+  prerequisite build, validated on the two rungs the solver's own verification
+  names as gated: the supersonic laminar flat plate against the self-similar
+  solution, and the turbulent flat plate at Mach 2.28 against the incoming
+  boundary-layer profile of the adiabatic dataset;
+- inflow anchored to the measured incoming boundary layer (Re_tau 466,
+  cf 2.56e-3, van-Driest profile), the incident shock imposed through the top
+  boundary by the oblique-shock state at 8 degrees incidence, supersonic
+  outflow, and the wall adiabatic or isothermal at the case's
+  wall-to-recovery ratio;
+- baseline fields (velocity, temperature, k, omega, eddy viscosity, the SST
+  timescale) sampled at the DNS points; db = b_DNS - b_baseline with the
+  limiter-consistent Boussinesq convention of the separated study;
+  dq = q_hat_DNS - q_GDH with the gradient-diffusion baseline at fixed
+  Pr_t = 0.9, DNS mean gradients and the baseline eddy viscosity, the
+  committed convention of the attached extraction.
+
+This route preserves the train-inject consistency the separated study pinned
+(the a-priori training target and the a-posteriori injection add db to the
+same baseline object) and the same solve is the a-posteriori engine, so one
+validated baseline serves both legs.
+
+Feasibility gates, fixed in advance and prerequisites rather than result
+clauses: (gate A) the attached turbulent baseline at Mach 2.28 reproduces the
+incoming layer, skin friction within 10 percent of the measured 2.56e-3 at
+matched momentum-thickness Reynolds number and the van-Driest log region
+within 5 percent rms; (gate B) the coupled interaction baseline converges
+(solver-classified) for every wall-thermal configuration, and its impingement
+position lands within one reference length of the DNS half-rise point, with
+any offset reported. Pre-registered attribution diagnostic: the baseline
+shock-position offset against the DNS and the fraction of interaction-region
+discrepancy magnitude concentrated inside the offset band are reported, so
+position error is not silently read as closure error.
+
+Pre-named fallback: if gate B cannot be met, the a-priori leg switches to a
+frozen-mean-field transport baseline (the DNS Favre mean held fixed, the k and
+omega transport equations marched to steadiness with the same implicit driver,
+stated as the constitutive-error-at-matched-mean convention), and the
+a-posteriori clauses are reported as not adjudicable at this solver maturity,
+which is the solver-capability null shape below, a real and reportable
+finding.
+
+### 3. Loaders (shared infrastructure)
+
+Two new loader families, on the established loader-plus-tests-plus-provenance
+template, consuming the verified formats above:
+
+- A two-dimensional compressible interaction loader handling both interaction
+  datasets: the 32-block tiling with shared edge columns dropped (adiabatic),
+  the single-zone Tecplot fields per s (heated set), the wall series (with
+  block-edge dedup, the four-column s = 1.0 quirk, and Cp formed against each
+  file's own upstream plateau), the incoming-layer profile, and the
+  three-station budget files. It serves either the dense 2-D field or
+  wall-normal profiles at chosen x* stations. The stress-column convention
+  (whether the tabulated double-prime covariances are density-weighted) is
+  pinned at loader time by the adiabatic favre-versus-reynolds cross-check
+  and the papers' definitions, and recorded in the loader tests.
+- An attached boundary-layer profile loader for the twelve M2/M3/M4 cases on
+  the compressible profile base, with the frozen-mean plate baseline route,
+  the density column squared for mean density, the constant-pressure
+  temperature reconstruction stated as such, and no heat-flux fields.
+
+Units are converted once at the loaders into the committed wall-unit Favre
+conventions; the interaction fields use the case's upstream reference
+friction state (the friction velocity at the reference attached station and
+the case wall temperature) as the inner scale, the interaction analogue of
+the channel (u_tau, T_w) convention, so a friction velocity that vanishes at
+separation never divides a target. Realizability of every DNS stress record
+(barycentric check, fraction reported) and Galilean invariance of the feature
+construction are asserted as separate loader-test checks.
+
+### 4. The injection coupling in the density-based solver (the heat-flux reach)
+
+The sampled correction enters the density-based residual as a
+deferred-correction flux, mirroring the incompressible pattern and extending
+it to the energy equation, which is the direct answer to the separated-flow
+magnitude-cap diagnosis:
+
+- Momentum: the divergence of the injected stress difference,
+  2 <rho> k (b_target - b_Boussinesq), assembled as a conservative face flux;
+  the eddy-viscosity diffusion stays implicit; a zero correction reproduces
+  the baseline solve identically (asserted).
+- Energy: two consistent reaches. The mean-flow work of the injected stress
+  difference, and the turbulent-heat-flux correction, the divergence of
+  <rho> cp dq_target against the gradient-diffusion term, which stays
+  implicit. An anisotropy-only variant (energy reach disabled) is retained as
+  a labeled diagnostic so the value of the heat-flux reach is itself
+  measured.
+- Every sampled b_target is projected into the barycentric realizable set
+  before injection and re-checked every outer iteration; dq has no committed
+  admissibility set and none is invented (the solver's
+  Converged/Unconverged/Diverged classification handles pathological members,
+  which are counted and excluded with the exclusion stated, per the separated
+  protocol).
+- Python surface: set and clear the target correction and read injection
+  diagnostics on the density-based binding, matching the incompressible
+  forward model's surface; C++ and Python tests cover the zero-correction
+  identity, a prescribed-field flux check, and the realizability re-check.
+- A single coupled converged solve at Mach 2.28 with the imposed shock and a
+  nonzero injected correction is verified before any ensemble is run.
+
+### 5. Target definition and the joint leg
+
+- db: the independent Favre anisotropy components from the 2-D stress record
+  (b11, b22, b12, with b33 fixed by the trace and b13 = b23 = 0 by span
+  homogeneity), formed against the limiter-consistent baseline anisotropy.
+- dq: the two live components (dq_x, dq_y) from the heated set's u''T'' and
+  v''T'', in the upstream-referenced wall-unit convention; the heated set is
+  the only dq source, stated as scope.
+- The wall Stanton number and wall heat flux are a-posteriori quantities of
+  interest, not a-priori targets.
+- The joint multi-component legs carry the family question (the scalar
+  affine-coupling flow is exactly a conditionally Gaussian law, the committed
+  degeneracy note): the (dq_x, dq_y) joint leg and the db-vector leg are the
+  family surfaces; scalar-leg parity is the expected degenerate shape and
+  carries no family claim.
+- Moat clause, stated as a structural fact and bounded by what this data
+  measures: the eigenspace-perturbation framework perturbs the anisotropy
+  eigenvalues within the barycentric set and cannot represent a heat-flux or
+  wall-flux correction at any amplitude, so it is structurally excluded from
+  the heat-flux legs and scored only on the stress and propagated-QoI legs.
+  The dilatational moat modes are not separately measured in this data (the
+  budget files lump pressure-dilatation with mass diffusion at three stations
+  of the adiabatic case), so no dilatational-mode claim is made; the moat
+  evidence here is heat-flux-centred.
+
+### 6. Realizability at the shock (separate from invariance)
+
+The barycentric realizability projection is applied to every sampled target
+before injection and asserted every outer iteration of every coupled solve
+(zero tolerated violations among converged members); the Galilean-invariant
+feature construction is verified separately in the assembly tests. The DNS
+stress records' own realizable fraction is reported per field. These two
+checks never substitute for each other.
+
+### 7. Observation uncertainty (modeled, anchored, labeled)
+
+The interaction files carry no per-point statistical uncertainty. The
+a-priori generative leg adds no modeled sigma (models fit raw pairs; their
+own predictive dispersion is scored, the committed protocol). Where
+observations enter a comparison against solves (the a-posteriori QoI scoring
+and any residual-based conformal), observation sigma is modeled at 0.5
+percent of the local scale (primary) and 1 percent (sensitivity), per
+configuration floored at data-only physics anchors measured by the loaders
+and recorded in the loader tests:
+
+- the cross-campaign adiabatic residual: the adiabatic wall series of the
+  2011 dataset against the s = 1.0 wall series of the 2016 dataset over their
+  shared interaction range (Cf and Cp at matched x*), a data-only
+  between-campaigns consistency measure;
+- the momentum-integral residual of the upstream attached region of the
+  adiabatic wall series (the compressible von Karman balance from the series'
+  own cf and theta columns);
+- the budget-closure residual of the three adiabatic budget stations (the
+  tabulated terms summed against zero).
+
+These are labeled modeled and anchored, never called a DNS uncertainty.
+
+### 8. Optional history-feature probe (off by default)
+
+The spatial non-local (strain-history) ansatz remains a hypothesis, not a
+premise. If scoped in at confirmation time, it enters only as an a-priori
+feature ablation: one added conditioning feature, the upstream mean-streamline
+exponentially-weighted average of the shear invariant with the baseline
+timescale as the relaxation scale, and the pinned question is whether the
+held-out interaction-region misfit improves against the local feature set. No
+a-posteriori use, no claim beyond the ablation. If not scoped in, nothing
+here changes.
+
+## Models and training protocol (pinned)
+
+- Conditional flow: UQ.generative.GenerativeDiscrepancyModel, n_layers 8,
+  hidden 64, fit(epochs 400, lr 1e-3, batch 256), the settings pinned by the
+  separated study and reused unchanged since.
+- Gaussian conditional baseline: UQ.gaussian_modelform.GaussianDiscrepancyModel,
+  same features, targets and fit settings; the distribution family is the only
+  difference.
+- Pooled unconditional Gaussian on the training targets: the labeled
+  diagnostic for what conditioning buys, not a criterion baseline.
+- Conditioning features: the five Galilean-invariant Pope invariants from the
+  baseline strain and rotation with the baseline timescale, extended with the
+  turbulent Mach number from the record, six features per point, through the
+  committed feature path (UQ.discrepancy.feature_set with the M_t extra). At
+  the interaction the invariants are genuinely two-dimensional (no pure-shear
+  degeneracy), stated because it changes the effective conditioning relative
+  to the attached studies. The training-versus-test M_t spans are recorded in
+  the numbers JSON.
+- Interior mask for the 2-D interaction fields, pinned: y* in [0.05, 2.0]
+  (the lower bound corresponds to y+ about 23 at the incoming Re_tau 466,
+  mirroring the attached y+ > 30 convention without dividing by a separating
+  friction velocity) and k above 1e-3 of the field maximum (excludes the
+  laminar free stream while keeping the shock-amplified region). No post-hoc
+  mask relaxation.
+- Subsampling, pinned per grid family: test rows at stride (8, 4) on the
+  3001 x 284 fields and the adiabatic tiled field, (4, 4) on the 1610 x 230
+  fields; training rows at twice the test stride in each direction. This
+  targets order 2e4 test rows per field and order 1.5e4 rows per four-field
+  training pool, at or above the dense-field volume where the family
+  advantage was measured (13189 rows), which is the point of the
+  within-interaction leg. Exact counts are recorded, not tuned.
+- Sampling: 128 samples per point, independent latents per row a-priori;
+  coherent shared-latent field realizations a-posteriori (one latent per
+  member), ensemble size 24 per probabilistic method, seed 0, the separated
+  protocol unchanged.
+- Seeds: model seeds {0, 1, 2}; every metric is the seed mean with the
+  min-max range; every criterion is evaluated on the seed mean.
+- Training-side adjustments are permitted on training-loss diagnostics of
+  training rows only, never on any held-out metric, and recorded in the memo.
+
+## The question (the gate)
+
+Does a conditional, realizable, generative model-form correction of the
+stress and heat-flux closures, with the heat-flux reach built into the
+coupled solve, deliver calibrated uncertainty and measured error reduction at
+a shock-boundary-layer interaction, out of distribution along the wall
+thermal axis, without degrading the attached flow.
+
+### A-priori leg: pre-registered positive shape
+
+1. Within-interaction conditional transfer (primary): the
+   leave-one-wall-thermal-out case-mean coverage of dq_y at nominal 0.90
+   (UQ.evaluation.coverage_from_samples, unweighted mean over the five folds)
+   is at least 0.80 with every fold at least 0.60, and the in-sample
+   machinery check sits in [0.80, 0.98]. Comparison lines: the Gaussian
+   conditional scored identically and the pooled unconditional diagnostic.
+2. Family clauses at density (the ceiling-lift question): on the
+   leave-one-wall-thermal-out folds the flow beats the Gaussian on the
+   multivariate energy score with aggregate per-component CRPS no worse, on
+   BOTH the joint (dq_x, dq_y) leg and the db-vector leg (each conjunction
+   evaluated on the seed mean over folds). Scalar-leg parity carries no
+   family content, as committed.
+3. Mid-distribution guard: at nominal 0.50 the held-out case-mean coverage
+   lies in [0.35, 0.65] (transfer not bought with vacuous width).
+4. Far-transfer characterization (attached-to-interaction): scored with the
+   same metrics against the same lines, gated by the attached
+   leave-one-Mach-family-out control landing in [0.80, 0.98]; the positive
+   shape is case-mean held-out interaction coverage at least 0.80 with the
+   upstream-attached region at least 0.80 on every configuration; the
+   pre-named intermediate shape is upstream-attached coverage restored while
+   the interaction core fails (distance-graded partial transfer, read by
+   region); the compound-shift null below is the equally likely outcome and
+   is stated in advance.
+5. The wall-flux-normalized conformal line (carried forward as the
+   established first-line thermal correction): the far-transfer thermal
+   residuals re-scored with the split-conformal score normalized by the
+   baseline's own predicted local wall heat flux (floor 1e-5 in Stanton
+   units; the adiabatic configuration is excluded where the floor binds),
+   against the absolute-score control through the identical path. N-plus
+   means restoration into [0.80, 0.98] at nominal 0.90; the four-quadrant
+   scale-versus-shape grid of the heat-flux study carries over unchanged,
+   with the interaction replacing the high-Mach cases.
+
+### A-priori leg: pre-registered null shapes (equally reportable)
+
+- Family null: the flow does not beat the Gaussian at interaction density on
+  either joint leg. Reading: the conditionally Gaussian family suffices for
+  this discrepancy even dense, and the generative family earns nothing
+  a-priori in the regime chosen to favor it; the family question is then
+  answered for this program.
+- Transfer null (within-interaction): the machinery check passes but
+  leave-one-wall-thermal-out fails its bands: (invariants, M_t) conditioning
+  does not carry the discrepancy law across wall temperature even inside one
+  interaction; the wall-thermal state is then not encoded by the chosen
+  features, the concrete feature-enrichment decision point.
+- Compound-shift null (far transfer): the attached control is healthy but
+  attached-to-interaction coverage collapses: the compound shift exceeds the
+  conditioning, as it did for the plates, and the honest reading is that
+  attached-trained model-form does not transfer to interactions at this
+  feature set, with the region-graded profile reported.
+- Degenerate control: if the within-interaction machinery check or the
+  attached family control fails its band, the corresponding clause is not
+  adjudicated in either direction and the finding is about trainability at
+  that data volume, per the committed precedent.
+
+### A-posteriori leg: gates, positive shape, null shapes
+
+Gates A and B of scope decision 2 are prerequisites; if either fails, the
+solver-capability null applies. The propagated folds, pinned for cost: the
+held-out s = 0.5 (cooling end), s = 1.0 (adiabatic middle, with the
+independent-campaign wall series as a second truth surface), and s = 1.9
+(heating end); each fold propagates the leave-that-s-out trained models; the
+attached-trained model is additionally propagated into the adiabatic
+configuration as the far-transfer characterization. 24 coherent members per
+probabilistic method per fold, the eigenspace corner family (full projection
+1.0 with 0.5 moderation) through the identical injection, non-converged
+members counted and excluded with the exclusion stated; a method with fewer
+than 18 of 24 converged members is labeled propagation-unstable and its
+scores carry that label.
+
+Positive shape, all clauses on the pinned wall-QoI set (Cf, Cp, and St where
+defined, at stations x* = -12 to 12 in steps of 1 intersected with each
+series' range, plus the scalars: separation, reattachment, shock position as
+the half-rise point of the smoothed wall-pressure series, one rule for DNS
+and every solve):
+
+1. Coverage: the flow ensemble's 0.90 bands cover at least 0.80 of stations
+   pooled per held-out configuration (per-region values reported), and
+   contain the scalar QoIs; at nominal 0.50 the pooled station coverage lies
+   in [0.35, 0.65].
+2. Accuracy: the ensemble-median Stanton error in the interaction region is
+   below the baseline SST's on the held-out heated folds, and the
+   ensemble-median Cf and Cp errors are below baseline in at least the
+   interaction region, reported per region and per configuration, never as
+   one flat figure.
+3. Sharpness guard: where a band covers, its half-width in the interaction
+   region is smaller than the baseline's own point error there (a band wider
+   than the error it must cover is vacuous, the overlay lesson of the
+   separated study).
+4. Baseline comparison: clauses 1 to 3 hold for the flow at least as well as
+   for the Gaussian conditional through the identical injection, and the
+   eigenspace envelope's containment and uniform-reading scores are reported
+   alongside (its structural exclusion from the heat-flux QoIs stated: an
+   anisotropy-only method carries no St correction other than through the
+   flow-field response).
+5. Realizability: the running barycentric check passes every outer iteration
+   for every converged member of every method.
+6. Wall-thermal generalization: coverage at the cooling and heating end
+   folds degrades gracefully from the adiabatic fold (bands widen as
+   coverage falls) rather than silently.
+7. Preserve-attached control: each fold's closure, propagated through the
+   attached Mach 2.28 boundary-layer solve (the gate-A configuration), keeps
+   the ensemble-median Cf error within 1.5 times the baseline's and its 0.90
+   Cf band half-width below 0.15 of the measured cf (non-vacuous), so the
+   correction does not degrade the attached flow it was not asked to fix.
+
+Null and negative shapes (equally reportable, each a decision point):
+
+- Solver-capability null: gate A or B unattainable; the a-posteriori clauses
+  are not adjudicable at this solver maturity, reported plainly, and the
+  phase verdict rests on the a-priori leg.
+- Magnitude-cap recurrence: the coupled response is directionally right but
+  the bands cannot reach the truth even with the heat-flux reach; the
+  separated diagnosis then survives its motivated fix, which is decisive
+  against the deferred-correction injection route as built.
+- Shock-foot propagation instability: realizability-projected members
+  diverge at the shock foot at rates that gut the ensembles; reported with
+  the convergence counts and the foot-region diagnostics.
+- Vacuous coverage: clause 1 passes only where clause 3 fails; coverage
+  bought with uninformative width, the overlay precedent repeated at the
+  interaction.
+- No accuracy gain: coverage and sharpness restored but clause 2 fails; the
+  correction is a calibrated uncertainty on a baseline-quality prediction,
+  reported as exactly that.
+- Attached degradation: clause 7 fails; the correction is not deployable
+  as-is regardless of interaction gains.
+
+### Thresholds
+
+The bands above ([0.80, 0.98] controls and machinery checks; case mean at
+least 0.80 with per-fold floor 0.60; [0.35, 0.65] at nominal 0.50; strict
+aggregate energy-score inequality with CRPS-no-worse conjunctions; station
+coverage at least 0.80 pooled; the 1.5x and 0.15 attached-control bounds; 18
+of 24 convergence labeling; the 1.05 onset factor, the x_r + 2 region edge,
+the half-rise shock-position rule, the station grid, the strides and the
+interior mask) are fixed here in advance. No model, feature, mask, score,
+stride, seed, fold, station set or training choice is tuned toward any of
+them.
+
+## Baselines the result is measured against
+
+- Deterministic baseline SST through the density-based solve (the point
+  reference and the discrepancy baseline).
+- The Gaussian conditional model-form on identical inputs through the
+  identical projection and injection (the family axis, a-priori and
+  propagated).
+- The eigenspace-perturbation corner family at full and moderated projection
+  through the same injection (the dominant realizable model-form method),
+  scored by envelope containment and the labeled uniform reading; its
+  structural inability to represent a heat-flux correction is carried as a
+  reportable fact and bounds which legs it can enter.
+- The pooled unconditional Gaussian diagnostic (what conditioning buys).
+- The wall-flux-normalized conformal score on the far-transfer thermal
+  residuals (the established cheap correction, the line any conditional
+  model must beat to earn its cost).
+
+## Metrics
+
+UQ.evaluation.coverage_from_samples at nominal 0.90 and 0.50 with sharpness,
+crps_ensemble per component, energy_score on the joint and db-vector legs,
+reliability_error and PIT diagnostics per fold and per region,
+UQ.conformal.conformal_quantile for the normalized-score line; a-posteriori
+station coverage, region-resolved QoI errors, convergence counts and
+realizability assertions; per fold, per region, per configuration, seed mean
+with min-max range; aggregation is the unweighted mean over folds or
+configurations, with point-pooled views recorded as diagnostics. Every number
+from the fixed-seed reproduce scripts.
+
+## Realizability and invariance (separate checks, stated scope)
+
+Every sampled stress target is projected into the barycentric realizable set
+before scoring (a-priori) and before injection with per-iteration re-checks
+(a-posteriori). dq samples are scored and injected as drawn, no clipping, no
+invented admissibility set, with solver classification as the safety net. The
+DNS records' own realizable fractions and the numerically verified Galilean
+invariance of the feature construction are separate assembly-test assertions.
+
+## Reproduce plan
+
+Study modules under UQ.datasets (the interaction extraction and splits, the
+fit and scoring loops, the coupled ensemble driver), fixed-seed driver
+scripts writing one numbers JSON per leg, unit tests on assembly, splits,
+injection identity and realizability (training in tests capped at a smoke
+epoch), and the evidence package in this directory (this file, the finding
+memo, figures, the numbers JSONs). Long solves and ensembles run through the
+detached-run pattern with done markers per standing practice.
+
+## Data attribution
+
+All datasets are third-party DNS, not produced by this project, cited where
+used: Pirozzoli and Bernardini, AIAA Journal 49(6) (2011) 1307-1312,
+doi:10.2514/1.J050901 (adiabatic interaction); Bernardini, Asproulias,
+Larsson, Pirozzoli and Grasso, Physical Review Fluids 1 (2016) 084403
+(wall-thermal interaction sweep); Pirozzoli and Bernardini, Journal of Fluid
+Mechanics 688 (2011) 120-168 and Physics of Fluids 25 (2013) 021704 with the
+distribution at reynolds.dma.uniroma1.it/dnsm2 (attached supersonic boundary
+layers); Gerolymos and Vallet, Journal of Fluid Mechanics 958 (2023) A19,
+Mendeley Data doi:10.17632/wt8t5kxzbs.1, CC BY 4.0 (attached channel matrix);
+Coleman, Kim and Moser, Journal of Fluid Mechanics 305 (1995) 159-183; Zhang,
+Duan and Choudhari, AIAA Journal 56(11) (2018) 4297-4311,
+doi:10.2514/1.J057296. Raw fields stay local and gitignored; only manifest
+entries and curated evidence are tracked.
