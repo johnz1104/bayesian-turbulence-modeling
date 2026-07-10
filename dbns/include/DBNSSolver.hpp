@@ -156,6 +156,7 @@ private:
     void computeLimiters();
     Primitive ghostState(const Primitive& interior, int faceId,
                          const BoundarySpec& spec, int boundaryIdx) const;
+    double wallOmegaGhost(const Primitive& interior, int faceId) const;
     void computeResidual();                  // fills res_
     void addViscousFace(int faceId);         // internal-face viscous contribution
     void addBoundaryFlux(int faceId, int patchIdx);

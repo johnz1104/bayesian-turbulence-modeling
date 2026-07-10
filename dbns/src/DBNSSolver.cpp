@@ -251,6 +251,20 @@ Primitive DBNSSolver::reconstruct(int ci, const Vec3& xf) const {
     return R;
 }
 
+// the Menter omega wall value seen through the ghost: face value
+// omega_w = 60 nu_w / (beta1 dy1^2) with dy1 twice the owner-cell wall
+// distance, so the near-wall gradients feel the singular growth the omega
+// equation cannot generate on its own
+double DBNSSolver::wallOmegaGhost(const Primitive& in, int faceId) const {
+    if (!settings_.turbulent) return in.omega;
+    const Face& f = mesh_.face(faceId);
+    double delta = std::max(f.delta, 1e-12);
+    double nuW = muLam_[f.owner] / std::max(in.rho, 1e-30);
+    double dy1 = 2.0 * delta;
+    double omegaWall = 60.0 * nuW / (sstCoeffs_.beta1 * dy1 * dy1);
+    return std::max(2.0 * omegaWall - in.omega, omegaWall);
+}
+
 // boundary ghost state ------------------------------------------------------
 Primitive DBNSSolver::ghostState(const Primitive& in, int faceId,
                                  const BoundarySpec& spec, int boundaryIdx) const {
@@ -293,6 +307,7 @@ Primitive DBNSSolver::ghostState(const Primitive& in, int faceId,
             g.v = 2.0 * spec.wallVelocity.y - in.v;
             g.p = in.p; g.rho = in.rho;          // dT/dn = 0
             g.k = -in.k;                         // face k = 0
+            g.omega = wallOmegaGhost(in, faceId);
             return g;
         }
         case BoundaryKind::NoSlipIsothermal: {
@@ -308,6 +323,7 @@ Primitive DBNSSolver::ghostState(const Primitive& in, int faceId,
             double Tg = 2.0 * Tw - Tin;          // face T = Tw
             g.p = in.p; g.rho = g.p / (eos_.R * std::max(Tg, 1.0));
             g.k = -in.k;
+            g.omega = wallOmegaGhost(in, faceId);
             return g;
         }
     }
@@ -434,7 +450,24 @@ void DBNSSolver::addBoundaryFlux(int faceId, int patchIdx) {
             double qn = -lamEff * dTdn;
             res_[P][I_RHOE] -= -qn * A;   // energy viscous flux contribution
         }
-        // turbulent transport at wall: k=0 imposed via source clamp; omega via BC
+        // turbulent transport wall fluxes (previously absent entirely, which
+        // starved the buffer layer: no k sink to the wall and no omega feed
+        // from its wall value, so k and omega rode to an over-mixed state
+        // there). One-sided diffusion with k_wall = 0 and the Menter omega
+        // wall value omega_w = 60 nu_w / (beta1 dy1^2), dy1 = 2 delta (the
+        // first-cell height); together with the sublayer cell floor this is
+        // the standard low-Reynolds omega wall treatment.
+        if (settings_.turbulent) {
+            double sk = sstCoeffs_.sigma_k1, sw = sstCoeffs_.sigma_w1;
+            double nuW = muLam_[P] / VP.rho;
+            double dy1 = 2.0 * delta;
+            double omegaWall = 60.0 * nuW / (sstCoeffs_.beta1 * dy1 * dy1);
+            double fluxK = (muLam_[P] + sk * muT_[P]) * (0.0 - VP.k) / delta;
+            double fluxW = (muLam_[P] + sw * muT_[P])
+                           * (omegaWall - VP.omega) / delta;
+            res_[P][I_RHOK] -= fluxK * A;
+            res_[P][I_RHOW] -= fluxW * A;
+        }
         return;
     }
 
