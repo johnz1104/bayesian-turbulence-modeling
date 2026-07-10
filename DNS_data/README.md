@@ -742,3 +742,207 @@ complete; per-case parameter tables are added when a loader is built.
   hosted by the migrated TMR. Smooth-wall pressure-gradient separation, not a
   sharp-shock impingement; the framing is a scope decision for the study that
   consumes it.
+
+## Compiled dataset 11: impinging-shock interaction, adiabatic wall (Pirozzoli and Bernardini 2011)
+
+Status: uploaded and verified 2026-07-10; third-party data, not produced by this
+project. The adiabatic sharp-shock interaction: the stress-discrepancy surface, the
+Cf and Cp wall truths, the incoming-boundary-layer inflow anchor and the
+kinetic-energy-budget anchor for the shock-interaction study. Carries no
+temperature-velocity covariance and no wall heat flux (adiabatic), so the heat-flux
+leg lives in dataset 12.
+
+### Provenance
+
+- Source or URL: Rome La Sapienza DNS database (the OSBLI distribution;
+  newton.dima.uniroma1.it/osbli), compiled locally under
+  DNS_data/shock_wave_BLI/.
+- Reference: S. Pirozzoli and M. Bernardini, "Direct numerical simulation
+  database for impinging shock wave/turbulent boundary-layer interaction",
+  AIAA Journal 49(6) (2011) 1307-1312, doi:10.2514/1.J050901 (paper_AIAA11.pdf
+  in the dataset directory).
+- Regime: compressible; impinging oblique-shock interaction; free-stream Mach
+  2.28, shock-generator incidence 8 degrees, gamma 1.4, adiabatic wall;
+  Re = 16750 on the inlet boundary-layer thickness (the reference length).
+- Geometry and layout (verified against the files): full domain 80.58 x 12.89;
+  the compiled statistics cover the downstream half in 32 Tecplot blocks
+  (indices 33 to 64, x in [40.29, 80.58]), each zone 61 x 344 with the last
+  column of one block repeating the first of the next (deduplicated at load).
+  Incoming-layer reference station x = 43.6 (Re_tau 466, Re_theta 2344,
+  cf 2.56e-3, H 3.55, per the dataset readme).
+- Fields provided:
+  - statistics/favre_averages/favre/favre_33..64.dat: 8 columns (x, y, u, v,
+    u''v'', u''u'', v''v'', w''w''); 32 files, aggregate sha256-of-sha256s
+    c7d09f97d47019ab.
+  - statistics/reynolds_averages/reynolds/reynolds_33..64.dat: 14 columns
+    (x, y, rho, u, v, p, T, rho'rho', u'u', v'v', w'w', u'v', p'p', T'T');
+    32 files, aggregate f5e9d78ce053f456. Verified quirk: the readme's FORTRAN
+    read loop says 13 variables, the files hold 14; loaders count columns from
+    the data, not the readme.
+  - statistics/wall_stat/stat.dat: 13 columns (x, cf, pw, pwrms, utau, deltav,
+    delta99, delta*, theta, delta*inc, thetainc, H, Hinc), 3904 rows spanning
+    the full domain with block-edge x values duplicated (deduplicated at
+    load); sha256 c8af0e0033870fb2.
+  - statistics/bl_incoming/blinc.dat: the incoming-layer profile at x = 43.6,
+    153 rows, 12 columns (y/delta99, y+, u, uvd+, urms, vrms, wrms, u'v',
+    urms+, vrms+, wrms+, sqrt(rho/rhow)); sha256 7b6883a22110760d. The inflow
+    anchor for the density-based baseline solve.
+  - statistics/k-budget/tkebudget_xstar_{-1.93,-0.05,2.10}.dat: the turbulence
+    kinetic-energy budget at three interaction stations, 7 columns
+    (y, convection, transport, production, viscous diffusion, dissipation,
+    and a lumped pressure-dilatation-plus-mass-diffusion term); sha256
+    c6e34a57c1e3ae31, 03efce097a0ba018, 3a35a891145730dd. The
+    pressure-dilatation moat mode is NOT isolated here (lumped, three stations
+    only): no dilatational-mode claim rests on this data.
+  - wall_pressure_data/: unsteady wall-pressure signal and spectra, present
+    and not consumed by the mean model-form study.
+- File format: plain text, Tecplot zone headers on the 2-D fields;
+  free-stream nondimensionalization (reference density, pressure, temperature
+  and velocity are free-stream; lengths in inlet boundary-layer thicknesses).
+  The stress-column convention (whether the tabulated double-prime covariances
+  are density-weighted) is pinned at loader time by the favre-versus-reynolds
+  cross-check on this dataset and recorded in the loader tests.
+- OOD axis it populates: none alone (one shock strength, one wall state); it
+  is the adiabatic anchor of the wall-thermal axis of dataset 12 and the
+  independent-campaign cross-check surface for that dataset's s = 1.0 case.
+- Observation uncertainty: MODELED relative value (no per-point uncertainty in
+  the files), floored per the shock-interaction pre-registration at data-only
+  anchors measured by the loaders: the upstream momentum-integral residual of
+  the wall series (its own cf and theta columns), the budget-closure residual
+  of the three budget stations, and the cross-campaign adiabatic residual
+  against dataset 12's s = 1.0 wall series over the shared interaction range.
+- Used by: the shock-interaction model-form study (stress leg, wall Cf and Cp
+  truths, inflow anchor, region definitions).
+- License and notes: research use with citation (Pirozzoli and Bernardini
+  2011). The bulk (about 214 files) stays local and gitignored.
+
+## Compiled dataset 12: impinging-shock interaction, wall-thermal sweep (Bernardini et al. 2016)
+
+Status: uploaded and verified 2026-07-10; third-party data, not produced by this
+project. The same interaction as dataset 11 with imposed wall heat transfer: five
+wall-to-recovery-temperature ratios at one fixed shock strength. The only source of
+the interaction turbulent heat-flux vector and the wall Stanton number, so the
+heat-flux leg of the shock-interaction study and its wall-thermal
+out-of-distribution axis live here.
+
+### Provenance
+
+- Source or URL: Rome La Sapienza DNS database (the HEATSBLI distribution),
+  compiled locally under DNS_data/heat_transfer_SBLI/.
+- Reference: M. Bernardini, I. Asproulias, J. Larsson, S. Pirozzoli and
+  F. Grasso, "Heat transfer and wall temperature effects in shock
+  wave/turbulent boundary layer interactions", Physical Review Fluids 1 (2016)
+  084403 (paper.pdf in the dataset directory).
+- Regime: compressible; the same impinging oblique-shock configuration
+  (free-stream Mach 2.28, incidence 8 degrees, gamma 1.4); isothermal walls at
+  five wall-to-recovery-temperature ratios s = Tw/Tr = 0.5, 0.75, 1.0, 1.4,
+  1.9 (strongly cooled through adiabatic to heated); incoming Re_theta about
+  2500 at the reference station x0 = 50 inlet thicknesses; nominal impingement
+  at 69.5 inlet thicknesses; full DNS grid 6144 x 448 per the paper, with an
+  interaction-zone subdomain written to the files.
+- Cases and layout (verified against the files; x* has its origin at the
+  inviscid impingement point, lengths in incoming-layer thicknesses):
+
+  | s | favre zone | x* range | y* range | wall series rows | St present | favre sha256 (16) | wallstat sha256 (16) |
+  |---|---|---|---|---|---|---|---|
+  | 0.5  | 3001 x 284 | [-13.5, 8.2] | [0, 2.5] | 6144 | yes | 7025735fc98e13e9 | 8f0461f6190c1319 |
+  | 0.75 | 3001 x 284 | [-13.5, 8.2] | [0, 2.5] | 6144 | yes | e58171e040299fcb | 4c2e412f5d32b39a |
+  | 1.0  | 1610 x 230 | [-13.5, 8.2] | [0, 2.5] | 4096 | NO  | b8d2ed3a09f71fc8 | 1d4c4f6be03150b6 |
+  | 1.4  | 1610 x 230 | [-13.5, 8.2] | [0, 2.5] | 4096 | yes | 0ce919925873c699 | 2efea0e5aefa85e5 |
+  | 1.9  | 1610 x 230 | [-13.5, 8.2] | [0, 2.5] | 4096 | yes | 6500d4c8abeb9983 | 44ef61bd1ad8f876 |
+
+- Fields provided:
+  - favre_averages/favre_s.dat per s: 13 columns (x*, y*, rho, u, v, p, T,
+    u''u'', v''v'', w''w'', u''v'', u''T'', v''T''). Carries the full
+    thermodynamic mean state and the TURBULENT HEAT-FLUX VECTOR (the two live
+    components), which no other compiled interaction source provides.
+  - wall_stat/wallstat_s.dat per s: x*, cf, pw, pwrms, St over x* in
+    [-40, 15.2]. Verified quirks, load-bearing: the s = 1.0 file has FOUR
+    columns (no Stanton column at all, adiabatic wall), and its pw
+    normalization differs from the other four (order 132 versus order 1
+    upstream), so wall pressure is reduced to Cp against each file's own
+    upstream plateau rather than an assumed reference pressure.
+- File format: plain text, Tecplot zone header on the 2-D fields; free-stream
+  nondimensionalization as dataset 11. The two grid families (3001 x 284 for
+  s = 0.5, 0.75; 1610 x 230 for the rest) are two campaigns of the same
+  configuration; per-family strides are pinned in the pre-registration.
+- OOD axis it populates: the wall thermal condition (five wall-to-recovery
+  ratios at one fixed shock strength), the interaction generalization axis of
+  the shock-interaction study; the s = 1.0 case doubles as the
+  independent-campaign cross-check against dataset 11.
+- Observation uncertainty: MODELED relative value (no per-point uncertainty in
+  the files), floored per the shock-interaction pre-registration at the
+  cross-campaign adiabatic residual (this dataset's s = 1.0 wall series
+  against dataset 11's over the shared range) as the dataset-level anchor,
+  with the momentum-integral and budget anchors carried by dataset 11.
+- Used by: the shock-interaction model-form study (the heat-flux discrepancy
+  targets, the wall-thermal splits, the Stanton truth for the coupled leg).
+- License and notes: research use with citation (Bernardini, Asproulias,
+  Larsson, Pirozzoli and Grasso 2016). The bulk stays local and gitignored.
+
+## Compiled dataset 13: attached supersonic flat-plate boundary layers, M2/M3/M4 (Pirozzoli and Bernardini)
+
+Status: uploaded and verified 2026-07-10; third-party data, not produced by this
+project. The attached supersonic-boundary-layer family: the attached cross-Mach and
+cross-Reynolds stress axis and the preserve-attached-accuracy control for the
+shock-interaction study. Verified limitation, load-bearing: these files carry NO
+turbulent heat-flux vector, no wall heat flux and no mean-temperature column
+(adiabatic-wall cases), so this set never enters heat-flux training and supports no
+heat-flux generalization claim (the acceptance gate's compressible heat-flux clause
+is met by datasets 7 and 12, not this one).
+
+### Provenance
+
+- Source or URL: reynolds.dma.uniroma1.it/dnsm2 (the dnsm2 distribution),
+  compiled locally under DNS_data/supersonic_turbulent_BL/.
+- Reference (per references.txt in the dataset directory): S. Pirozzoli and
+  M. Bernardini, "Turbulence in supersonic boundary layers at moderate
+  Reynolds number", J. Fluid Mech. 688 (2011) 120-168; S. Pirozzoli and
+  M. Bernardini, "Probing high-Reynolds-number effects in numerical boundary
+  layers", Phys. Fluids 25 (2013) 021704; wall-pressure companions Bernardini
+  and Pirozzoli, Phys. Fluids 23 (2011) 085102 and 061701. Scaled-variable
+  definitions per the paper held in the directory (readme.txt points at its
+  Figure 5).
+- Regime: compressible; zero-pressure-gradient flat-plate turbulent boundary
+  layers; nominal free-stream Mach 2, 3 and 4; adiabatic walls.
+- Cases and per-case parameters (from each file's own prose header; Re_theta
+  = rho_inf u_inf theta / mu_inf, Redelta2 = rho_inf u_inf theta / mu_w):
+
+  | case | cf | M_tau | Re_tau | Re_theta | Re_delta2 | H | rows | sha256 (16) |
+  |---|---|---|---|---|---|---|---|---|
+  | M2_Retau200  | 3.417e-03 | 0.0829 | 205  | 873  | 557  | 3.13 | 196 | 529c1046dbbdae66 |
+  | M2_Retau250  | 3.189e-03 | 0.0802 | 252  | 1122 | 715  | 3.08 | 196 | 54c6918e3e717328 |
+  | M2_Retau450  | 2.761e-03 | 0.0744 | 448  | 2082 | 1327 | 2.99 | 246 | 02a89dfef6f1868f |
+  | M2_Retau580  | 2.534e-03 | 0.0712 | 583  | 2866 | 1828 | 2.96 | 246 | c6f4402e92cbec25 |
+  | M2_Retau840  | 2.279e-03 | 0.0675 | 843  | 4431 | 2825 | 2.93 | 356 | 3a00a26c84eceff2 |
+  | M2_Retau900  | 2.241e-03 | 0.0670 | 899  | 4747 | 3027 | 2.92 | 356 | 4fd4915b45fb0178 |
+  | M2_Retau1000 | 2.182e-03 | 0.0661 | 998  | 5315 | 3390 | 2.91 | 356 | 3f34ac6c9e8d6918 |
+  | M2_Retau1110 | 2.107e-03 | 0.0649 | 1113 | 6044 | 3854 | 2.92 | 356 | 33a7da2b34853409 |
+  | M3_Retau400  | 2.006e-03 | 0.0951 | 403  | 3311 | 1385 | 4.78 | 246 | a6a24db7304708b0 |
+  | M3_Retau500  | 1.853e-03 | 0.0914 | 502  | 4343 | 1816 | 4.72 | 246 | 793459a9f8dbd7fa |
+  | M4_Retau400  | 1.364e-03 | 0.1047 | 398  | 4712 | 1697 | 7.23 | 246 | 4ff41a5375b27621 |
+  | M4_Retau500  | 1.317e-03 | 0.1028 | 505  | 5915 | 2130 | 6.96 | 246 | 81b3a153cec99653 |
+
+- Fields provided (a prose header with cf, friction Mach number, four Reynolds
+  numbers and shape factors, then 20 profile columns): y/delta99, y+, u+,
+  uvd+, urms+, vrms+, wrms+, uv+, sqrt(rho/rho_w), prms+, trms+, rhorms+, the
+  van-Driest diagnostic y+ duvd+/dy+, skewness and flatness of u and T, and
+  the three vorticity intensities. Mean density is recovered from the
+  sqrt(rho/rho_w) column squared; mean temperature by the constant-pressure
+  boundary-layer relation T/T_w = rho_w/rho, stated as a reconstruction
+  wherever used.
+- File format: plain text, prose header then whitespace columns; wall (+)
+  units on the turbulence quantities.
+- OOD axes it populates: Mach number (2, 3, 4) and Reynolds number (Re_tau
+  200 to 1110 at M2) among attached flows; the attached control side of the
+  shock-interaction study, never an interaction case.
+- Observation uncertainty: MODELED relative value (no per-point uncertainty in
+  the files), anchored by the van-Driest-transform reconstruction residual
+  (recomputing uvd+ from the file's own u+ and density-ratio columns against
+  its uvd+ column, the same data-only identity as the flat-plate dataset 9),
+  measured by the loader and recorded in its tests.
+- Used by: the shock-interaction model-form study (attached stress-axis
+  training pool for the far-transfer leg and the preserve-attached control);
+  available to any later attached compressible work.
+- License and notes: research use with citation (Pirozzoli and Bernardini,
+  references above). The bulk stays local and gitignored.
