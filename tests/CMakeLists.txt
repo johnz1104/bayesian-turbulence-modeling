@@ -74,6 +74,12 @@ target_link_libraries(test_dbns_implicit PRIVATE btm_dbns)
 add_test(NAME dbns_implicit COMMAND test_dbns_implicit)
 set_tests_properties(dbns_implicit PROPERTIES TIMEOUT 480 LABELS "verification;dbns")
 
+# ---- dbns_injection: deferred-correction coupling with the heat-flux reach ----
+add_executable(test_dbns_injection cpp/test_dbns_injection.cpp)
+target_link_libraries(test_dbns_injection PRIVATE btm_dbns)
+add_test(NAME dbns_injection COMMAND test_dbns_injection)
+set_tests_properties(dbns_injection PROPERTIES TIMEOUT 480 LABELS "verification;dbns")
+
 # ---- pytest target ----
 # Optional convenience target; the canonical way to run Python tests is
 # `pytest tests/python` from the repo root after building the .so.

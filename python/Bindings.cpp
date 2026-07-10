@@ -49,9 +49,7 @@ static void dbnsInitField(dbns::DBNSSolver& s, py::array_t<double> arr) {
 }
 
 // Wall observation record -> dict of numpy arrays.
-static py::dict dbnsWall(const dbns::DBNSObservation& obs, const std::string& patch,
-                         double wallTemp) {
-    dbns::WallRecord w = obs.wall(patch, wallTemp);
+static py::dict dbnsWallToDict(const dbns::WallRecord& w) {
     auto toArr = [](const std::vector<double>& v) {
         py::array_t<double> a((py::ssize_t)v.size());
         auto r = a.mutable_unchecked<1>();
@@ -62,6 +60,22 @@ static py::dict dbnsWall(const dbns::DBNSObservation& obs, const std::string& pa
     d["x"] = toArr(w.x); d["Cf"] = toArr(w.Cf); d["Cp"] = toArr(w.Cp);
     d["qw"] = toArr(w.qw); d["St"] = toArr(w.St);
     return d;
+}
+
+static py::dict dbnsWall(const dbns::DBNSObservation& obs, const std::string& patch,
+                         double wallTemp) {
+    dbns::WallRecord w = obs.wall(patch, wallTemp);
+    return dbnsWallToDict(w);
+}
+
+static py::dict dbnsWallProfile(const dbns::DBNSObservation& obs,
+                                const std::string& patch,
+                                py::array_t<double> wallTemps,
+                                double fallback) {
+    auto a = wallTemps.unchecked<1>();
+    std::vector<double> tw(a.data(0), a.data(0) + a.shape(0));
+    dbns::WallRecord w = obs.wallProfile(patch, tw, fallback);
+    return dbnsWallToDict(w);
 }
 
 // Realizability projection of a Reynolds stress given its six components.
@@ -637,7 +651,36 @@ PYBIND11_MODULE(rans_sst_py, m) {
         .def_readwrite("freestream", &BoundarySpec::freestream)
         .def_readwrite("wall_temp", &BoundarySpec::wallTemp)
         .def_readwrite("back_pressure", &BoundarySpec::backPressure)
-        .def_readwrite("wall_velocity", &BoundarySpec::wallVelocity);
+        .def_readwrite("wall_velocity", &BoundarySpec::wallVelocity)
+        .def("set_wall_temp_profile",
+             [](BoundarySpec& spec, py::array_t<double> arr) {
+                 // per-face wall temperatures for NoSlipIsothermal patches in
+                 // the patch's own face order (the measured wall-temperature
+                 // row: recovery upstream of the thermal switch, the imposed
+                 // s-condition downstream)
+                 auto a = arr.unchecked<1>();
+                 spec.wallTempProfile.assign(a.data(0),
+                                             a.data(0) + a.shape(0));
+             }, py::arg("array"))
+        .def("set_profile",
+             [](BoundarySpec& spec, py::array_t<double> arr) {
+                 // per-face prescribed states for SupersonicInflow/FixedState
+                 // patches, (n_faces, 6) rows of rho, u, v, p, k, omega in the
+                 // patch's own face order (e.g. a measured incoming-layer
+                 // profile, or an imposed-shock top boundary)
+                 auto a = arr.unchecked<2>();
+                 if (a.shape(1) != 6)
+                     throw std::runtime_error(
+                         "set_profile: expected (n_faces, 6)");
+                 spec.profile.resize(a.shape(0));
+                 for (py::ssize_t i = 0; i < a.shape(0); ++i) {
+                     Primitive& V = spec.profile[i];
+                     V.rho = a(i, 0); V.u = a(i, 1); V.v = a(i, 2);
+                     V.p = a(i, 3); V.k = a(i, 4); V.omega = a(i, 5);
+                 }
+             }, py::arg("array"))
+        .def("clear_profile",
+             [](BoundarySpec& spec) { spec.profile.clear(); });
 
     py::class_<DBNSBoundaryConditions>(m, "DBNSBoundaryConditions")
         .def(py::init<>())
@@ -686,12 +729,64 @@ PYBIND11_MODULE(rans_sst_py, m) {
         .def("prepare_properties", &DBNSSolver::prepareProperties)
         .def("n_cells", &DBNSSolver::nCells)
         .def("primitive", &DBNSSolver::primitive, py::arg("cell"))
-        .def("fields", &dbnsFields);
+        .def("fields", &dbnsFields)
+        .def("set_target_correction",
+             [](DBNSSolver& s, py::array_t<double> b, py::array_t<double> dq,
+                bool energy_reach) {
+                 // b: (n_cells, 3, 3) symmetric target anisotropy; dq:
+                 // (n_cells, 2) or (0,) turbulent heat-flux correction in
+                 // solver units (<rho u_i''T''>/<rho>, m/s K). Values are
+                 // copied into the solver (no lifetime coupling, unlike the
+                 // incompressible forward model's reference semantics).
+                 auto ab = b.unchecked<3>();
+                 if (ab.shape(1) != 3 || ab.shape(2) != 3)
+                     throw std::runtime_error(
+                         "set_target_correction: b must be (n_cells, 3, 3)");
+                 int nc = (int)ab.shape(0);
+                 std::vector<double> b6(6 * nc);
+                 for (int ci = 0; ci < nc; ++ci) {
+                     b6[6 * ci + 0] = ab(ci, 0, 0);
+                     b6[6 * ci + 1] = ab(ci, 1, 1);
+                     b6[6 * ci + 2] = ab(ci, 2, 2);
+                     b6[6 * ci + 3] = ab(ci, 0, 1);
+                     b6[6 * ci + 4] = ab(ci, 0, 2);
+                     b6[6 * ci + 5] = ab(ci, 1, 2);
+                 }
+                 std::vector<double> dq2;
+                 if (dq.size() > 0) {
+                     auto aq = dq.unchecked<2>();
+                     if ((int)aq.shape(0) != nc || aq.shape(1) != 2)
+                         throw std::runtime_error(
+                             "set_target_correction: dq must be (n_cells, 2)");
+                     dq2.resize(2 * nc);
+                     for (int ci = 0; ci < nc; ++ci) {
+                         dq2[2 * ci] = aq(ci, 0);
+                         dq2[2 * ci + 1] = aq(ci, 1);
+                     }
+                 }
+                 s.setTargetCorrection(b6, dq2, energy_reach);
+             },
+             py::arg("b"), py::arg("dq"), py::arg("energy_reach") = true)
+        .def("clear_target_correction", &DBNSSolver::clearTargetCorrection)
+        .def("injection_diagnostics",
+             [](const DBNSSolver& s) {
+                 const auto& d = s.injectionDiagnostics();
+                 py::dict out;
+                 out["active"] = d.active;
+                 out["checked_iters"] = d.checkedIters;
+                 out["all_realizable"] = d.allRealizable;
+                 out["max_violation"] = d.maxViolation;
+                 out["max_db"] = d.maxDb;
+                 out["max_dq"] = d.maxDq;
+                 return out;
+             });
 
     py::class_<DBNSObservation>(m, "DBNSObservation")
         .def(py::init<const DBNSSolver&, const ReferenceState&>(),
              py::arg("solver"), py::arg("ref"), py::keep_alive<1, 2>())
-        .def("wall", &dbnsWall, py::arg("patch"), py::arg("wall_temp"));
+        .def("wall", &dbnsWall, py::arg("patch"), py::arg("wall_temp"))
+        .def("wall_profile", &dbnsWallProfile, py::arg("patch"),
+             py::arg("wall_temps"), py::arg("fallback"));
 
     // Realizability projection (also reused by the Track B Python layer).
     m.def("project_reynolds_stress", &dbnsProjectStress,

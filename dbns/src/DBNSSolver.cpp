@@ -1,10 +1,12 @@
 #include "DBNSSolver.hpp"
 #include "HLLCFlux.hpp"
+#include "AnisotropyTools.hpp"
 #include <array>
 #include <vector>
 #include <cmath>
 #include <algorithm>
 #include <cstdio>
+#include <stdexcept>
 
 namespace dbns {
 
@@ -38,6 +40,18 @@ DBNSSolver::DBNSSolver(const Mesh& mesh, const IdealGasEOS& eos,
     }
     muLam_.assign(nc, 0.0);
     muT_.assign(nc, 0.0);
+    // patch-local ordinal of each boundary face (for per-face boundary
+    // profiles): patchLocalIdx_[globalFace - nInternalFaces] = position of
+    // that face within its patch's own face list
+    patchLocalIdx_.assign(mesh_.nFaces() - mesh_.nInternalFaces(), 0);
+    for (int pi = 0; pi < mesh_.nPatches(); ++pi) {
+        const Patch& pat = mesh_.patch(pi);
+        for (size_t j = 0; j < pat.faces.size(); ++j) {
+            int bidx = pat.faces[j] - mesh_.nInternalFaces();
+            if (bidx >= 0 && bidx < (int)patchLocalIdx_.size())
+                patchLocalIdx_[bidx] = (int)j;
+        }
+    }
     grad_.assign(nc, std::array<Vec3, 6>{});
     limiter_.assign(nc, std::array<double, 6>{});
     res_.assign(nc, StateVec{});
@@ -218,6 +232,12 @@ Primitive DBNSSolver::ghostState(const Primitive& in, int faceId,
     switch (spec.kind) {
         case BoundaryKind::SupersonicInflow:
         case BoundaryKind::FixedState:
+            // spatially varying prescribed state (incoming-layer profile or
+            // an imposed-shock top boundary) when the patch carries one
+            if (!spec.profile.empty()) {
+                int j = patchLocalIdx_[boundaryIdx];
+                if (j < (int)spec.profile.size()) return spec.profile[j];
+            }
             return spec.freestream;
         case BoundaryKind::Extrapolate:
             return in;
@@ -250,6 +270,11 @@ Primitive DBNSSolver::ghostState(const Primitive& in, int faceId,
             g.u = 2.0 * spec.wallVelocity.x - in.u;
             g.v = 2.0 * spec.wallVelocity.y - in.v;
             double Tw = spec.wallTemp;
+            if (!spec.wallTempProfile.empty()) {
+                int j = patchLocalIdx_[boundaryIdx];
+                if (j < (int)spec.wallTempProfile.size())
+                    Tw = spec.wallTempProfile[j];
+            }
             double Tin = GasState::temperature(in, eos_);
             double Tg = 2.0 * Tw - Tin;          // face T = Tw
             g.p = in.p; g.rho = g.p / (eos_.R * std::max(Tg, 1.0));
@@ -370,7 +395,13 @@ void DBNSSolver::addBoundaryFlux(int faceId, int patchIdx) {
         if (spec.kind == BoundaryKind::NoSlipIsothermal) {
             double lamEff = eos_.Cp() * (muLam_[P] / eos_.Pr + muT_[P] / eos_.Pr_T);
             double Tin = GasState::temperature(VP, eos_);
-            double dTdn = (spec.wallTemp - Tin) / delta;   // (T_wall - T_cell)/delta
+            double Tw = spec.wallTemp;
+            if (!spec.wallTempProfile.empty()) {
+                int j = patchLocalIdx_[bidx];
+                if (j < (int)spec.wallTempProfile.size())
+                    Tw = spec.wallTempProfile[j];
+            }
+            double dTdn = (Tw - Tin) / delta;   // (T_wall - T_cell)/delta
             double qn = -lamEff * dTdn;
             res_[P][I_RHOE] -= -qn * A;   // energy viscous flux contribution
         }
@@ -477,6 +508,8 @@ void DBNSSolver::computeResidual() {
     for (int fi = nIF; fi < mesh_.nFaces(); ++fi)
         addBoundaryFlux(fi, mesh_.face(fi).patchID);
 
+    if (!bTarget6_.empty()) addInjectionFluxes();
+
     addTurbulenceSources();
 
     // manufactured-solution source: dW/dt = -(res - S V)/V
@@ -485,6 +518,121 @@ void DBNSSolver::computeResidual() {
             double Vol = vol_[ci];
             for (int i = 0; i < NVAR; ++i) res_[ci][i] -= mmsSource_[ci][i] * Vol;
         }
+}
+
+// --- model-form injection (the deferred-correction coupling) -----------------
+void DBNSSolver::setTargetCorrection(const std::vector<double>& b6,
+                                     const std::vector<double>& dq2,
+                                     bool energyReach) {
+    int nc = mesh_.nCells();
+    if ((int)b6.size() != 6 * nc)
+        throw std::runtime_error("setTargetCorrection: b6 must be nCells*6");
+    if (!dq2.empty() && (int)dq2.size() != 2 * nc)
+        throw std::runtime_error("setTargetCorrection: dq2 must be nCells*2 "
+                                 "or empty");
+    bTarget6_ = b6;
+    dqTarget2_ = dq2;
+    injectEnergyReach_ = energyReach;
+    injDiag_ = InjectionDiagnostics{};
+    injDiag_.active = true;
+    for (double v : bTarget6_)
+        injDiag_.maxDb = std::max(injDiag_.maxDb, std::abs(v));
+    for (double v : dqTarget2_)
+        injDiag_.maxDq = std::max(injDiag_.maxDq, std::abs(v));
+}
+
+void DBNSSolver::clearTargetCorrection() {
+    bTarget6_.clear();
+    dqTarget2_.clear();
+    injDiag_ = InjectionDiagnostics{};
+}
+
+// Deferred-correction fluxes of the sampled closure, mirroring the
+// incompressible injection and extending it to the energy equation (the
+// heat-flux reach the pre-registered scheme names as the compressible
+// novelty). Per cell the injected turbulent stress difference is
+//   tau_inj = -(2 <rho> k b_target + 2 mu_t dev(S)),
+// the difference between the target deviatoric Favre stress and the
+// Boussinesq deviatoric stress the mu_t diffusion already carries (running
+// rho, k, mu_t and strain, so a target equal to the solver's own Boussinesq
+// anisotropy reproduces the baseline solve identically). It is assembled as
+// a conservative internal-face flux (distance-weighted face values); wall
+// and open boundary faces carry no injected flux (the near-wall rows have
+// k ~ 0, the same negligible-contribution note as the incompressible
+// scheme). With the energy reach on, the consistent stress work
+// (tau_inj . u) . n and the injected turbulent heat flux
+//   q_inj = <rho> cp dq_target
+// (the deferred correction against the implicit gradient-diffusion term)
+// enter the energy flux. The barycentric margin of the target is re-checked
+// once per residual evaluation and violations are recorded, never silently
+// projected (the caller projects before setting).
+void DBNSSolver::addInjectionFluxes() {
+    int nc = mesh_.nCells();
+    injDiag_.checkedIters += 1;
+    for (int ci = 0; ci < nc; ++ci) {
+        double margin = aniso::barycentricMargin(bTarget6_.data() + 6 * ci);
+        if (margin < -1e-9) {
+            injDiag_.allRealizable = false;
+            injDiag_.maxViolation = std::max(injDiag_.maxViolation, -margin);
+        }
+    }
+
+    // per-cell injected stress difference tau_inj (xx, yy, xy needed for the
+    // 2-D fluxes; zz never crosses a face) and heat-flux vector rho cp dq
+    std::vector<double> txx(nc), tyy(nc), txy(nc), qx(nc, 0.0), qy(nc, 0.0);
+    bool withHeat = injectEnergyReach_ && !dqTarget2_.empty();
+    double cp = eos_.Cp();
+    for (int ci = 0; ci < nc; ++ci) {
+        Primitive V = GasState::toPrimitive(W_[ci], eos_);
+        double rho = V.rho;
+        double k = std::max(V.k, 0.0);
+        double muT = muT_[ci];
+        double dudx = grad_[ci][G_U].x, dudy = grad_[ci][G_U].y;
+        double dvdx = grad_[ci][G_V].x, dvdy = grad_[ci][G_V].y;
+        double div3 = (dudx + dvdy) / 3.0;      // trace/3 of the 2-D strain
+        double devSxx = dudx - div3;
+        double devSyy = dvdy - div3;
+        double Sxy = 0.5 * (dudy + dvdx);
+        const double* bt = bTarget6_.data() + 6 * ci;
+        // b ordered xx, yy, zz, xy, xz, yz; only xx, yy, xy enter the fluxes
+        txx[ci] = -(2.0 * rho * k * bt[0] + 2.0 * muT * devSxx);
+        tyy[ci] = -(2.0 * rho * k * bt[1] + 2.0 * muT * devSyy);
+        txy[ci] = -(2.0 * rho * k * bt[3] + 2.0 * muT * Sxy);
+        if (withHeat) {
+            qx[ci] = rho * cp * dqTarget2_[2 * ci];
+            qy[ci] = rho * cp * dqTarget2_[2 * ci + 1];
+        }
+    }
+
+    int nIF = mesh_.nInternalFaces();
+    for (int fi = 0; fi < nIF; ++fi) {
+        const Face& f = mesh_.face(fi);
+        int P = f.owner, N = f.neighbor;
+        double w = f.weight;
+        double fxx = w * txx[P] + (1.0 - w) * txx[N];
+        double fyy = w * tyy[P] + (1.0 - w) * tyy[N];
+        double fxy = w * txy[P] + (1.0 - w) * txy[N];
+        double nx = f.normal.x, ny = f.normal.y, A = f.area;
+        StateVec Fv{};
+        Fv[I_RHOU] = fxx * nx + fxy * ny;
+        Fv[I_RHOV] = fxy * nx + fyy * ny;
+        if (injectEnergyReach_) {
+            Primitive VP = GasState::toPrimitive(W_[P], eos_);
+            Primitive VN = GasState::toPrimitive(W_[N], eos_);
+            double uF = 0.5 * (VP.u + VN.u), vF = 0.5 * (VP.v + VN.v);
+            Fv[I_RHOE] = (fxx * uF + fxy * vF) * nx
+                       + (fxy * uF + fyy * vF) * ny;
+            if (withHeat) {
+                double qnx = w * qx[P] + (1.0 - w) * qx[N];
+                double qny = w * qy[P] + (1.0 - w) * qy[N];
+                Fv[I_RHOE] -= qnx * nx + qny * ny;
+            }
+        }
+        for (int i = 0; i < NVAR; ++i) {
+            res_[P][i] -= Fv[i] * A;    // same sign convention as the viscous flux
+            res_[N][i] += Fv[i] * A;
+        }
+    }
 }
 
 void DBNSSolver::computeTimeStep(double cfl, bool includeViscous) {
