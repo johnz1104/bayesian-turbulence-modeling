@@ -54,8 +54,13 @@ from UQ.reproduce_sbli_apriori import (
 
 FOLDS = ("s0.5", "s1.0", "s1.9")
 KINDS = ("flow", "gauss")
-MEMBER_MAX_ITER = 30000
-MEMBER_TOL = 1e-4
+# members are warm-started perturbation solves: convergence is a thousand
+# fold decay OF THE INJECTION RESPONSE (the first-iteration residual), and
+# the cap fails genuinely non-settling members fast instead of burning the
+# ensemble budget (the quick smoke measured settled members plateauing at
+# 2e-4 to 6e-4 against the old 1e-4, and non-settling ones at order one)
+MEMBER_MAX_ITER = 15000
+MEMBER_TOL = 1e-3
 
 
 def _apo_dir(results_dir):
@@ -90,19 +95,28 @@ def _job_output(results_dir, fold, argv):
 
 
 def _load_baseline(records, case, results_dir, quick, with_shock=True,
-                   member_caps=False):
+                   member_caps=False, derived_probe=False):
     """Configure the case and warm the solver with the cached converged
-    primitive state; no solve happens here. member_caps swaps in the
-    member iteration budget (a warm-started perturbation solve, not a
-    cold start)."""
+    primitive state. member_caps swaps in the member iteration budget (a
+    warm-started perturbation solve, not a cold start). derived_probe runs
+    a single sweep so the solver populates its derived fields: init_field
+    sets only the primitive state, and the turbulent viscosity the target
+    conditioning reads through sample_fields is computed during solving
+    (the quick smoke caught nu_t identically zero without this, which
+    zeroed the baseline anisotropy under every target). One sweep from the
+    converged state drifts it by the order of the converged residual."""
     kw = {}
     if member_caps:
         kw = {"max_iterations": MEMBER_MAX_ITER,
               "convergence_tol": MEMBER_TOL}
+    if derived_probe:
+        kw = {"max_iterations": 1, "convergence_tol": 1e-30}
     base = _configure(records[case], quick, with_shock=with_shock, **kw)
     prim = np.load(_fields_path(
         results_dir, case if with_shock else "gate_a_attached"))["primitive"]
     base.solver.init_field(prim)
+    if derived_probe:
+        base.solver.solve()
     return base, prim
 
 
@@ -119,18 +133,20 @@ def stage_targets(records, results_dir, fold, quick, n_members, epochs):
             "seed": MEMBER_SEED}
 
     # interaction targets, conditioned on the fold's own converged baseline
-    base, _ = _load_baseline(records, fold, results_dir, quick)
+    base, _ = _load_baseline(records, fold, results_dir, quick,
+                             derived_probe=True)
     feats, b_base, mask = cell_conditioning(base, records[fold])
     meta["n_cells"] = int(len(feats))
     meta["mask_fraction"] = float(np.mean(mask))
+    meta["b_base_abs_med_masked"] = float(np.median(np.abs(b_base[mask])))
     for kind in KINDS:
         b_t, dq = member_targets(models[kind], feats, b_base, mask,
                                  n_members=n_members, seed=MEMBER_SEED)
         np.savez_compressed(
             _targets_path(results_dir, fold, kind),
             b=b_t.astype(np.float32), dq=dq.astype(np.float32))
-        meta[f"{kind}_db_abs_med"] = float(np.median(np.abs(
-            b_t - b_base[None])))
+        meta[f"{kind}_db_fro_med_masked"] = float(np.median(
+            np.linalg.norm((b_t - b_base[None])[:, mask], axis=(2, 3))))
         meta[f"{kind}_dq_abs_med"] = float(np.median(np.abs(dq)))
     corners = corner_targets(b_base, mask)
     np.savez_compressed(
@@ -141,7 +157,7 @@ def stage_targets(records, results_dir, fold, quick, n_members, epochs):
     # attached configuration's own converged state (M_t from the fields;
     # no DNS record exists for this configuration)
     abase, _ = _load_baseline(records, "adiabatic", results_dir, quick,
-                              with_shock=False)
+                              with_shock=False, derived_probe=True)
     afeats, ab_base, amask = cell_conditioning(
         abase, records["adiabatic"], m_t_from_fields=True)
     meta["attached_mask_fraction"] = float(np.mean(amask))
@@ -172,7 +188,8 @@ def stage_targets_far(records, results_dir, quick, n_members, epochs):
                               results_dir, history=True)
     X_tr, dq_tr = study._attached_dq_pool()
     Y_tr = dq_tr[:, 0:2]
-    base, _ = _load_baseline(records, "adiabatic", results_dir, quick)
+    base, _ = _load_baseline(records, "adiabatic", results_dir, quick,
+                             derived_probe=True)
     feats, b_base, mask = cell_conditioning(base, records["adiabatic"])
     meta = {"fold": "faradiab", "n_members": n_members, "epochs": epochs,
             "n_train": int(len(X_tr)), "n_cells": int(len(feats)),

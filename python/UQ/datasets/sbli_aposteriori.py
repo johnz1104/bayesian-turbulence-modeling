@@ -95,6 +95,12 @@ def cell_conditioning(baseline, record, m_t_from_fields=False):
     grad_u = _gradients_tensor(sample)
     timescale = 1.0 / np.maximum(_CMU * sample["omega"], 1e-6)
     S, _ = discrepancy.strain_rotation(grad_u, timescale)
+    # contract: the conditioning state must carry the solver's own eddy
+    # viscosity; a solver that was init_field'ed but never swept reports
+    # muT = 0 everywhere and would zero the baseline anisotropy under
+    # every injection target (run the derived-fields probe first)
+    assert float(np.max(sample["nu_t"])) > 0.0, \
+        "conditioning baseline has zero eddy viscosity everywhere"
     b_base = discrepancy.boussinesq_anisotropy_actual(
         S, sample["nu_t"], np.maximum(sample["k"], 1e-12), timescale)
     if m_t_from_fields:
@@ -161,10 +167,16 @@ def corner_targets(b_base, mask, deltas=CORNER_DELTAS):
     """The eigenspace corner family: label -> (n, 3, 3) target anisotropy,
     masked cells reverting to the baseline; the heat-flux correction is
     identically zero for every corner (the anisotropy-only structural
-    limitation the pre-registration names)."""
+    limitation the pre-registration names).
+
+    The barycentric perturbation is defined on the realizable triangle, so
+    the raw Boussinesq base (which excursions outside it, sharply at the
+    shock) is projected first; masked cells revert to the RAW base, whose
+    injection cancels identically against the running Boussinesq stress."""
+    b_real, _ = realizability.project_anisotropy(b_base)
     out = {}
     for delta_b in deltas:
-        fam = EigenspacePerturbation.corner_set(b_base, delta_b=delta_b)
+        fam = EigenspacePerturbation.corner_set(b_real, delta_b=delta_b)
         for corner, b_t in fam.items():
             b = np.array(b_t)
             b[~mask] = b_base[~mask]
