@@ -186,15 +186,19 @@ class SBLIAPriori:
     # ---- pre-registered splits ---------------------------------------------------
 
     def loso(self, leg, history=False, seeds=SEEDS, epochs=EPOCHS,
-             progress=None):
+             progress=None, skip=()):
         """Leave-one-wall-thermal-out over the heated-set cases (dq legs) or
         all six records (db leg). progress, when given, is called with
         (leg, held, fold_result) after each fold, so a long production run
-        checkpoints and reports incrementally."""
+        checkpoints and reports incrementally; skip resumes past folds a
+        checkpoint file already holds (fits are seed-deterministic, so the
+        skipped folds' recorded results are what a rerun would produce)."""
         cases = [c for c in self.test_sets
                  if (leg == "db") or self.test_sets[c]["dq"] is not None]
         results = {}
         for held in cases:
+            if held in skip:
+                continue
             train_cases = [c for c in cases if c != held]
             X_tr = np.concatenate([
                 self._features(self.train_sets[c], history)

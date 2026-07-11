@@ -58,11 +58,11 @@ def _all_records(root=None):
 
 
 def _configure(record, quick, with_shock=True, max_iterations=None,
-               convergence_tol=None):
+               convergence_tol=None, cfl=None):
     if quick:
         return SBLIBaseline.configure(record, with_shock=with_shock,
                                       nx=160, ny=112, x_hi=6.0, height=6.0,
-                                      cfl=100.0,
+                                      cfl=cfl or 100.0,
                                       max_iterations=max_iterations or 30000,
                                       convergence_tol=convergence_tol
                                       or 3e-6, yplus_target=0.05)
@@ -72,7 +72,7 @@ def _configure(record, quick, with_shock=True, max_iterations=None,
     # measured the flip at matched conditions); growth stays near 1.04
     return SBLIBaseline.configure(record, with_shock=with_shock,
                                   nx=480, ny=224, x_hi=14.0, height=8.0,
-                                  cfl=300.0,
+                                  cfl=cfl or 300.0,
                                   max_iterations=max_iterations or 250000,
                                   convergence_tol=convergence_tol or 1e-6,
                                   yplus_target=0.05)
@@ -205,8 +205,15 @@ def stage_baselines(records, results_dir, quick, regen):
 def stage_loso(study, seeds, epochs, partial_path=None):
     """Runs the pre-registered loso legs; each completed fold prints a
     line and rewrites the partial file, so a long production run reports
-    incrementally and a morning cut has every finished fold."""
+    incrementally, a morning cut has every finished fold, and a restart
+    resumes past the folds the partial file already holds (the fits are
+    seed-deterministic, so resumed and rerun results are identical)."""
     out = {}
+    if partial_path is not None and os.path.isfile(partial_path):
+        out = json.load(open(partial_path))
+        for leg, folds in out.items():
+            print(f"[loso {leg}] resuming past folds {sorted(folds)}",
+                  flush=True)
 
     def _tracked(label, acc):
         def cb(leg, held, fold_result):
@@ -218,12 +225,12 @@ def stage_loso(study, seeds, epochs, partial_path=None):
         return cb
 
     for leg in ("dq_y", "dq_joint", "db"):
-        out[leg] = {}
+        acc = out.setdefault(leg, {})
         study.loso(leg, history=False, seeds=seeds, epochs=epochs,
-                   progress=_tracked(leg, out[leg]))
-    out["dq_y_history"] = {}
+                   progress=_tracked(leg, acc), skip=set(acc))
+    acc = out.setdefault("dq_y_history", {})
     study.loso("dq_y", history=True, seeds=seeds, epochs=epochs,
-               progress=_tracked("dq_y+history", out["dq_y_history"]))
+               progress=_tracked("dq_y+history", acc), skip=set(acc))
     return out
 
 

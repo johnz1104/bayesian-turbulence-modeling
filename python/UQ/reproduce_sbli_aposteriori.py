@@ -95,7 +95,8 @@ def _job_output(results_dir, fold, argv):
 
 
 def _load_baseline(records, case, results_dir, quick, with_shock=True,
-                   member_caps=False, derived_probe=False):
+                   member_caps=False, derived_probe=False, cfl=None,
+                   max_iterations=None):
     """Configure the case and warm the solver with the cached converged
     primitive state. member_caps swaps in the member iteration budget (a
     warm-started perturbation solve, not a cold start). derived_probe runs
@@ -107,10 +108,12 @@ def _load_baseline(records, case, results_dir, quick, with_shock=True,
     converged state drifts it by the order of the converged residual."""
     kw = {}
     if member_caps:
-        kw = {"max_iterations": MEMBER_MAX_ITER,
+        kw = {"max_iterations": max_iterations or MEMBER_MAX_ITER,
               "convergence_tol": MEMBER_TOL}
     if derived_probe:
         kw = {"max_iterations": 1, "convergence_tol": 1e-30}
+    if cfl is not None:
+        kw["cfl"] = cfl
     base = _configure(records[case], quick, with_shock=with_shock, **kw)
     prim = np.load(_fields_path(
         results_dir, case if with_shock else "gate_a_attached"))["primitive"]
@@ -216,14 +219,16 @@ def stage_targets_far(records, results_dir, quick, n_members, epochs):
 
 
 def stage_member(records, results_dir, fold, kind, index, quick,
-                 attached=False, corner=None):
+                 attached=False, corner=None, cfl=None, max_iter=None):
     """One injected coupled solve, warm-started from the baseline. The
     fold "faradiab" is the attached-trained far-transfer propagation into
-    the adiabatic interaction configuration (dq-only targets)."""
+    the adiabatic interaction configuration (dq-only targets). cfl and
+    max_iter override the member defaults for calibration probes."""
     case = "adiabatic" if (attached or fold == "faradiab") else fold
     record = records[case]
     base, _ = _load_baseline(records, case, results_dir, quick,
-                             with_shock=not attached, member_caps=True)
+                             with_shock=not attached, member_caps=True,
+                             cfl=cfl, max_iterations=max_iter)
 
     if corner is not None:
         tg = np.load(_targets_path(results_dir, fold, "corners"))
@@ -437,9 +442,18 @@ def stage_orchestrate(records, results_dir, quick, throttle, n_members,
 
     summary = {}
     # phase 1: the interaction ensembles and corner families per fold (the
-    # primary clauses land first)
+    # primary clauses land first); a resumed run keeps existing target sets
+    # (deterministic seeds, so a rebuild would be byte-equivalent)
     for fold in folds:
-        stage_targets(records, results_dir, fold, quick, n_members, epochs)
+        have_targets = all(os.path.isfile(_targets_path(
+            results_dir, fold, k, attached=a))
+            for k in KINDS for a in (False, True)) and os.path.isfile(
+            _targets_path(results_dir, fold, "corners"))
+        if have_targets:
+            print(f"[targets {fold}] cached, resuming")
+        else:
+            stage_targets(records, results_dir, fold, quick, n_members,
+                          epochs)
         failed = _run_pool(_member_jobs(fold, corners=True), throttle,
                            log_path)
         print(f"[orchestrate {fold}] interaction members done, "
@@ -497,6 +511,10 @@ def main():
     ap.add_argument("--quick", action="store_true")
     ap.add_argument("--throttle", type=int, default=4)
     ap.add_argument("--folds", default=",".join(FOLDS))
+    ap.add_argument("--cfl", type=float, default=None,
+                    help="member CFL override (calibration probes)")
+    ap.add_argument("--max-iter", type=int, default=None,
+                    help="member iteration-cap override")
     args = ap.parse_args()
 
     np.random.seed(MEMBER_SEED)
@@ -518,7 +536,8 @@ def main():
     if args.stage == "member":
         stage_member(records, args.results, args.fold, args.kind,
                      args.index, args.quick, attached=args.attached,
-                     corner=args.corner)
+                     corner=args.corner, cfl=args.cfl,
+                     max_iter=args.max_iter)
     if args.stage == "score":
         stage_score(records, args.results, args.fold, n_members)
     if args.stage == "orchestrate":
