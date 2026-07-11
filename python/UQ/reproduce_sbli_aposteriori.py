@@ -160,10 +160,50 @@ def stage_targets(records, results_dir, fold, quick, n_members, epochs):
           f"{meta['wall_time_s']}s")
 
 
+def stage_targets_far(records, results_dir, quick, n_members, epochs):
+    """The far-transfer propagation targets: flow and Gaussian conditionals
+    trained on the attached matrix's joint heat-flux pool, sampled at the
+    adiabatic interaction baseline's cells; the anisotropy target stays the
+    baseline itself (the attached pool carries no interaction anisotropy
+    law), so this set characterizes the propagated thermal correction."""
+    import torch
+    t0 = time.time()
+    study = SBLIAPriori.build(records, {c: None for c in records},
+                              results_dir, history=True)
+    X_tr, dq_tr = study._attached_dq_pool()
+    Y_tr = dq_tr[:, 0:2]
+    base, _ = _load_baseline(records, "adiabatic", results_dir, quick)
+    feats, b_base, mask = cell_conditioning(base, records["adiabatic"])
+    meta = {"fold": "faradiab", "n_members": n_members, "epochs": epochs,
+            "n_train": int(len(X_tr)), "n_cells": int(len(feats)),
+            "mask_fraction": float(np.mean(mask))}
+    for kind in KINDS:
+        model = SBLIAPriori._make(kind, X_tr.shape[1], Y_tr.shape[1],
+                                  MEMBER_SEED)
+        model.fit(X_tr, Y_tr, epochs=epochs, lr=1e-3, batch=256)
+        torch.manual_seed(MEMBER_SEED + 1)
+        dq_draws = np.asarray(model.sample(feats, n_per=n_members,
+                                           shared_latent=True))
+        dq = dq_draws[:, :, 0:2].copy()
+        dq[~mask] = 0.0
+        np.savez_compressed(
+            _targets_path(results_dir, "faradiab", kind),
+            b=b_base[None].astype(np.float32),
+            dq=dq.transpose(1, 0, 2).astype(np.float32))
+    meta["wall_time_s"] = round(time.time() - t0, 1)
+    json.dump(meta, open(os.path.join(
+        _apo_dir(results_dir), "targets_faradiab_meta.json"), "w"),
+        indent=1)
+    print(f"[targets faradiab] {meta['n_cells']} cells, "
+          f"{meta['wall_time_s']}s")
+
+
 def stage_member(records, results_dir, fold, kind, index, quick,
                  attached=False, corner=None):
-    """One injected coupled solve, warm-started from the baseline."""
-    case = "adiabatic" if attached else fold
+    """One injected coupled solve, warm-started from the baseline. The
+    fold "faradiab" is the attached-trained far-transfer propagation into
+    the adiabatic interaction configuration (dq-only targets)."""
+    case = "adiabatic" if (attached or fold == "faradiab") else fold
     record = records[case]
     base, _ = _load_baseline(records, case, results_dir, quick,
                              with_shock=not attached, member_caps=True)
@@ -177,7 +217,11 @@ def stage_member(records, results_dir, fold, kind, index, quick,
     else:
         tg = np.load(_targets_path(results_dir, fold, kind,
                                    attached=attached))
-        b_t = np.asarray(tg["b"][index], dtype=float)
+        # dq-only target sets store a single shared anisotropy row (the
+        # baseline itself); member rows index the heat-flux draws
+        b_all = tg["b"]
+        b_t = np.asarray(b_all[index if b_all.shape[0] > 1 else 0],
+                         dtype=float)
         dq = np.asarray(tg["dq"][index], dtype=float)
         dq_dim = dq_to_solver_units(dq[None], record, base.units)[0]
         out_path = _member_path(results_dir, fold, kind, index,
@@ -221,15 +265,25 @@ def _load_member(path):
                      for k in ("x_star", "Cf", "Cp", "qw", "St")}}
 
 
+def _baseline_wall(results_dir, case):
+    p = os.path.join(results_dir, f"wall_{case}.npz")
+    if not os.path.isfile(p):
+        return None
+    z = np.load(p)
+    return {k: np.asarray(z[k]) for k in ("x_star", "Cf", "Cp", "qw", "St")}
+
+
 def stage_score(records, results_dir, fold, n_members):
     """Assemble one fold's ensembles into the scored record."""
-    record = records[fold]
+    case = "adiabatic" if fold == "faradiab" else fold
+    record = records[case]
+    bwall = _baseline_wall(results_dir, case)
     out = {"fold": fold, "n_members": n_members}
     for kind in KINDS:
         paths = [_member_path(results_dir, fold, kind, i)
                  for i in range(n_members)]
         members = [_load_member(p) for p in paths if os.path.isfile(p)]
-        out[kind] = score_ensemble(members, record)
+        out[kind] = score_ensemble(members, record, baseline_wall=bwall)
         out[kind]["n_solved"] = len(members)
         if members:
             # the pre-registered realizability-in-the-running-solve clause
@@ -237,6 +291,12 @@ def stage_score(records, results_dir, fold, n_members):
                 [m["all_realizable"] for m in members]))
             out[kind]["max_violation"] = float(np.max(
                 [m["max_violation"] for m in members]))
+        # the adiabatic-middle fold carries the independent campaign's wall
+        # series as a second truth surface (the pre-registered pairing)
+        if fold == "s1.0" and "adiabatic" in records and members:
+            out[kind]["second_surface"] = score_ensemble(
+                members, records["adiabatic"],
+                baseline_wall=_baseline_wall(results_dir, "adiabatic"))
 
     # corner envelope: per-quantity [min, max] over the converged corners,
     # containment of the truth at the pinned stations
@@ -339,31 +399,55 @@ def stage_orchestrate(records, results_dir, quick, throttle, n_members,
     the fold score; a combined numbers file at the end."""
     common = ["--results", results_dir] + (["--quick"] if quick else [])
     log_path = os.path.join(_apo_dir(results_dir), "workers.log")
+
+    def _member_jobs(fold, kinds=KINDS, corners=False, attached=False):
+        jobs = []
+        for kind in kinds:
+            for i in range(n_members):
+                j = ["--stage", "member", "--fold", fold,
+                     "--kind", kind, "--index", str(i)] + common
+                if attached:
+                    j.append("--attached")
+                jobs.append(j)
+        if corners:
+            for lab in ("1C_d1", "2C_d1", "3C_d1",
+                        "1C_d0.5", "2C_d0.5", "3C_d0.5"):
+                jobs.append(["--stage", "member", "--fold", fold,
+                             "--corner", lab] + common)
+        # cached members never re-solve: drop jobs whose output exists
+        return [j for j in jobs if not os.path.isfile(_job_output(
+            results_dir, fold, j))]
+
     summary = {}
+    # phase 1: the interaction ensembles and corner families per fold (the
+    # primary clauses land first)
     for fold in folds:
         stage_targets(records, results_dir, fold, quick, n_members, epochs)
-        jobs = []
-        for kind in KINDS:
-            for i in range(n_members):
-                jobs.append(["--stage", "member", "--fold", fold,
-                             "--kind", kind, "--index", str(i)] + common)
-        for lab in ("1C_d1", "2C_d1", "3C_d1",
-                    "1C_d0.5", "2C_d0.5", "3C_d0.5"):
-            jobs.append(["--stage", "member", "--fold", fold,
-                         "--corner", lab] + common)
-        for kind in KINDS:
-            for i in range(n_members):
-                jobs.append(["--stage", "member", "--fold", fold,
-                             "--kind", kind, "--index", str(i),
-                             "--attached"] + common)
-        # cached members never re-solve: drop jobs whose output exists
-        jobs = [j for j in jobs if not os.path.isfile(_job_output(
-            results_dir, fold, j))]
-        failed = _run_pool(jobs, throttle, log_path)
-        print(f"[orchestrate {fold}] members done, {failed} worker "
-              f"failures")
+        failed = _run_pool(_member_jobs(fold, corners=True), throttle,
+                           log_path)
+        print(f"[orchestrate {fold}] interaction members done, "
+              f"{failed} worker failures")
         summary[fold] = stage_score(records, results_dir, fold, n_members)
         summary[fold]["worker_failures"] = int(failed)
+
+    # phase 2: the preserve-attached control for every fold closure
+    for fold in folds:
+        failed = _run_pool(_member_jobs(fold, attached=True), throttle,
+                           log_path)
+        print(f"[orchestrate {fold}] attached control done, "
+              f"{failed} worker failures")
+        prior = summary[fold]["worker_failures"]
+        summary[fold] = stage_score(records, results_dir, fold, n_members)
+        summary[fold]["worker_failures"] = prior + int(failed)
+
+    # phase 3: the attached-trained far-transfer propagation into the
+    # adiabatic interaction (dq-only characterization)
+    stage_targets_far(records, results_dir, quick, n_members, epochs)
+    failed = _run_pool(_member_jobs("faradiab"), throttle, log_path)
+    print(f"[orchestrate faradiab] members done, {failed} worker failures")
+    summary["faradiab"] = stage_score(records, results_dir, "faradiab",
+                                      n_members)
+    summary["faradiab"]["worker_failures"] = int(failed)
 
     suffix = "_quick" if quick else ""
     numbers = {

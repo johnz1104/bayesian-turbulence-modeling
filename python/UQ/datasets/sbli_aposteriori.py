@@ -208,10 +208,30 @@ def landmarks_from_wall(w):
     return {"x_s": x_s, "x_r": x_r, "shock": x_half}
 
 
-def score_ensemble(members, record, stations=STATIONS):
-    """Station coverage, band sharpness and median errors of a converged
-    ensemble's wall quantities against the record's own wall series, plus
-    the scalar-landmark containment."""
+def region_masks(record, xs):
+    """The pre-registered region split at the pinned stations: upstream of
+    the interaction onset (the 1.05 factor rule), the interaction core
+    (onset to reattachment plus two, the shock landmark standing in when
+    the series never separates), and downstream."""
+    series = record.series
+    onset = series.onset() if series.pw_valid else record.onset()
+    sep = series.separation_reattachment()
+    edge_ref = sep[1] if sep[1] is not None else record.shock_position()
+    if onset is None:
+        onset = -4.0 if edge_ref is None else edge_ref - 6.0
+    edge = (edge_ref if edge_ref is not None else onset + 4.0) + 2.0
+    return {"upstream": xs < onset,
+            "interaction": (xs >= onset) & (xs <= edge),
+            "downstream": xs > edge}, float(onset), float(edge)
+
+
+def score_ensemble(members, record, stations=STATIONS, baseline_wall=None):
+    """Station coverage (0.90 and 0.50 bands), band sharpness and median
+    errors of a converged ensemble's wall quantities against the record's
+    own wall series, pooled and per pre-registered region, the scalar
+    landmark containment, and where the baseline wall record is supplied
+    the accuracy and sharpness comparisons against the baseline's own
+    point error."""
     series = record.series
     xs = stations[(stations >= series.x[0]) & (stations <= series.x[-1])]
     truths = {"Cf": np.interp(xs, series.x, series.cf)}
@@ -223,22 +243,56 @@ def score_ensemble(members, record, stations=STATIONS):
     out = {"n_members": len(members),
            "n_converged": sum(1 for m in members
                               if "Converged" in m["status"])}
+    # the pre-registered 18-of-24 labeling rule scaled to the member count
+    out["propagation_unstable"] = bool(
+        len(members) > 0 and out["n_converged"] < 0.75 * len(members))
     conv = [m for m in members if "Converged" in m["status"]]
     if len(conv) < 2:
         out["scored"] = False
         return out
     out["scored"] = True
     out["stations"] = [float(v) for v in xs]
+    regions, onset, edge = region_masks(record, xs)
+    out["region_edges"] = {"onset": onset, "interaction_edge": edge}
+
     for q, truth in truths.items():
         ens = np.stack([np.interp(xs, m["wall"]["x_star"], m["wall"][q])
                         for m in conv])
-        lo = np.quantile(ens, 0.05, axis=0)
-        hi = np.quantile(ens, 0.95, axis=0)
         med = np.median(ens, axis=0)
-        out[f"{q}_station_coverage_0.9"] = float(np.mean(
-            (truth >= lo) & (truth <= hi)))
-        out[f"{q}_band_halfwidth_median"] = float(np.median(0.5 * (hi - lo)))
+        for level, (ql, qh) in (("0.9", (0.05, 0.95)),
+                                ("0.5", (0.25, 0.75))):
+            lo = np.quantile(ens, ql, axis=0)
+            hi = np.quantile(ens, qh, axis=0)
+            cover = (truth >= lo) & (truth <= hi)
+            out[f"{q}_station_coverage_{level}"] = float(np.mean(cover))
+            out[f"{q}_band_halfwidth_median_{level}"] = float(
+                np.median(0.5 * (hi - lo)))
+            for rname, rmask in regions.items():
+                if rmask.any():
+                    out[f"{q}_coverage_{level}_{rname}"] = float(
+                        np.mean(cover[rmask]))
         out[f"{q}_median_abs_error"] = float(np.median(np.abs(med - truth)))
+        for rname, rmask in regions.items():
+            if rmask.any():
+                out[f"{q}_median_abs_error_{rname}"] = float(
+                    np.median(np.abs(med - truth)[rmask]))
+        if baseline_wall is not None:
+            base = np.interp(xs, baseline_wall["x_star"], baseline_wall[q])
+            berr = np.abs(base - truth)
+            out[f"{q}_baseline_abs_error"] = float(np.median(berr))
+            for rname, rmask in regions.items():
+                if rmask.any():
+                    out[f"{q}_baseline_abs_error_{rname}"] = float(
+                        np.median(berr[rmask]))
+            # the sharpness guard: in the interaction region a covering
+            # band must be narrower than the baseline's own point error
+            rmask = regions["interaction"]
+            if rmask.any():
+                lo = np.quantile(ens, 0.05, axis=0)
+                hi = np.quantile(ens, 0.95, axis=0)
+                half = float(np.median((0.5 * (hi - lo))[rmask]))
+                out[f"{q}_sharpness_guard_interaction"] = bool(
+                    half < float(np.median(berr[rmask])))
 
     sep = series.separation_reattachment()
     dns = {"x_s": sep[0], "x_r": sep[1], "shock": record.shock_position()}
