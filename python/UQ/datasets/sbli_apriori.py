@@ -185,9 +185,12 @@ class SBLIAPriori:
 
     # ---- pre-registered splits ---------------------------------------------------
 
-    def loso(self, leg, history=False, seeds=SEEDS, epochs=EPOCHS):
+    def loso(self, leg, history=False, seeds=SEEDS, epochs=EPOCHS,
+             progress=None):
         """Leave-one-wall-thermal-out over the heated-set cases (dq legs) or
-        all six records (db leg)."""
+        all six records (db leg). progress, when given, is called with
+        (leg, held, fold_result) after each fold, so a long production run
+        checkpoints and reports incrementally."""
         cases = [c for c in self.test_sets
                  if (leg == "db") or self.test_sets[c]["dq"] is not None]
         results = {}
@@ -214,6 +217,8 @@ class SBLIAPriori:
             results[held] = {"n_train": int(len(X_tr)),
                              "n_test": int(len(X_te)),
                              "models": per_model}
+            if progress is not None:
+                progress(leg, held, results[held])
         return results
 
     def insample(self, leg, history=False, seeds=SEEDS, epochs=EPOCHS):

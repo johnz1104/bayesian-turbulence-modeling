@@ -202,12 +202,28 @@ def stage_baselines(records, results_dir, quick, regen):
     return out, study
 
 
-def stage_loso(study, seeds, epochs):
+def stage_loso(study, seeds, epochs, partial_path=None):
+    """Runs the pre-registered loso legs; each completed fold prints a
+    line and rewrites the partial file, so a long production run reports
+    incrementally and a morning cut has every finished fold."""
     out = {}
+
+    def _tracked(label, acc):
+        def cb(leg, held, fold_result):
+            acc[held] = fold_result
+            print(f"[loso {label}] fold {held} done "
+                  f"(n_train {fold_result['n_train']})", flush=True)
+            if partial_path is not None:
+                json.dump(out, open(partial_path, "w"), indent=1)
+        return cb
+
     for leg in ("dq_y", "dq_joint", "db"):
-        out[leg] = study.loso(leg, history=False, seeds=seeds, epochs=epochs)
-    out["dq_y_history"] = study.loso("dq_y", history=True, seeds=seeds,
-                                     epochs=epochs)
+        out[leg] = {}
+        study.loso(leg, history=False, seeds=seeds, epochs=epochs,
+                   progress=_tracked(leg, out[leg]))
+    out["dq_y_history"] = {}
+    study.loso("dq_y", history=True, seeds=seeds, epochs=epochs,
+               progress=_tracked("dq_y+history", out["dq_y_history"]))
     return out
 
 
@@ -343,7 +359,10 @@ def main():
 
     if args.stage in ("loso", "insample", "far"):
         if args.stage == "loso":
-            result = stage_loso(study, seeds, epochs)
+            result = stage_loso(study, seeds, epochs,
+                                partial_path=os.path.join(
+                                    args.results,
+                                    f"apriori_loso_partial{suffix}.json"))
         elif args.stage == "insample":
             result = stage_insample(study, seeds, epochs)
         else:
