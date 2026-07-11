@@ -60,13 +60,17 @@ def _all_records(root=None):
 def _configure(record, quick, with_shock=True):
     if quick:
         return SBLIBaseline.configure(record, with_shock=with_shock,
-                                      nx=160, ny=64, x_hi=6.0, height=6.0,
-                                      cfl=100.0, max_iterations=20000,
-                                      convergence_tol=3e-6)
+                                      nx=160, ny=112, x_hi=6.0, height=6.0,
+                                      cfl=100.0, max_iterations=30000,
+                                      convergence_tol=3e-6, yplus_target=0.05)
+    # the resolved first cell is load-bearing: the omega wall anchor scales
+    # as 1/y1^2 and at y1+ near one it is too weak to select the log-law
+    # branch against the spurious near-wall equilibrium (the gate bring-up
+    # measured the flip at matched conditions); growth stays near 1.04
     return SBLIBaseline.configure(record, with_shock=with_shock,
-                                  nx=480, ny=96, x_hi=14.0, height=8.0,
-                                  cfl=300.0, max_iterations=200000,
-                                  convergence_tol=1e-6)
+                                  nx=480, ny=224, x_hi=14.0, height=8.0,
+                                  cfl=300.0, max_iterations=250000,
+                                  convergence_tol=1e-6, yplus_target=0.05)
 
 
 def _wall_path(results_dir, case):

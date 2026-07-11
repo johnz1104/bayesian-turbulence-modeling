@@ -219,7 +219,7 @@ class SBLIBaseline:
     # ---- construction --------------------------------------------------------
 
     @staticmethod
-    def _mesh_and_faces(units, x_lo, x_hi, height, nx, ny):
+    def _mesh_and_faces(units, x_lo, x_hi, height, nx, ny, yplus_target=1.0):
         Lx = units.length(x_hi - x_lo)
         H = units.length(height)
         # one-sided plate clustering: the two-sided channel mapping wastes
@@ -227,13 +227,14 @@ class SBLIBaseline:
         # layer too coarse for the transported omega (measured: the SST
         # settles over-mixed and the skin friction runs high, converging as
         # the near-wall growth ratio drops)
-        mesh = rans.Mesh.make_plate_2d(nx, ny, Lx, H, RE_INLET, 1.0)
+        mesh = rans.Mesh.make_plate_2d(nx, ny, Lx, H, RE_INLET, yplus_target)
         return mesh, Lx, H
 
     @staticmethod
     def configure(record, s_case=None, x_lo=None, x_hi=14.0, height=8.0,
                   nx=480, ny=96, with_shock=True, cfl=200.0,
-                  max_iterations=60000, convergence_tol=1e-6):
+                  max_iterations=60000, convergence_tol=1e-6,
+                  yplus_target=1.0):
         """Build the configuration for one record.
 
         The domain spans [x_lo, x_hi] x [0, height] reference lengths, x_lo
@@ -245,7 +246,7 @@ class SBLIBaseline:
         if x_lo is None:
             x_lo = float(record.x[0])
         mesh, Lx, H = SBLIBaseline._mesh_and_faces(units, x_lo, x_hi, height,
-                                                   nx, ny)
+                                                   nx, ny, yplus_target)
 
         bcs = rans.DBNSBoundaryConditions()
 
