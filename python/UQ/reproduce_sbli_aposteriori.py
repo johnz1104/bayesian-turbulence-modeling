@@ -313,9 +313,15 @@ def stage_score(records, results_dir, fold, n_members):
         out[kind] = score_ensemble(members, record, baseline_wall=bwall)
         out[kind]["n_solved"] = len(members)
         if members:
-            # the pre-registered realizability-in-the-running-solve clause
+            # the pre-registered realizability-in-the-running-solve clause;
+            # the strict flag trips on float32 target-storage round-off
+            # (margins dip ~1e-8 below zero when float64 projections are
+            # stored as float32), so the round-off-tolerant view at 1e-6 is
+            # the physically meaningful one and both are recorded
             out[kind]["all_realizable_fraction"] = float(np.mean(
                 [m["all_realizable"] for m in members]))
+            out[kind]["realizable_within_roundoff_fraction"] = float(
+                np.mean([m["max_violation"] <= 1e-6 for m in members]))
             out[kind]["max_violation"] = float(np.max(
                 [m["max_violation"] for m in members]))
         # the adiabatic-middle fold carries the independent campaign's wall
