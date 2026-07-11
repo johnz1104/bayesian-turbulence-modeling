@@ -222,7 +222,12 @@ class SBLIBaseline:
     def _mesh_and_faces(units, x_lo, x_hi, height, nx, ny):
         Lx = units.length(x_hi - x_lo)
         H = units.length(height)
-        mesh = rans.Mesh.make_channel_2d(nx, ny, Lx, H, RE_INLET, 1.0)
+        # one-sided plate clustering: the two-sided channel mapping wastes
+        # half its refinement on the far-field top and leaves the buffer
+        # layer too coarse for the transported omega (measured: the SST
+        # settles over-mixed and the skin friction runs high, converging as
+        # the near-wall growth ratio drops)
+        mesh = rans.Mesh.make_plate_2d(nx, ny, Lx, H, RE_INLET, 1.0)
         return mesh, Lx, H
 
     @staticmethod
