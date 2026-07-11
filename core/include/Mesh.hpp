@@ -116,6 +116,13 @@ public:
     static Mesh makeChannel2D(int nx, int ny, double Lx, double Ly,
                                double Re, double yPlusTarget = 1.0);
 
+    // One-sided wall-clustered plate mesh: all refinement at the bottom wall
+    // (the top is a far-field patch, not a wall), so the near-wall growth
+    // ratio at matched ny is about half the two-sided channel's; the
+    // turbulent near-wall omega field needs that resolution.
+    static Mesh makePlate2D(int nx, int ny, double Lx, double Ly,
+                            double Re, double yPlusTarget = 1.0);
+
     // Backward-facing step: L-shaped domain with upstream channel + expanded duct.
     // Patches: inlet, outlet, top_wall, bottom_wall_up, step_face, bottom_wall_down.
     // nx_up/nx_down: cells in x for upstream / downstream region.

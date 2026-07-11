@@ -315,6 +315,9 @@ PYBIND11_MODULE(rans_sst_py, m) {
     py::class_<Mesh>(m, "Mesh")
         .def_static("make_channel_2d", py::overload_cast<int, int, double, double>(&Mesh::makeChannel2D),
              py::arg("nx"), py::arg("ny"), py::arg("Lx"), py::arg("Ly"))
+        .def_static("make_plate_2d", &Mesh::makePlate2D,
+             py::arg("nx"), py::arg("ny"), py::arg("Lx"), py::arg("Ly"),
+             py::arg("Re"), py::arg("y_plus_target") = 1.0)
         .def_static("make_channel_2d", py::overload_cast<int, int, double, double, double, double>(&Mesh::makeChannel2D),
              py::arg("nx"), py::arg("ny"), py::arg("Lx"), py::arg("Ly"),
              py::arg("Re"), py::arg("yPlusTarget") = 1.0)
