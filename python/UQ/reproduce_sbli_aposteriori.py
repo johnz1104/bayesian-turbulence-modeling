@@ -57,10 +57,14 @@ KINDS = ("flow", "gauss")
 # members are warm-started perturbation solves: convergence is a thousand
 # fold decay OF THE INJECTION RESPONSE (the first-iteration residual), and
 # the cap fails genuinely non-settling members fast instead of burning the
-# ensemble budget (the quick smoke measured settled members plateauing at
-# 2e-4 to 6e-4 against the old 1e-4, and non-settling ones at order one)
-MEMBER_MAX_ITER = 15000
+# ensemble budget. The fleet CFL comes from the morning calibration probes
+# on fold s0.5: at the baseline's CFL 300 four of five members capped out
+# (residuals 0.83, 1.1, 2.3e-2, 2.8e-3), at CFL 100 the probe member
+# converged in 13.2k sweeps; a steady solution is independent of the
+# pseudo-transient path, so the gentler CFL changes cost, not the answer.
+MEMBER_MAX_ITER = 20000
 MEMBER_TOL = 1e-3
+MEMBER_CFL = 100.0
 
 
 def _apo_dir(results_dir):
@@ -109,7 +113,8 @@ def _load_baseline(records, case, results_dir, quick, with_shock=True,
     kw = {}
     if member_caps:
         kw = {"max_iterations": max_iterations or MEMBER_MAX_ITER,
-              "convergence_tol": MEMBER_TOL}
+              "convergence_tol": MEMBER_TOL,
+              "cfl": MEMBER_CFL if cfl is None else cfl}
     if derived_probe:
         kw = {"max_iterations": 1, "convergence_tol": 1e-30}
     if cfl is not None:

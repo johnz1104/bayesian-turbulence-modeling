@@ -141,8 +141,13 @@ def member_targets(models, features, b_base, mask, n_members=N_MEMBERS,
                    seed=MEMBER_SEED):
     """Coherent member targets for one model kind: (b_targets, dq_targets)
     with b (m, n, 3, 3) realizability-projected and dq (m, n, 2) in the
-    record's (u_tau_ref, T_w) units; masked cells revert to the baseline
-    anisotropy and zero correction."""
+    record's (u_tau_ref, T_w) units; masked cells carry the PROJECTED
+    baseline anisotropy and zero correction. Projected, not raw: outside
+    the mask the injected momentum flux is k-weighted and k sits at the
+    quiet floor exactly where the raw Boussinesq base excursions are
+    large, so the forcing difference is numerical noise, while the
+    solver's running barycentric check (the pre-registered realizability
+    clause) stays meaningful instead of tripping on inert cells."""
     import torch
     db_model, dq_model = models
     torch.manual_seed(seed)
@@ -156,7 +161,8 @@ def member_targets(models, features, b_base, mask, n_members=N_MEMBERS,
     b_t = b_base[:, None, :, :] + db
     proj, _ = realizability.project_anisotropy(b_t.reshape(-1, 3, 3))
     b_t = proj.reshape(b_t.shape)
-    b_t[~mask] = b_base[~mask][:, None, :, :]
+    b_base_proj, _ = realizability.project_anisotropy(b_base)
+    b_t[~mask] = b_base_proj[~mask][:, None, :, :]
     dq = dq_draws[:, :, 0:2].copy()
     dq[~mask] = 0.0
     return (b_t.transpose(1, 0, 2, 3).copy(),
@@ -171,15 +177,17 @@ def corner_targets(b_base, mask, deltas=CORNER_DELTAS):
 
     The barycentric perturbation is defined on the realizable triangle, so
     the raw Boussinesq base (which excursions outside it, sharply at the
-    shock) is projected first; masked cells revert to the RAW base, whose
-    injection cancels identically against the running Boussinesq stress."""
+    shock) is projected first; masked cells carry the projected base too,
+    for the same reason as the member targets (k-weighted forcing there is
+    numerically negligible and the running realizability check stays
+    meaningful)."""
     b_real, _ = realizability.project_anisotropy(b_base)
     out = {}
     for delta_b in deltas:
         fam = EigenspacePerturbation.corner_set(b_real, delta_b=delta_b)
         for corner, b_t in fam.items():
             b = np.array(b_t)
-            b[~mask] = b_base[~mask]
+            b[~mask] = b_real[~mask]
             out[f"{corner}_d{delta_b:g}"] = b
     return out
 
