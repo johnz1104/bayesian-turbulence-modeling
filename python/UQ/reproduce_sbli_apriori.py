@@ -202,12 +202,17 @@ def stage_baselines(records, results_dir, quick, regen):
     return out, study
 
 
-def stage_loso(study, seeds, epochs, partial_path=None):
+def stage_loso(study, seeds, epochs, partial_path=None, one_fold=False):
     """Runs the pre-registered loso legs; each completed fold prints a
     line and rewrites the partial file, so a long production run reports
     incrementally, a morning cut has every finished fold, and a restart
     resumes past the folds the partial file already holds (the fits are
-    seed-deterministic, so resumed and rerun results are identical)."""
+    seed-deterministic, so resumed and rerun results are identical).
+
+    one_fold runs AT MOST one missing fold and returns None (the caller
+    loops fresh processes until nothing is missing): on a memory-starved
+    machine the per-pass working set never exceeds one fold's fits, and a
+    kill costs only the in-flight fold."""
     out = {}
     if partial_path is not None and os.path.isfile(partial_path):
         out = json.load(open(partial_path))
@@ -224,13 +229,27 @@ def stage_loso(study, seeds, epochs, partial_path=None):
                 json.dump(out, open(partial_path, "w"), indent=1)
         return cb
 
-    for leg in ("dq_y", "dq_joint", "db"):
-        acc = out.setdefault(leg, {})
-        study.loso(leg, history=False, seeds=seeds, epochs=epochs,
-                   progress=_tracked(leg, acc), skip=set(acc))
-    acc = out.setdefault("dq_y_history", {})
-    study.loso("dq_y", history=True, seeds=seeds, epochs=epochs,
-               progress=_tracked("dq_y+history", acc), skip=set(acc))
+    def _cases(leg):
+        return [c for c in study.test_sets
+                if (leg == "db") or study.test_sets[c]["dq"] is not None]
+
+    plan = (("dq_y", "dq_y", False), ("dq_joint", "dq_joint", False),
+            ("db", "db", False), ("dq_y_history", "dq_y", True))
+    if one_fold:
+        for key, leg, hist in plan:
+            acc = out.setdefault(key, {})
+            missing = [c for c in _cases(leg) if c not in acc]
+            if missing:
+                study.loso(leg, history=hist, seeds=seeds, epochs=epochs,
+                           progress=_tracked(key, acc),
+                           skip=set(_cases(leg)) - {missing[0]})
+                return None
+        # nothing missing: fall through and assemble the complete record
+
+    for key, leg, hist in plan:
+        acc = out.setdefault(key, {})
+        study.loso(leg, history=hist, seeds=seeds, epochs=epochs,
+                   progress=_tracked(key, acc), skip=set(acc))
     return out
 
 
@@ -328,6 +347,10 @@ def main():
                     help="comma list restricting the baseline solves (e.g. "
                          "adiabatic,s0.5); partitions run in parallel and a "
                          "final unrestricted pass assembles the cached gates")
+    ap.add_argument("--loso-one", action="store_true",
+                    help="run at most one missing loso fold then exit; loop "
+                         "fresh processes until the stage completes (the "
+                         "memory-starved-machine mode)")
     args = ap.parse_args()
 
     np.random.seed(DRIVER_SEED)
@@ -369,7 +392,11 @@ def main():
             result = stage_loso(study, seeds, epochs,
                                 partial_path=os.path.join(
                                     args.results,
-                                    f"apriori_loso_partial{suffix}.json"))
+                                    f"apriori_loso_partial{suffix}.json"),
+                                one_fold=args.loso_one)
+            if result is None:
+                print("one-fold pass banked; rerun until complete")
+                return
         elif args.stage == "insample":
             result = stage_insample(study, seeds, epochs)
         else:
