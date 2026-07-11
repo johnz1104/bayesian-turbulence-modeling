@@ -82,6 +82,20 @@ def _save_wall(results_dir, case, w):
                         Cf=w["Cf"], Cp=w["Cp"], qw=w["qw"], St=w["St"])
 
 
+def _fields_path(results_dir, case):
+    return os.path.join(results_dir, f"fields_{case}.npz")
+
+
+def _save_fields(results_dir, case, solver):
+    """Persist the converged primitive state (n_cells, 6): the a-posteriori
+    members warm-start from it (init_field) so each is a perturbation solve,
+    and the fold targets condition on the same converged baseline."""
+    f = solver.fields()
+    prim = np.stack([np.asarray(f[k], dtype=float)
+                     for k in ("rho", "u", "v", "p", "k", "omega")], axis=1)
+    np.savez_compressed(_fields_path(results_dir, case), primitive=prim)
+
+
 def _impingement_offset(w, record):
     """The solve's wall-pressure half-rise against the record's own landmark
     (the pinned rule on both sides)."""
@@ -102,7 +116,8 @@ def _case_cached(results_dir, case, history=True):
     strides = (TEST_STRIDE[case], sbli_apriori._train_stride(case))
     have = all(os.path.isfile(SBLIAPriori._cache_path(
         results_dir, case, st, history)) for st in strides)
-    return have and os.path.isfile(_wall_path(results_dir, case))
+    return (have and os.path.isfile(_wall_path(results_dir, case))
+            and os.path.isfile(_fields_path(results_dir, case)))
 
 
 def stage_baselines(records, results_dir, quick, regen):
@@ -132,6 +147,7 @@ def stage_baselines(records, results_dir, quick, regen):
         }
         os.makedirs(results_dir, exist_ok=True)
         _save_wall(results_dir, "gate_a_attached", w)
+        _save_fields(results_dir, "gate_a_attached", gate_a.solver)
         json.dump(out["gates"]["A"], open(gate_a_path, "w"), indent=1)
         print(f"[gate A] {rep.status} iters {rep.iterations} "
               f"cf {cf_station:.3e} vs {GATE_A_CF:.3e} "
@@ -162,6 +178,7 @@ def stage_baselines(records, results_dir, quick, regen):
         out["gates"]["B"][case] = entry
         os.makedirs(results_dir, exist_ok=True)
         _save_wall(results_dir, case, w)
+        _save_fields(results_dir, case, base.solver)
         json.dump(entry, open(gate_path, "w"), indent=1)
         print(f"[gate B {case}] {rep.status} iters {rep.iterations} "
               f"offset {offset}")
