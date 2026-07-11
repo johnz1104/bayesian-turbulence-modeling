@@ -535,7 +535,7 @@ void DBNSSolver::addTurbulenceSources() {
 
         double muT = muT_[ci];
         double Pk = muT * S2;                                   // production
-        Pk = std::min(Pk, 20.0 * bStar * rho * k * w);          // Menter limiter
+        Pk = std::min(Pk, 10.0 * bStar * rho * k * w);          // Menter 2003 limiter
 
         // dilatational-dissipation (compressibility) correction
         double Mt2 = 2.0 * k / (eos_.gamma * V.p / rho);        // M_t^2 = 2k/a^2
