@@ -55,7 +55,7 @@ int main() {
     double nu_w = mu / rho_w;
 
     double ReL = rhoinf * Uinf * L / mu;
-    Mesh mesh = Mesh::makeChannel2D(120, 56, L, H, ReL, 1.0);
+    Mesh mesh = Mesh::makePlate2D(120, 72, L, H, ReL, 1.0);
 
     SSTCoefficients sst;
     DBNSBoundaryConditions bcs;
