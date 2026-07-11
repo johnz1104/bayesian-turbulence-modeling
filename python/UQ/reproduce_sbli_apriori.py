@@ -57,20 +57,25 @@ def _all_records(root=None):
     return records
 
 
-def _configure(record, quick, with_shock=True):
+def _configure(record, quick, with_shock=True, max_iterations=None,
+               convergence_tol=None):
     if quick:
         return SBLIBaseline.configure(record, with_shock=with_shock,
                                       nx=160, ny=112, x_hi=6.0, height=6.0,
-                                      cfl=100.0, max_iterations=30000,
-                                      convergence_tol=3e-6, yplus_target=0.05)
+                                      cfl=100.0,
+                                      max_iterations=max_iterations or 30000,
+                                      convergence_tol=convergence_tol
+                                      or 3e-6, yplus_target=0.05)
     # the resolved first cell is load-bearing: the omega wall anchor scales
     # as 1/y1^2 and at y1+ near one it is too weak to select the log-law
     # branch against the spurious near-wall equilibrium (the gate bring-up
     # measured the flip at matched conditions); growth stays near 1.04
     return SBLIBaseline.configure(record, with_shock=with_shock,
                                   nx=480, ny=224, x_hi=14.0, height=8.0,
-                                  cfl=300.0, max_iterations=250000,
-                                  convergence_tol=1e-6, yplus_target=0.05)
+                                  cfl=300.0,
+                                  max_iterations=max_iterations or 250000,
+                                  convergence_tol=convergence_tol or 1e-6,
+                                  yplus_target=0.05)
 
 
 def _wall_path(results_dir, case):
@@ -132,6 +137,8 @@ def stage_baselines(records, results_dir, quick, regen):
     if os.path.isfile(gate_a_path) and not regen:
         out["gates"]["A"] = json.load(open(gate_a_path))
         print("[gate A] cached:", out["gates"]["A"]["status"])
+    elif "adiabatic" not in records:
+        print("[gate A] skipped: adiabatic record not in this partition")
     else:
         t0 = time.time()
         gate_a = _configure(records["adiabatic"], quick, with_shock=False)
@@ -289,16 +296,26 @@ def stage_far(study, seeds, epochs, records):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--stage", default="all",
-                    choices=("baselines", "loso", "insample", "far", "all"))
+                    choices=("baselines", "loso", "insample", "far",
+                             "assemble", "all"))
     ap.add_argument("--results", default="results/sbli")
     ap.add_argument("--quick", action="store_true")
     ap.add_argument("--regen", action="store_true")
+    ap.add_argument("--cases", default="",
+                    help="comma list restricting the baseline solves (e.g. "
+                         "adiabatic,s0.5); partitions run in parallel and a "
+                         "final unrestricted pass assembles the cached gates")
     args = ap.parse_args()
 
     np.random.seed(DRIVER_SEED)
     seeds = (0,) if args.quick else sbli_apriori.SEEDS
     epochs = 2 if args.quick else sbli_apriori.EPOCHS
     suffix = "_quick" if args.quick else ""
+    if args.quick and os.path.basename(
+            os.path.normpath(args.results)) != "quick":
+        # the smoke path gets its own cache universe so a quick run can
+        # never clobber production baselines, fields or gate records
+        args.results = os.path.join(args.results, "quick")
     os.makedirs(args.results, exist_ok=True)
     numbers_path = os.path.join(args.results,
                                 f"apriori_numbers{suffix}.json")
@@ -307,6 +324,9 @@ def main():
         numbers = json.load(open(numbers_path))
 
     records = _all_records()
+    if args.cases:
+        keep = [c.strip() for c in args.cases.split(",") if c.strip()]
+        records = {k: v for k, v in records.items() if k in keep}
     if args.quick:
         # the smoke path quadruples the strides so two-epoch fits stay light
         for k in sbli_apriori.TEST_STRIDE:
@@ -315,18 +335,42 @@ def main():
 
     gates, study = stage_baselines(records, args.results, args.quick,
                                    args.regen)
+
+    # standalone stages write their own partial file so concurrent stage
+    # processes never race on the combined numbers; assemble merges them
+    def _part_path(stage):
+        return os.path.join(args.results, f"apriori_{stage}{suffix}.json")
+
+    if args.stage in ("loso", "insample", "far"):
+        if args.stage == "loso":
+            result = stage_loso(study, seeds, epochs)
+        elif args.stage == "insample":
+            result = stage_insample(study, seeds, epochs)
+        else:
+            result = stage_far(study, seeds, epochs, records)
+        json.dump({args.stage: result}, open(_part_path(args.stage), "w"),
+                  indent=1)
+        print("wrote", _part_path(args.stage))
+        return
+    if args.stage == "baselines":
+        # the per-case gate JSONs and caches are the record; the combined
+        # file is assembled later so parallel partitions never race
+        print("baselines stage complete")
+        return
+
     numbers["gates"] = gates["gates"]
     numbers["solves"] = gates["solves"]
-
-    if args.stage in ("loso", "all"):
+    if args.stage == "all":
         numbers["loso"] = stage_loso(study, seeds, epochs)
         json.dump(numbers, open(numbers_path, "w"), indent=1)
-    if args.stage in ("insample", "all"):
         numbers["insample"] = stage_insample(study, seeds, epochs)
         json.dump(numbers, open(numbers_path, "w"), indent=1)
-    if args.stage in ("far", "all"):
         numbers["far"] = stage_far(study, seeds, epochs, records)
         json.dump(numbers, open(numbers_path, "w"), indent=1)
+    if args.stage == "assemble":
+        for stage in ("loso", "insample", "far"):
+            if os.path.isfile(_part_path(stage)):
+                numbers[stage] = json.load(open(_part_path(stage)))[stage]
 
     numbers["config"] = {
         "driver_seed": DRIVER_SEED, "seeds": list(seeds), "epochs": epochs,
