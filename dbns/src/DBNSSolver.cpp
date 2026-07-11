@@ -72,6 +72,17 @@ DBNSSolver::DBNSSolver(const Mesh& mesh, const IdealGasEOS& eos,
         for (FaceID fi : pat.faces)
             wallPts.push_back(mesh_.face(fi).center);
     }
+    for (int pi = 0; pi < mesh_.nPatches(); ++pi) {
+        const Patch& pat = mesh_.patch(pi);
+        if (!bcs_.has(pat.name)) continue;
+        BoundaryKind kind = bcs_.get(pat.name).kind;
+        if (kind != BoundaryKind::NoSlipAdiabatic
+            && kind != BoundaryKind::NoSlipIsothermal) continue;
+        for (FaceID fi : pat.faces) {
+            wallAdjCell_.push_back(mesh_.face(fi).owner);
+            wallAdjDelta_.push_back(std::max(mesh_.face(fi).delta, 1e-12));
+        }
+    }
     wallDist_.assign(nc, 1e10);
     if (!wallPts.empty()) {
         for (int ci = 0; ci < nc; ++ci) {
@@ -1029,8 +1040,30 @@ SolveReport DBNSSolver::solveImplicitSteady() {
     return rep;
 }
 
-// floor density / pressure / turbulence to keep states physical
+// floor density / pressure / turbulence to keep states physical; then re-pin
+// the wall-adjacent omega. The validated incompressible treatment OVERRIDES
+// the first cell's omega every iteration with the Menter value
+// 60 nu / (beta1 y1^2) (ten times the analytic sublayer solution at the
+// first-cell scale): that deliberately strong anchor feeds the diffusive
+// omega tail that selects the log-law branch. A floor at the analytic value
+// alone leaves a second, spurious low-shear/high-mixing near-wall
+// equilibrium available, which the interaction baseline bring-up measured
+// as a mesh-converged 27 percent skin-friction excess.
 void DBNSSolver::clampPositivity() {
+    if (settings_.turbulent) {
+        for (size_t idx = 0; idx < wallAdjCell_.size(); ++idx) {
+            int ci = wallAdjCell_[idx];
+            double y1 = wallAdjDelta_[idx];
+            Primitive V = GasState::toPrimitive(W_[ci], eos_);
+            double nu = muLam_[ci] / std::max(V.rho, rhoFloor_);
+            V.omega = 60.0 * nu / (sstCoeffs_.beta1 * y1 * y1);
+            W_[ci] = GasState::toConserved(V, eos_);
+        }
+    }
+    clampPositivityCore();
+}
+
+void DBNSSolver::clampPositivityCore() {
     for (int ci = 0; ci < mesh_.nCells(); ++ci) {
         StateVec& W = W_[ci];
         if (W[I_RHO] < rhoFloor_) W[I_RHO] = rhoFloor_;

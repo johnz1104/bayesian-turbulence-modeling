@@ -137,6 +137,11 @@ private:
     // patch-local ordinal of each boundary face (per-face boundary profiles)
     std::vector<int> patchLocalIdx_;
 
+    // wall-adjacent cells (owners of no-slip faces) and their center-to-face
+    // distances, for the per-iteration Menter omega re-pin
+    std::vector<int>    wallAdjCell_;
+    std::vector<double> wallAdjDelta_;
+
     // wall distance measured to the patches the BOUNDARY CONDITIONS mark as
     // no-slip walls (the mesh's own lazily-computed distance is empty unless
     // a caller populates it, and its patch types are the generator's guess;
@@ -163,6 +168,7 @@ private:
     void addTurbulenceSources();
     void computeTimeStep(double cfl, bool includeViscous);
     void clampPositivity();
+    void clampPositivityCore();
     double rhoResidualNorm() const;
 
     // implicit (LU-SGS) steady march: matrix-free backward-Euler pseudo-time

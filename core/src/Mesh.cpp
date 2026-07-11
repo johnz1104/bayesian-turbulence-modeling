@@ -869,6 +869,195 @@ Mesh Mesh::makeChannel2D(int nx, int ny, double Lx, double Ly) {
     return m;
 }
 
+// One-sided wall-clustered plate mesh: every refinement cell goes to the
+// BOTTOM wall (the top is a far-field boundary, not a viscous wall), so the
+// near-wall growth ratio at matched ny is roughly half the two-sided
+// channel's. The turbulent omega field's 1/y^2 sublayer tail needs that
+// resolution: on the two-sided channel clustering the transported omega
+// collapses through the buffer layer and the SST settles into an over-mixed
+// state (measured at the shock-interaction baseline bring-up: skin friction
+// 35 to 60 percent high, converging as the near-wall growth drops).
+Mesh Mesh::makePlate2D(int nx, int ny, double Lx, double Ly, double Re,
+                       double yPlusTarget) {
+    // friction estimate as makeChannel2D: Cf ~ 0.058 Re^-0.2, U_ref = 1
+    double Cf = 0.058 * std::pow(Re, -0.2);
+    double u_tau = std::sqrt(Cf / 2.0);
+    double nu = (Ly / 2.0) / Re;
+    double y1_target = yPlusTarget * nu / u_tau;
+    double y1_uniform = Ly / ny;
+
+    // GEOMETRIC growth from the first cell: the tanh mapping concentrates
+    // its refinement below the first few y+ and then roughly doubles each
+    // cell, leaving the buffer layer (y+ 5 to 30) with a handful of cells at
+    // any stretch; a geometric ratio spends the same ny at a near-constant
+    // growth (about 1.03 to 1.10 for these targets), which is what the
+    // transported near-wall omega needs. Solve r from
+    //   y1 (r^ny - 1) / (r - 1) = Ly
+    double ratio = 1.0;
+    if (y1_target < y1_uniform) {
+        auto totalHeight = [&](double r) {
+            return y1_target * (std::pow(r, ny) - 1.0) / (r - 1.0);
+        };
+        double rLo = 1.0 + 1e-9, rHi = 1.5;
+        if (totalHeight(rHi) < Ly) {
+            std::cout << "  WARNING: Ly unreachable at growth 1.5 with ny="
+                      << ny << "; increase ny\n";
+            ratio = rHi;
+        } else {
+            for (int iter = 0; iter < 200; ++iter) {
+                double rMid = 0.5 * (rLo + rHi);
+                if (totalHeight(rMid) < Ly)
+                    rLo = rMid;
+                else
+                    rHi = rMid;
+                if (rHi - rLo < 1e-12) break;
+            }
+            ratio = 0.5 * (rLo + rHi);
+        }
+    }
+    std::cout << "  Plate mesh: Re=" << Re << " y+_target=" << yPlusTarget
+              << " y1_target=" << y1_target << " growth=" << ratio << "\n";
+
+    Mesh m;
+    double dz = 1.0;
+
+    std::vector<double> yc(ny + 1);
+    if (ratio > 1.0 + 1e-9) {
+        yc[0] = 0.0;
+        double h = y1_target;
+        for (int j = 1; j <= ny; ++j) {
+            yc[j] = yc[j - 1] + h;
+            h *= ratio;
+        }
+        // scale out the bisection remainder so the top lands exactly on Ly
+        double scale = Ly / yc[ny];
+        for (int j = 1; j <= ny; ++j) yc[j] *= scale;
+    } else {
+        for (int j = 0; j <= ny; ++j)
+            yc[j] = Ly * static_cast<double>(j) / ny;
+    }
+
+    std::vector<double> xc(nx + 1);
+    for (int i = 0; i <= nx; ++i)
+        xc[i] = Lx * static_cast<double>(i) / nx;
+
+    int ptsPerPlane = (nx + 1) * (ny + 1);
+    m.nodes_.resize(2 * ptsPerPlane);
+    auto nid = [&](int i, int j, int k) { return k * ptsPerPlane + j * (nx + 1) + i; };
+    for (int j = 0; j <= ny; ++j)
+        for (int i = 0; i <= nx; ++i) {
+            m.nodes_[nid(i, j, 0)] = Vec3(xc[i], yc[j], 0.0);
+            m.nodes_[nid(i, j, 1)] = Vec3(xc[i], yc[j], dz);
+        }
+
+    int nC = nx * ny;
+    m.cells_.resize(nC);
+    auto cid = [&](int i, int j) { return j * nx + i; };
+
+    int nInternalH = nx * (ny - 1);
+    int nInternalV = (nx - 1) * ny;
+    m.nInternal_ = nInternalH + nInternalV;
+    int nBnd = 2 * nx + 2 * ny;
+    m.faces_.resize(m.nInternal_ + nBnd);
+
+    int fi = 0;
+    for (int j = 0; j < ny - 1; ++j)
+        for (int i = 0; i < nx; ++i) {
+            Face& f = m.faces_[fi];
+            f.owner = cid(i, j); f.neighbor = cid(i, j + 1);
+            f.center = Vec3(0.5 * (xc[i] + xc[i + 1]), yc[j + 1], 0.5 * dz);
+            f.area = (xc[i + 1] - xc[i]) * dz;
+            f.normal = Vec3(0, 1, 0);
+            m.cells_[f.owner].faces.push_back(fi);
+            m.cells_[f.neighbor].faces.push_back(fi);
+            ++fi;
+        }
+    for (int j = 0; j < ny; ++j)
+        for (int i = 0; i < nx - 1; ++i) {
+            Face& f = m.faces_[fi];
+            f.owner = cid(i, j); f.neighbor = cid(i + 1, j);
+            f.center = Vec3(xc[i + 1], 0.5 * (yc[j] + yc[j + 1]), 0.5 * dz);
+            f.area = (yc[j + 1] - yc[j]) * dz;
+            f.normal = Vec3(1, 0, 0);
+            m.cells_[f.owner].faces.push_back(fi);
+            m.cells_[f.neighbor].faces.push_back(fi);
+            ++fi;
+        }
+
+    Patch bottom; bottom.name = "bottom"; bottom.type = "wall";
+    for (int i = 0; i < nx; ++i) {
+        Face& f = m.faces_[fi];
+        f.owner = cid(i, 0); f.neighbor = -1;
+        f.patchID = static_cast<int>(m.patches_.size());
+        f.center = Vec3(0.5 * (xc[i] + xc[i + 1]), 0.0, 0.5 * dz);
+        f.area = (xc[i + 1] - xc[i]) * dz;
+        f.normal = Vec3(0, -1, 0);
+        m.cells_[f.owner].faces.push_back(fi);
+        bottom.faces.push_back(fi); ++fi;
+    }
+    m.patches_.push_back(std::move(bottom));
+
+    // far-field top: NOT a wall (patch type reflects the physics, so any
+    // consumer of the mesh's own wall distance sees only the plate)
+    Patch top; top.name = "top"; top.type = "patch";
+    for (int i = 0; i < nx; ++i) {
+        Face& f = m.faces_[fi];
+        f.owner = cid(i, ny - 1); f.neighbor = -1;
+        f.patchID = static_cast<int>(m.patches_.size());
+        f.center = Vec3(0.5 * (xc[i] + xc[i + 1]), Ly, 0.5 * dz);
+        f.area = (xc[i + 1] - xc[i]) * dz;
+        f.normal = Vec3(0, 1, 0);
+        m.cells_[f.owner].faces.push_back(fi);
+        top.faces.push_back(fi); ++fi;
+    }
+    m.patches_.push_back(std::move(top));
+
+    Patch inlet; inlet.name = "inlet"; inlet.type = "inlet";
+    for (int j = 0; j < ny; ++j) {
+        Face& f = m.faces_[fi];
+        f.owner = cid(0, j); f.neighbor = -1;
+        f.patchID = static_cast<int>(m.patches_.size());
+        f.center = Vec3(0.0, 0.5 * (yc[j] + yc[j + 1]), 0.5 * dz);
+        f.area = (yc[j + 1] - yc[j]) * dz;
+        f.normal = Vec3(-1, 0, 0);
+        m.cells_[f.owner].faces.push_back(fi);
+        inlet.faces.push_back(fi); ++fi;
+    }
+    m.patches_.push_back(std::move(inlet));
+
+    Patch outlet; outlet.name = "outlet"; outlet.type = "outlet";
+    for (int j = 0; j < ny; ++j) {
+        Face& f = m.faces_[fi];
+        f.owner = cid(nx - 1, j); f.neighbor = -1;
+        f.patchID = static_cast<int>(m.patches_.size());
+        f.center = Vec3(Lx, 0.5 * (yc[j] + yc[j + 1]), 0.5 * dz);
+        f.area = (yc[j + 1] - yc[j]) * dz;
+        f.normal = Vec3(1, 0, 0);
+        m.cells_[f.owner].faces.push_back(fi);
+        outlet.faces.push_back(fi); ++fi;
+    }
+    m.patches_.push_back(std::move(outlet));
+
+    m.ownerList_.resize(m.nInternal_);
+    m.neighborList_.resize(m.nInternal_);
+    for (int f = 0; f < m.nInternal_; ++f) {
+        m.ownerList_[f] = m.faces_[f].owner;
+        m.neighborList_[f] = m.faces_[f].neighbor;
+    }
+    for (int j = 0; j < ny; ++j)
+        for (int i = 0; i < nx; ++i) {
+            Cell& c = m.cells_[cid(i, j)];
+            c.center = Vec3(0.5*(xc[i]+xc[i+1]), 0.5*(yc[j]+yc[j+1]), 0.5*dz);
+            c.volume = (xc[i+1]-xc[i]) * (yc[j+1]-yc[j]) * dz;
+        }
+    m.computeFaceGeometry();
+    m.ComputeInterpolationWeights();
+
+    std::cout << "Plate2D mesh: " << nx << "x" << ny
+              << " (" << m.nCells() << " cells, " << m.nFaces() << " faces)\n";
+    return m;
+}
+
 // Re-adaptive wall clustering overload
 // Computes tanh stretch parameter so the first cell targets yPlusTarget.
 Mesh Mesh::makeChannel2D(int nx, int ny, double Lx, double Ly, double Re, double yPlusTarget) {
