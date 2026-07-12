@@ -41,6 +41,7 @@ from UQ.datasets.channel_calibration import ChannelCalibration, CrossReStudy
 from UQ.datasets.couette_forward import CouetteForwardRANS, CouetteCalibration, COUETTE_CFG
 from UQ.datasets.couette_crossflow import CrossFlowStudy
 from UQ.datasets import crossflow_companions as companions
+from UQ import cache_fingerprint as cfp
 
 CONFIG = {
     "channel_cases": [550, 1000, 2000],
@@ -79,14 +80,29 @@ def stage_channel(regen):
                                n_stations=CONFIG["n_stations"],
                                cfg=CONFIG["channel_cfg"], sigma_floor=0.005)
         path = os.path.join(OUT, f"channel_ensemble_{n}.npz")
+        ident = {"kind": "couette_study_channel_ensemble", "case": n,
+                 "n_ensemble": CONFIG["n_ensemble"], "seed": CONFIG["seed"],
+                 "param_set": CONFIG["param_set"],
+                 "n_stations": CONFIG["n_stations"],
+                 "cfg": CONFIG["channel_cfg"], "sigma_floor": 0.005}
+        loaded = False
         if os.path.exists(path) and not regen:
-            c.load_cache(dict(np.load(path)))
-            print(f"  channel Re_tau {n:>4}: loaded {c.n_valid} ensemble points")
-        else:
+            d = dict(np.load(path))
+            status, reason = cfp.check(d, ident)
+            if status == "mismatch":
+                print(f"  channel Re_tau {n:>4}: cache REFUSED ({reason}); regenerating")
+            else:
+                if status == "legacy":
+                    print(f"  channel Re_tau {n:>4}: WARNING reusing "
+                          f"pre-fingerprint cache; regenerate to stamp it")
+                loaded = c.load_cache(d)
+                if loaded:
+                    print(f"  channel Re_tau {n:>4}: loaded {c.n_valid} ensemble points")
+        if not loaded:
             print(f"  channel Re_tau {n:>4}: running {CONFIG['n_ensemble']} solves ...",
                   flush=True)
             c.run_ensemble(n=CONFIG["n_ensemble"], seed=CONFIG["seed"])
-            np.savez(path, **c.to_cache())
+            np.savez(path, **cfp.attach(c.to_cache(), ident))
             c.fit_surrogates()
             print(f"           {c.n_valid}/{CONFIG['n_ensemble']} valid")
         cals[n] = c
@@ -113,14 +129,29 @@ def stage_couette(regen):
                                n_stations=CONFIG["n_stations"],
                                cfg=CONFIG["couette_cfg"])
         path = os.path.join(OUT, f"couette_ensemble_{n}.npz")
+        ident = {"kind": "couette_ensemble", "case": n,
+                 "n_ensemble": CONFIG["n_ensemble"], "seed": CONFIG["seed"],
+                 "param_set": CONFIG["param_set"],
+                 "n_stations": CONFIG["n_stations"],
+                 "cfg": CONFIG["couette_cfg"], "matched_nu": nus[n]}
+        loaded = False
         if os.path.exists(path) and not regen:
-            c.load_cache(dict(np.load(path)))
-            print(f"  couette Re_tau {n:>4}: loaded {c.n_valid} ensemble points")
-        else:
+            d = dict(np.load(path))
+            status, reason = cfp.check(d, ident)
+            if status == "mismatch":
+                print(f"  couette Re_tau {n:>4}: cache REFUSED ({reason}); regenerating")
+            else:
+                if status == "legacy":
+                    print(f"  couette Re_tau {n:>4}: WARNING reusing "
+                          f"pre-fingerprint cache; regenerate to stamp it")
+                loaded = c.load_cache(d)
+                if loaded:
+                    print(f"  couette Re_tau {n:>4}: loaded {c.n_valid} ensemble points")
+        if not loaded:
             print(f"  couette Re_tau {n:>4}: running {CONFIG['n_ensemble']} solves ...",
                   flush=True)
             c.run_ensemble(n=CONFIG["n_ensemble"], seed=CONFIG["seed"])
-            np.savez(path, **c.to_cache())
+            np.savez(path, **cfp.attach(c.to_cache(), ident))
             c.fit_surrogates()
             print(f"           {c.n_valid}/{CONFIG['n_ensemble']} valid")
         cals[n] = c

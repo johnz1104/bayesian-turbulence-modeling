@@ -74,7 +74,13 @@ def make_prior_from_param_set(param_set, relative_std=0.15):
     Returns: Prior
     """
     if hasattr(param_set, 'pack'):
-        # C++ pybind11 InferenceParameterSet
+        # C++ pybind11 InferenceParameterSet. Note the dependency direction:
+        # _rs() imports the compiled binding LAZILY, only on this branch, and
+        # reaching this branch presupposes the caller already holds a compiled
+        # object (so the binding demonstrably imports in this interpreter).
+        # The dict branch below is the designed pure-Python path and never
+        # touches the binding; a missing or ABI-mismatched rans_sst_py cannot
+        # break dict-based use (pinned by test_priors_dict_path_needs_no_binding).
         defaults = param_set.pack(_rs().SSTCoefficients())
         lo = param_set.lower_bounds()
         hi = param_set.upper_bounds()

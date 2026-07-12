@@ -91,6 +91,42 @@ def integrity_basis(S, W):
     return np.stack(T, axis=1)                             # (N, 10, 3, 3)
 
 
+def basis_coefficients(T_basis, db, ridge=1e-12):
+    """Objective (frame-equivariant) representation of a tensor discrepancy:
+    per-sample least-squares coefficients of db in the integrity basis.
+
+    Solves min_g || sum_n g_n T^(n) - db ||_F^2 (+ ridge ||g||^2) per sample.
+    Because the T^(n) rotate with the frame while g and the conditioning
+    invariants do not, a model that PREDICTS g (instead of raw tensor
+    components) reconstructs a discrepancy that transforms correctly under
+    rotation: the objectivity the raw-component parameterisation lacks. The
+    ridge term regularises the rank deficiency of the basis on 2-D mean flows
+    (where only three tensors are independent) without changing the
+    reconstruction on the achievable subspace.
+
+    T_basis: (N, nb, 3, 3) from integrity_basis (or a truncation of it);
+    db: (N, 3, 3) symmetric traceless. Returns g: (N, nb).
+    """
+    T_basis = np.asarray(T_basis, float)
+    db = np.asarray(db, float)
+    N, nb = T_basis.shape[0], T_basis.shape[1]
+    A = T_basis.reshape(N, nb, 9)                      # rows: basis tensors
+    y = db.reshape(N, 9)
+    # normal equations per sample: (A A^T + ridge I) g = A y
+    G = np.einsum("nip,njp->nij", A, A) + ridge * np.eye(nb)
+    rhs = np.einsum("nip,np->ni", A, y)
+    return np.linalg.solve(G, rhs)
+
+
+def basis_reconstruct(T_basis, g):
+    """Reconstruct the tensor discrepancy from integrity-basis coefficients.
+
+    db = sum_n g_n T^(n). T_basis: (N, nb, 3, 3); g: (N, nb) -> (N, 3, 3).
+    """
+    return np.einsum("nb,nbij->nij", np.asarray(g, float),
+                     np.asarray(T_basis, float))
+
+
 def boussinesq_anisotropy(S):
     """Linear eddy-viscosity (Boussinesq) anisotropy in non-dimensional form.
 

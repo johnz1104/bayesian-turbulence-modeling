@@ -79,8 +79,15 @@ def _make_flow(dy, dc, n_layers, hidden):
             super().__init__()
             layers = []
             for i in range(n_layers):
+                # Alternating COMPLEMENTARY checkerboard masks: even layers
+                # condition on the even dims and transform the odd dims, odd
+                # layers the reverse. Complementarity holds for any dy >= 2 (a
+                # start index of i % dy shifts and shrinks the mask for dy > 2,
+                # leaving late layers conditioning on a single dim). At dy = 2
+                # the parity form coincides with the old i % dy indexing, so
+                # previously trained two-component flows are unchanged.
                 m = torch.zeros(dy)
-                m[i % dy::2] = 1.0 if dy > 1 else 1.0
+                m[(i % 2)::2] = 1.0
                 if dy == 1:                          # alternate a 1-D mask trivially
                     m = torch.tensor([float(i % 2)])
                 layers.append(Coupling(m))

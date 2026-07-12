@@ -40,6 +40,7 @@ from UQ.datasets import ChannelDNS, CHANNEL_CASES
 from UQ.datasets.channel_baseline import ChannelBaselineRANS
 from UQ.datasets import channel_discrepancy as cdisc
 from UQ.datasets.channel_calibration import ChannelCalibration, CrossReStudy, PARAM_SETS
+from UQ import cache_fingerprint as cfp
 from UQ import evaluation as ev
 
 PARAM_SETS_AVAILABLE = tuple(PARAM_SETS)
@@ -72,8 +73,17 @@ def ensemble_path(n, param_set):
 
 def stage_baselines(regen):
     path = os.path.join(OUT, "baselines.npz")
+    ident = {"kind": "channel_baselines", "cases": CONFIG["cases"],
+             "baseline_cfg": CONFIG["baseline_cfg"]}
     if os.path.exists(path) and not regen:
-        return np.load(path)
+        d = dict(np.load(path))
+        status, reason = cfp.check(d, ident)
+        if status == "match" or status == "legacy":
+            if status == "legacy":
+                print("[baselines] WARNING reusing pre-fingerprint cache; "
+                      "regenerate with --regen-baselines to stamp it")
+            return d
+        print(f"[baselines] cache REFUSED ({reason}); regenerating")
     print("[baselines] generating matched-Re_tau SST baseline fields ...")
     store = {}
     for n in CONFIG["cases"]:
@@ -87,7 +97,7 @@ def stage_baselines(regen):
         store[f"scalars_{n}"] = np.array([b.nu, b.u_tau, b.re_tau, b.cf, b.cf_dean])
         print(f"  Re_tau {dns.re_tau:.0f} -> {b.re_tau:.0f}  Cf {b.cf:.5f} "
               f"(Dean {b.cf_dean:.5f}, {100*(b.cf-b.cf_dean)/b.cf_dean:+.0f}%)")
-    np.savez(path, **store)
+    np.savez(path, **cfp.attach(store, ident))
     return np.load(path)
 
 
@@ -121,13 +131,30 @@ def stage_ensembles(regen, quick):
                                n_stations=CONFIG["n_stations"], cfg=CONFIG["cfg"],
                                sigma_floor=CONFIG["sigma_floor"])
         path = ensemble_path(n, CONFIG["param_set"])
+        # the scientifically relevant cache identity: a quick run (smaller
+        # ensemble) or any config change fingerprints differently, so a full
+        # run can never silently reuse a quick cache under the shared filename
+        ident = {"kind": "channel_ensemble", "case": n, "n_ensemble": n_ens,
+                 "seed": CONFIG["seed"], "param_set": CONFIG["param_set"],
+                 "n_stations": CONFIG["n_stations"], "cfg": CONFIG["cfg"],
+                 "sigma_floor": CONFIG["sigma_floor"]}
+        loaded = False
         if os.path.exists(path) and not regen:
-            c.load_cache(dict(np.load(path)))
-            print(f"  Re_tau {n:>4}: loaded {c.n_valid} ensemble points")
-        else:
+            d = dict(np.load(path))
+            status, reason = cfp.check(d, ident)
+            if status == "mismatch":
+                print(f"  Re_tau {n:>4}: cache REFUSED ({reason}); regenerating")
+            else:
+                if status == "legacy":
+                    print(f"  Re_tau {n:>4}: WARNING reusing pre-fingerprint "
+                          f"cache; regenerate with --regen-ensembles to stamp it")
+                loaded = c.load_cache(d)
+                if loaded:
+                    print(f"  Re_tau {n:>4}: loaded {c.n_valid} ensemble points")
+        if not loaded:
             print(f"  Re_tau {n:>4}: running {n_ens} forward solves ...", flush=True)
             c.run_ensemble(n=n_ens, seed=CONFIG["seed"])
-            np.savez(path, **c.to_cache())
+            np.savez(path, **cfp.attach(c.to_cache(), ident))
             c.fit_surrogates()
             print(f"           {c.n_valid}/{n_ens} valid")
         cals[n] = c

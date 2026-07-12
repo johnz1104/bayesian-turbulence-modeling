@@ -1,12 +1,22 @@
 """Eigenspace perturbation of the Reynolds-stress anisotropy (the comparison
 baseline of the separated-flow model-form study).
 
-The method of Emory, Larsson and Iaccarino (2013): move the anisotropy
-eigenvalues toward the one-, two- and three-component limiting states of the
-barycentric triangle while keeping the eigenvectors, giving a small set of
-perturbed closures whose solves bound the quantity-of-interest response. It is
-a deterministic bounding envelope, not a probability distribution; how it is
-scored against probabilistic methods is pre-registered in
+Two variants, named precisely because they differ in strength:
+
+- THREE-CORNER EIGENVALUE-ONLY (Emory, Larsson and Iaccarino 2013), corner_set:
+  move the anisotropy eigenvalues toward the one-, two- and three-component
+  limiting states of the barycentric triangle while keeping the eigenvectors.
+  Three perturbed closures.
+- FIVE-STATE (Iaccarino, Mishra and Ghili 2017, Phys. Rev. Fluids 2, 024605),
+  five_state_set: the three eigenvalue corners PLUS two eigenvector
+  perturbations that realign the perturbed stress with the mean strain-rate
+  eigenframe to maximise or minimise turbulence production (taken at the 1C
+  amplitude, where anisotropy magnitude and hence the production bound is
+  widest). Five perturbed closures; the established practice reported to
+  improve bounds over eigenvalue-only perturbation.
+
+Both are deterministic bounding envelopes, not probability distributions; how
+they are scored against probabilistic methods is pre-registered in
 UQ-RANS_research/separated_modelform/METHODS_OPERATIONALIZATION.md (the
 envelope check, plus a uniform-ensemble reading for CRPS and energy-score
 comparability, labeled charitable wherever used).
@@ -64,14 +74,65 @@ class EigenspacePerturbation:
 
     @staticmethod
     def corner_set(b, delta_b=1.0, corners=("1C", "2C", "3C")):
-        """The perturbed-anisotropy family, one entry per corner.
+        """The THREE-CORNER EIGENVALUE-ONLY family (Emory et al. 2013).
 
         This is the set of closures the a-posteriori envelope is built from:
         each entry is propagated through the same Reynolds-stress injection as
         the generative and Gaussian methods, and the per-quantity [min, max]
-        over the solves is the envelope.
+        over the solves is the envelope. Eigenvectors are preserved, so this is
+        the weaker 2013 variant; see five_state_set for the 2017 extension.
         """
         return {c: EigenspacePerturbation.perturb(b, c, delta_b) for c in corners}
+
+    @staticmethod
+    def production_extremal_states(b, strain, delta_b=1.0, base_corner="1C"):
+        """The two eigenvector-perturbed states of the 2017 five-state method.
+
+        The anisotropy contribution to turbulence production is
+        P_b = -2 k b : S = -2 k sum_i lambda_i gamma_pair(i) once b's
+        eigenvectors are realigned with the strain eigenframe, so by the
+        rearrangement inequality production is maximised by pairing the
+        DESCENDING anisotropy eigenvalues with the ASCENDING strain eigenvalues
+        (largest anisotropy on the most compressive direction) and minimised by
+        the descending-descending pairing. Both states reuse the corner-
+        perturbed eigenvalues (base_corner at delta_b, default the 1C state,
+        where the anisotropy magnitude and hence the production bound is
+        widest), so they sit at the same barycentric point as that corner and
+        realizability is preserved by construction.
+
+        b, strain: (N, 3, 3) batches (strain = symmetric mean rate of strain).
+        Returns {"<base_corner>_vmax": (N, 3, 3), "<base_corner>_vmin": ...}.
+        """
+        b = np.asarray(b, float)
+        strain = np.asarray(strain, float)
+
+        # corner-perturbed eigenvalues, descending (reuse the 2013 move)
+        bp = EigenspacePerturbation.perturb(b, base_corner, delta_b)
+        lp = np.linalg.eigvalsh(bp)[..., ::-1]       # l1 >= l2 >= l3
+
+        # strain eigenframe, ascending gamma1 <= gamma2 <= gamma3
+        gS, vS = np.linalg.eigh(0.5 * (strain + np.swapaxes(strain, -1, -2)))
+
+        # vmax: descending lambda on ascending gamma (most compressive first);
+        # vmin: descending lambda on descending gamma
+        vmax = np.einsum("...ij,...j,...kj->...ik", vS, lp, vS)
+        vS_desc = vS[..., ::-1]
+        vmin = np.einsum("...ij,...j,...kj->...ik", vS_desc, lp, vS_desc)
+        sym = lambda a: 0.5 * (a + np.swapaxes(a, -1, -2))
+        return {f"{base_corner}_vmax": sym(vmax), f"{base_corner}_vmin": sym(vmin)}
+
+    @staticmethod
+    def five_state_set(b, strain, delta_b=1.0):
+        """The FIVE-STATE family (Iaccarino, Mishra and Ghili 2017).
+
+        The three eigenvalue corners of corner_set plus the two production-
+        extremal eigenvector states of production_extremal_states, all at the
+        same delta_b. Propagated exactly like corner_set members.
+        """
+        family = EigenspacePerturbation.corner_set(b, delta_b)
+        family.update(
+            EigenspacePerturbation.production_extremal_states(b, strain, delta_b))
+        return family
 
     @staticmethod
     def is_realizable_family(family, tol=1e-8):

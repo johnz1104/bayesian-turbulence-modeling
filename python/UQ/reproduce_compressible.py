@@ -46,6 +46,7 @@ from UQ.datasets import (GVChannelDNS, GV_CASES, CKMChannelDNS, CKM_CASES,
 from UQ.datasets.compressible_calibration import CompressibleCalibration
 from UQ.datasets.crossmach_study import CrossMachStudy
 from UQ.datasets.compressible_baseline import FlatPlateFrozenSST
+from UQ import cache_fingerprint as cfp
 
 SEED = 0
 LEVEL = 0.9
@@ -81,12 +82,23 @@ def build_calibrations(results_dir, n_ensemble, rel, regen, quick):
         cal = CompressibleCalibration(dns, rel_sigma=rel)
         cache = os.path.join(results_dir,
                              f"ensemble_{tag}_rel{rel:g}.npz")
+        ident = {"kind": "compressible_ensemble", "case": tag,
+                 "n_ensemble": n_ensemble, "seed": SEED + j, "rel": rel}
+        loaded = False
         if os.path.isfile(cache) and not regen:
-            cal.load_cache({k: v for k, v in np.load(cache).items()})
-        else:
+            d = {k: v for k, v in np.load(cache).items()}
+            status, reason = cfp.check(d, ident)
+            if status == "mismatch":
+                print(f"  {tag}: cache REFUSED ({reason}); regenerating")
+            else:
+                if status == "legacy":
+                    print(f"  {tag}: WARNING reusing pre-fingerprint cache; "
+                          f"regenerate with --regen-ensembles to stamp it")
+                loaded = cal.load_cache(d)
+        if not loaded:
             cal.run_ensemble(n=n_ensemble, seed=SEED + j)
             cal.fit_surrogates()
-            np.savez(cache, **cal.to_cache())
+            np.savez(cache, **cfp.attach(cal.to_cache(), ident))
         cals[tag] = cal
         print(f"  [{j + 1}/{len(tags)}] {tag}: n_valid={cal.n_valid} "
               f"rel_eff={cal.rel_eff:.4f}", flush=True)
