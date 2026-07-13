@@ -103,4 +103,14 @@ public:
                        ScalarField& nuT, ScalarField& F1field,
                        ScalarField& F2field, ScalarField& Pk,
                        ScalarField& CDkwField) const;
+
+    // Per-cell-viscosity overload: identical closure evaluation with the
+    // LOCAL kinematic viscosity mu(T)/rho entering the F1/F2 blending
+    // arguments, replacing the low-Mach shortcut of a single inlet-cell value.
+    void computeFields(const Mesh& mesh,
+                       const ScalarField& k, const ScalarField& omega,
+                       const VectorField& U, const ScalarField& nuLocal,
+                       ScalarField& nuT, ScalarField& F1field,
+                       ScalarField& F2field, ScalarField& Pk,
+                       ScalarField& CDkwField) const;
 };

@@ -29,6 +29,12 @@ target_link_libraries(test_bfs_lemoin_bc PRIVATE btm_core)
 add_test(NAME bfs_lemoin_bc COMMAND test_bfs_lemoin_bc)
 set_tests_properties(bfs_lemoin_bc PROPERTIES TIMEOUT 30 LABELS "unit;bc")
 
+# ---- cp_normalization: pressure-coefficient references (audit fix) ----
+add_executable(test_cp_normalization cpp/test_cp_normalization.cpp)
+target_link_libraries(test_cp_normalization PRIVATE btm_core)
+add_test(NAME cp_normalization COMMAND test_cp_normalization)
+set_tests_properties(cp_normalization PROPERTIES TIMEOUT 30 LABELS "unit;observation")
+
 # ---- injection_source: Reynolds-stress injection manufactured-field test ----
 add_executable(test_injection_source cpp/test_injection_source.cpp)
 target_link_libraries(test_injection_source PRIVATE btm_incompressible)

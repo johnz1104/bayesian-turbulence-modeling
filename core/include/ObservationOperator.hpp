@@ -31,6 +31,14 @@ struct Observable {
     int    component = 0;           // velocity component for profiles (0=x,1=y,2=z)
     double referenceArea = 1.0;     // for drag normalisation
     double refVelocity = 1.0;       // for Cf / Cd normalisation
+    // Pressure-coefficient references. The incompressible solver stores the
+    // KINEMATIC pressure p/rho, so its legacy taps (refPressure 0,
+    // refDensity 1) are already dimensionally consistent and unchanged. A
+    // COMPRESSIBLE field stores absolute static pressure in Pa, so a tap
+    // must carry the freestream reference pressure and density for
+    // Cp = (p - p_ref) / (0.5 rho_ref U_ref^2) to be a coefficient at all.
+    double refPressure = 0.0;
+    double refDensity  = 1.0;
 };
 
 // maps flow fields to predicted measurements
@@ -42,7 +50,8 @@ public:
     // add observable types
     void addDrag(const std::string& wallPatch, double Cd_obs, double sigma, 
                  double refArea, double refVel, double sigma_model = 0.0);
-    void addPressureTap(const Vec3& loc, double Cp_obs, double sigma, double refVel, double sigma_model = 0.0);
+    void addPressureTap(const Vec3& loc, double Cp_obs, double sigma, double refVel, double sigma_model = 0.0,
+                        double refPressure = 0.0, double refDensity = 1.0);
     void addVelocityProfile(const Vec3& loc, int comp, double Uobs, double sigma, double sigma_model = 0.0);
     void addSkinFriction(const std::string& wallPatch, const Vec3& loc, double Cf_obs, 
                          double sigma, double refVel, double sigma_model = 0.0);
@@ -92,12 +101,15 @@ inline void ObservationOperator::addDrag(
 
 inline void ObservationOperator::addPressureTap(
         const Vec3& loc, double Cp_obs, double sigma,
-        double refVel, double sigma_model) {
+        double refVel, double sigma_model,
+        double refPressure, double refDensity) {
     Observable obs;
     obs.type = ObsType::PressureTap;
     obs.meas = {Cp_obs, sigma, sigma_model};
     obs.location = loc;
     obs.refVelocity = refVel;
+    obs.refPressure = refPressure;
+    obs.refDensity  = refDensity;
     observables_.push_back(obs);
 }
 
@@ -239,8 +251,12 @@ inline double ObservationOperator::computePressureAt(
         const Mesh& mesh, const FlowFields& fields,
         const Observable& obs) const {
     int ci = findNearestCell(mesh, obs.location);
-    double dynP = 0.5 * obs.refVelocity * obs.refVelocity;
-    return fields.p[ci] / std::max(dynP, 1e-20);
+    // Cp = (p - p_ref) / (0.5 rho_ref U_ref^2). Legacy incompressible taps
+    // (kinematic p, refPressure 0, refDensity 1) evaluate bit-identically;
+    // compressible absolute-pressure fields need both references or the
+    // "coefficient" is dominated by the ~1e5 Pa offset.
+    double dynP = 0.5 * obs.refDensity * obs.refVelocity * obs.refVelocity;
+    return (fields.p[ci] - obs.refPressure) / std::max(dynP, 1e-20);
 }
 
 // separation point: x-location where wall shear = 0.
