@@ -304,15 +304,21 @@ void SIMPLESolver::assemblePressureCorrection(LinearSystem& sys,
         if (mesh_.patch(pi).type == "outlet" && !mesh_.patch(pi).faces.empty())
             hasOutlet = true;
 
-    // Audit adjudication of this gate: the outlet test is not a heuristic,
-    // it is exactly the all-Neumann condition under which the p' system
-    // carries an unbroken odd-even null mode (an outlet's Dirichlet row
-    // breaks both the singularity and the mode). Bounded cases are
-    // DNS-validated without the dissipation and the coupled tangent
-    // linearises their legacy operator bit-for-bit, so the term stays gated
-    // by default; settings_.rhieChowAllMeshes turns it on everywhere as an
-    // explicit probe (the pressure PIN below remains outlet-free-only, where
-    // the singular system needs it).
+    // Audit adjudication of this gate: the outlet test identifies where the
+    // p' system is all-Neumann and the odd-even mode is an EXACT null mode.
+    // An outlet's Dirichlet row removes the exact null mode and the
+    // singularity, but interior odd-even susceptibility on a collocated
+    // grid is a local stencil property that boundary rows only damp, so the
+    // question on bounded meshes is EMPIRICAL, not settled by the gate:
+    // the bounded production cases are DNS-validated without the
+    // dissipation and their solved-pressure checkerboard energy measures
+    // low (oddEvenEnergyRatio, pinned by test on the bounded channel), and
+    // the coupled tangent linearises the legacy bounded operator
+    // bit-for-bit. The term therefore stays gated by default with
+    // settings_.rhieChowAllMeshes as the standing probe; enabling it
+    // globally is a reviewed physics change to make if the diagnostic ever
+    // measures otherwise on a production case. The pressure PIN below
+    // remains outlet-free-only, where the singular system needs it.
     const bool rcActive = !hasOutlet || settings_.rhieChowAllMeshes;
 
     // cell pressure gradient for the Rhie-Chow face-flux dissipation below

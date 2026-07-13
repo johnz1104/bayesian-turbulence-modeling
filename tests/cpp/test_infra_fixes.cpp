@@ -120,9 +120,10 @@ int main() {
             FlowBoundaryConditions::channelDefaults(mesh, 1.0, kIn, omIn);
         SSTModel sst{SSTCoefficients{}};
 
-        auto solveWith = [&](bool rcAll) {
+        struct RcResult { double ub; double chk; };
+        auto solveWith = [&](bool rcAll) -> RcResult {
             SolverSettings s;
-            s.maxIterations = 6000;
+            s.maxIterations = 20000;
             s.convergenceTol = 1e-3;
             s.alphaU = 0.5; s.alphaP = 0.3;
             s.verbose = false;
@@ -132,16 +133,26 @@ int main() {
             solver.initUniform(f, Vec3(1.0, 0.0, 0.0), 0.0, kIn, omIn);
             ConvergenceHistory h = solver.solve(f);
             REQUIRE(!h.diverged, "bounded channel must not diverge");
+            REQUIRE(h.converged, "bounded channel must genuinely converge");
             double ub = 0.0, vol = 0.0;
             for (int ci = 0; ci < mesh.nCells(); ++ci) {
                 ub += f.U[ci].x * mesh.cell(ci).volume;
                 vol += mesh.cell(ci).volume;
             }
-            return ub / vol;
+            // the decisive measurement: odd-even energy of the SOLVED
+            // pressure field itself, not of a synthetic checkerboard
+            return {ub / vol, oddEvenEnergyRatio(mesh, f.p)};
         };
-        double ubOff = solveWith(false);
-        double ubOn  = solveWith(true);
-        REQUIRE(std::fabs(ubOn - ubOff) < 0.01 * std::fabs(ubOff),
+        RcResult off = solveWith(false);
+        RcResult on  = solveWith(true);
+        // the default (gated-off) bounded solve must itself be checkerboard
+        // free at the diagnostic level: this is the empirical evidence the
+        // gate adjudication rests on, asserted rather than assumed
+        REQUIRE(off.chk < 0.2,
+                "solved bounded-channel pressure must not be checkerboarded");
+        // the probe must not increase decoupling and must not change physics
+        REQUIRE(on.chk < 0.2, "probe run must stay checkerboard free");
+        REQUIRE(std::fabs(on.ub - off.ub) < 0.01 * std::fabs(off.ub),
                 "the probe dissipation must not change the bulk physics");
     }
 
