@@ -1,6 +1,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 #include <pybind11/numpy.h>
+#include <stdexcept>
 #include "ForwardModel.hpp"
 #include "ParameterSensitivity.hpp"
 #include "CompressibleForwardModel.hpp"
@@ -249,7 +250,15 @@ static py::dict extractCompressibleFields(const CompressibleForwardModel& fm) {
     const CompressibleFlowFields& ff = fm.lastCompressibleFields();
     py::dict d;
     d["U"]     = vectorToNumpy(ff.U);
-    d["p"]     = scalarToNumpy(ff.p);
+    // the field stores the MECHANICAL working pressure; consumers get the
+    // thermodynamic static pressure under "p" (the physical quantity every
+    // diagnostic compares against) and the raw working variable separately
+    ScalarField pThermo = ff.p;
+    for (int ci = 0; ci < pThermo.mesh().nCells(); ++ci)
+        pThermo[ci] = ff.p[ci]
+            - (2.0 / 3.0) * ff.rho[ci] * std::max(ff.k[ci], 0.0);
+    d["p"]            = scalarToNumpy(pThermo);
+    d["p_mechanical"] = scalarToNumpy(ff.p);
     d["T"]     = scalarToNumpy(ff.T);
     d["rho"]   = scalarToNumpy(ff.rho);
     d["k"]     = scalarToNumpy(ff.k);
@@ -308,6 +317,7 @@ PYBIND11_MODULE(rans_sst_py, m) {
         .def_static("inlet_turb", &InferenceParameterSet::inletTurb)
         .def_static("near_wall4", &InferenceParameterSet::nearWall4)
         .def_static("all11", &InferenceParameterSet::all11)
+        .def_static("live10", &InferenceParameterSet::live10)
         .def_static("from_indices", &InferenceParameterSet::fromIndices,
                     py::arg("name"), py::arg("indices"));
 
@@ -414,6 +424,8 @@ PYBIND11_MODULE(rans_sst_py, m) {
         .def_readwrite("inner_tolerance",   &SolverSettings::innerTolerance)
         .def_readwrite("turb_start_iter",   &SolverSettings::turbStartIter)
         .def_readwrite("turb_update_interval", &SolverSettings::turbUpdateInterval)
+        .def_readwrite("nut_floor_iters",   &SolverSettings::nuTFloorIters)
+        .def_readwrite("rhie_chow_all_meshes", &SolverSettings::rhieChowAllMeshes)
         .def_readwrite("alpha_injection",   &SolverSettings::alphaInjection)
         .def_readwrite("body_force",        &SolverSettings::bodyForce)
         .def_readwrite("k_min",             &SolverSettings::kMin)
@@ -800,4 +812,19 @@ PYBIND11_MODULE(rans_sst_py, m) {
           py::arg("xx"), py::arg("yy"), py::arg("zz"),
           py::arg("xy"), py::arg("xz") = 0.0, py::arg("yz") = 0.0,
           "Project a Reynolds-stress tensor into the realizable (barycentric) set.");
+
+    m.def("odd_even_energy_ratio",
+          [](const Mesh& mesh, const std::vector<double>& values) {
+              if ((int)values.size() != mesh.nCells()) {
+                  throw std::invalid_argument(
+                      "odd_even_energy_ratio requires exactly one value per cell");
+              }
+              ScalarField phi(mesh, "probe");
+              for (int ci = 0; ci < mesh.nCells(); ++ci)
+                  phi[ci] = values[ci];
+              return oddEvenEnergyRatio(mesh, phi);
+          },
+          py::arg("mesh"), py::arg("values"),
+          "Checkerboard energy ratio of a cell field (companion diagnostic to "
+          "SolverSettings.rhie_chow_all_meshes).");
 }

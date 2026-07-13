@@ -118,7 +118,14 @@ class HillsInjection:
         result = fm.evaluate(self._theta)
         fm.clear_target_anisotropy()
         status = str(result.status).split(".")[-1]
-        fields = fm.last_fields() if fm.has_last_fields() else None
+        # STATUS-GATED extraction: only a genuinely converged solve has wall
+        # QoIs; anything else records NaN. The forward model now also
+        # invalidates its held fields on divergence, so the pre-audit failure
+        # mode (a diverged member inheriting its predecessor's fields
+        # bit-for-bit, as two committed hills records did) is closed at both
+        # layers.
+        fields = (fm.last_fields()
+                  if status == "Converged" and fm.has_last_fields() else None)
         x_s = x_r = float("nan")
         if fields is not None:
             x_s, x_r = self.bubble_geometry(fields)

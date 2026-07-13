@@ -135,7 +135,8 @@ def make_validation_case(name: str, Ma: float, nx: int = 32, ny: int = 24,
                           Lx: float = 10.0, H: float = 1.0,
                           max_iterations: int = 4000,
                           convergence_tol: float = 1e-3,
-                          turb_intensity: float = 0.05) -> dict[str, Any]:
+                          turb_intensity: float = 0.05,
+                          nut_floor_iters: int | None = None) -> dict[str, Any]:
     """Build the mesh + EOS + BCs + solver settings for a Ma=Ma channel."""
     eos    = rs.IdealGasEOS()
     T_in   = 300.0
@@ -176,6 +177,10 @@ def make_validation_case(name: str, Ma: float, nx: int = 32, ny: int = 24,
     settings.turb_update_interval = 2
     settings.verbose             = False
     settings.report_interval     = 500
+    # marginal developing-channel cases may need a longer startup floor
+    # window than the default (the floor is startup-only; see SolverSettings)
+    if nut_floor_iters is not None:
+        settings.nut_floor_iters = nut_floor_iters
 
     param_set = rs.InferenceParameterSet.a1_betaStar()
     fm = rs.CompressibleForwardModel(

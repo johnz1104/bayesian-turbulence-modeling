@@ -1,6 +1,7 @@
 #include "CompressibleForwardModel.hpp"
 #include <cmath>
 #include <algorithm>
+#include <stdexcept>
 
 CompressibleForwardModel::CompressibleForwardModel(
     const Mesh& mesh,
@@ -16,7 +17,20 @@ CompressibleForwardModel::CompressibleForwardModel(
       bcs_(bcs), eos_(eos), settings_(settings),
       uInit_(uInit), pInit_(pInit), TInit_(TInit),
       kInit_(kInit), omegaInit_(omegaInit)
-{}
+{
+    // The shared observation adapter receives a FlowFields view with no
+    // density or local dynamic viscosity. Its drag operator is therefore
+    // dimensionally valid only for the incompressible kinematic-pressure
+    // convention. Reject the unsupported combination at the typed boundary
+    // instead of leaving a comment on a silently executable mixed-units path.
+    for (const Observable& obs : obsOp_.observables()) {
+        if (obs.type == ObsType::Drag) {
+            throw std::invalid_argument(
+                "CompressibleForwardModel does not support generic Drag "
+                "observations; use the DBNS wall-observation path");
+        }
+    }
+}
 
 EvaluationResult CompressibleForwardModel::evaluate(const std::vector<double>& theta) {
     EvaluationResult result;
@@ -57,7 +71,14 @@ EvaluationResult CompressibleForwardModel::evaluate(const std::vector<double>& t
     // (reuses existing incompressible observation machinery)
     FlowFields ff(mesh_);
     ff.U     = fields.U;
-    ff.p     = fields.p;
+    // observables see the THERMODYNAMIC pressure: the solver's p is the
+    // mechanical pressure with the (2/3) rho k turbulent normal stress
+    // absorbed (see the assembly note), and a pressure tap or drag integral
+    // must not report the bookkeeping term
+    ff.p = fields.p;
+    for (int ci = 0; ci < mesh_.nCells(); ++ci)
+        ff.p[ci] = fields.p[ci]
+            - (2.0 / 3.0) * fields.rho[ci] * std::max(fields.k[ci], 0.0);
     ff.k     = fields.k;
     ff.omega = fields.omega;
     ff.nuT   = fields.nuT;

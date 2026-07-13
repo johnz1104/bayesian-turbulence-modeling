@@ -6,9 +6,15 @@
 // Compressible RANS flow fields: extends incompressible set with density and temperature.
 struct CompressibleFlowFields {
     VectorField U;      // velocity [m/s]
-    ScalarField p;      // static pressure [Pa]
+    ScalarField p;      // MECHANICAL working pressure [Pa]: p_mech = p_thermo
+                        // + (2/3) rho k (the Favre trace absorbed into the
+                        // momentum working variable). Thermodynamic statics
+                        // are recovered as p_thermo = p - (2/3) rho k; the
+                        // observation shim and the python field export do
+                        // this, and boundary/initialization inputs specified
+                        // as thermodynamic values are converted on entry.
     ScalarField T;      // static temperature [K]
-    ScalarField rho;    // density [kg/m³]  (derived: ρ = p/RT)
+    ScalarField rho;    // density [kg/m³]  (derived: ρ = p_mech/(R T + 2k/3))
 
     // SST turbulence model fields (same as incompressible)
     ScalarField k;      // turbulent kinetic energy [m²/s²]
@@ -17,6 +23,11 @@ struct CompressibleFlowFields {
     ScalarField F1, F2; // SST blending functions
     ScalarField Pk;     // turbulence production
     ScalarField CDkw;   // cross-diffusion
+
+    // Turbulence-establishment marker (see FlowFields::turbEstablished): the
+    // startup-only nuT floor applies until this flips, and warm restarts carry
+    // it so the floor never re-engages on an established state.
+    bool turbEstablished = false;
 
     CompressibleFlowFields() = default;
     explicit CompressibleFlowFields(const Mesh& mesh)

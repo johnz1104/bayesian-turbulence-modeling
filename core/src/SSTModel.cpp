@@ -73,6 +73,28 @@ double SSTModel::production(double nuT, double S, double k, double omega) const 
     return std::min(Pk_raw, Pk_lim);
 }
 
+// Specific omega production (SST-2003 corrected form):
+// P_omega/alpha = Pk_limited/nuT = min(nuT*S^2, 10*betaStar*k*omega)/nuT
+//               = min(S^2, 10*betaStar*k*omega/nuT)
+// The 2003 paper prints alpha*S^2; the specification (NASA TMR SST page) corrects it to
+// the limited form. The min form is singular-safe: as nuT -> 0 with k > 0 the limiter
+// branch blows up and the min selects S^2, which is the correct limit of Pk/nuT there.
+// At k = 0 exactly the specification ratio is 0/0 (Pk_limited = 0 and nuT = 0); this
+// returns 0, the k-equation-consistent choice (no k production means no omega
+// production), erring on the reducing side; solvers seed k > 0 at initialization so the
+// state does not persist. Because min(S^2, lim) <= S^2 pointwise, this term is bounded
+// above by the S^2 misprint: the corrected production can never exceed the former term
+// at the same state (a statement about this term, not about every coupled path in the
+// model); the two coincide wherever the k-production limiter is inactive
+// (the equilibrium log layer of attached flows; limiter-ACTIVE states, including
+// near-wall and startup states of attached runs, shift toward less production).
+double SSTModel::productionOmega(double nuT, double S, double k, double omega) const {
+    double S2  = S * S;
+    double lim = 10.0 * coeffs.betaStar * std::max(k, 0.0) * std::max(omega, 1e-20)
+                 / std::max(nuT, 1e-30);
+    return std::min(S2, lim);
+}
+
 // Source term for k-equation:
 // Sk = Pk - betaStar * omega * k
 // production minus dissipation of turbulent kinetic energy
@@ -80,14 +102,19 @@ double SSTModel::sourceK(double Pk, double k, double omega) const {
     return Pk - coeffs.betaStar * std::max(omega, 1e-20) * std::max(k, 0.0);
 }
 
-// Source term of omega-equation
-// Sw = alpha*(Pk/nuT) - beta*omega^2 + (1-F1)*max(CDkw, 0)
-// combines turbulence production, dissipation, and cross-diffusion effects
-double SSTModel::sourceOmega(double Pk, double nuT, double omega, double F1, double CDkw) const {
-    double alphaB  = coeffs.alpha(F1);
-    double betaB   = coeffs.beta(F1);
-    double nuTSafe = std::max(nuT, 1e-20);
-    return alphaB * Pk / nuTSafe - betaB * omega * omega + (1.0 - F1) * std::max(CDkw, 0.0);
+// Source term of omega-equation (reference form; solvers assemble the same terms with
+// the destruction kept implicit on the matrix diagonal)
+// Sw = alpha*(Pk_limited/nuT) - beta*omega^2 + (1-F1)*CDkw
+// The cross-diffusion term enters the omega equation UNCLIPPED; only the CDkw quantity
+// inside the F1 argument is clipped (computeF1 receives max(CDkw, 1e-20) at the call
+// site), matching the SST-2003 specification.
+double SSTModel::sourceOmega(double S, double nuT, double k, double omega, double F1,
+                             double CDkw) const {
+    double alphaB = coeffs.alpha(F1);
+    double betaB  = coeffs.beta(F1);
+    return alphaB * productionOmega(nuT, S, k, omega)
+           - betaB * omega * omega
+           + (1.0 - F1) * CDkw;
 }
 
 // Field function
@@ -140,6 +167,48 @@ void SSTModel::computeFields(
         nuT[ci] = eddyViscosity(kc, wc, Sc, F2field[ci]);
 
         // production
+        Pk[ci] = production(nuT[ci], Sc, kc, wc);
+    }
+}
+
+// Per-cell-viscosity overload (see header): same loop with nuLocal[ci] in the
+// blending functions.
+void SSTModel::computeFields(
+        const Mesh& mesh,
+        const ScalarField& k,
+        const ScalarField& omega,
+        const VectorField& U,
+        const ScalarField& nuLocal,
+        ScalarField& nuT,
+        ScalarField& F1field,
+        ScalarField& F2field,
+        ScalarField& Pk,
+        ScalarField& CDkwField
+    ) const {
+
+    VelocityGradients vg = computeVelocityGradients(U);
+    ScalarField Smag = strainRateMagnitude(vg);
+    VectorField gradK     = greenGaussGrad(k);
+    VectorField gradOmega = greenGaussGrad(omega);
+    const auto& wd = mesh.wallDistance();
+
+    for (int ci = 0; ci < mesh.nCells(); ++ci) {
+        double kc  = std::max(k[ci], 0.0);
+        double wc  = std::max(omega[ci], 1e-20);
+        double y   = std::max(wd[ci], 1e-20);
+        double Sc  = Smag[ci];
+        double nuC = nuLocal[ci];
+
+        double CDkw = crossDiffusion(gradK[ci], gradOmega[ci], wc);
+        CDkwField[ci] = CDkw;
+
+        double CDpos = std::max(CDkw, 1e-20);
+        F1field[ci] = (variant == SSTVariant::KOmega)
+                          ? 1.0
+                          : computeF1(kc, wc, y, nuC, CDpos);
+        F2field[ci] = computeF2(kc, wc, y, nuC);
+
+        nuT[ci] = eddyViscosity(kc, wc, Sc, F2field[ci]);
         Pk[ci] = production(nuT[ci], Sc, kc, wc);
     }
 }

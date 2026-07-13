@@ -209,6 +209,9 @@ class BFSBaselineRANS:
         # (harmless when nothing is injected); strongly perturbed sampled
         # closures may need a smaller value than the 0.3 default
         settings.alpha_injection = cfg.get("alpha_injection", 0.3)
+        # standing probe hook: Rhie-Chow face dissipation on all meshes
+        # (default off; the separated-flow off/on adjudication sets it)
+        settings.rhie_chow_all_meshes = cfg.get("rhie_chow_all_meshes", False)
 
         fm = rs.ForwardModel(mesh, ps, obs, bcs, nu, settings,
                              rs.Vec3(Ub, 0.0, 0.0), 0.0, kIn, omIn)

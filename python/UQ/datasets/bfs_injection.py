@@ -98,9 +98,16 @@ class BFSInjection:
         result = fm.evaluate(self._theta)
         fm.clear_target_anisotropy()
         status = str(result.status).split(".")[-1]
-        fields = fm.last_fields() if fm.has_last_fields() else None
+        # STATUS-GATED extraction (audit): a non-converged member records NaN
+        # and never touches held fields or the (possibly empty) prediction
+        # vector; a diverged evaluation returns no predictions at all, so the
+        # unconditional predictions[0] was an index error waiting on the
+        # divergence path
+        ok = status == "Converged"
+        preds = np.asarray(result.predictions, float)
+        fields = fm.last_fields() if ok and fm.has_last_fields() else None
         return {
-            "reattachment": float(result.predictions[0]),
+            "reattachment": float(preds[0]) if ok and preds.size else float("nan"),
             "status": status,
             "iterations": int(result.simple_iters),
             "diagnostics": dict(fm.injection_diagnostics()),
@@ -113,8 +120,10 @@ class BFSInjection:
         fm.clear_target_anisotropy()
         result = fm.evaluate(self._theta)
         status = str(result.status).split(".")[-1]
+        preds = np.asarray(result.predictions, float)
+        ok = status == "Converged"
         return {
-            "reattachment": float(result.predictions[0]),
+            "reattachment": float(preds[0]) if ok and preds.size else float("nan"),
             "status": status,
             "iterations": int(result.simple_iters),
         }

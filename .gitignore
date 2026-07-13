@@ -39,3 +39,7 @@ compile_commands.json
 /api_prep.md
 /git_summary.md
 /documents/
+# ---- Legacy root-level solver duplicates (superseded by core/, incompressible/,
+# ---- compressible/, dbns/; kept on disk for private reference, never tracked) ----
+/include/
+/src/

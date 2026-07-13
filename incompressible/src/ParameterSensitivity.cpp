@@ -55,16 +55,18 @@ void ParameterSensitivity::recompute(const std::vector<double>& theta11, FlowFie
     work = state_;
     sst.computeFields(mesh_, work.k, work.omega, work.U, nu_,
                       work.nuT, work.F1, work.F2, work.Pk, work.CDkw);
-    const double floor = 0.1 * nu_;
+    // startup-only nuT floor has released at the converged states this path
+    // evaluates, so the mirror applies only the non-negativity clamp and the
+    // sensitivity carries no floor dead-zone
     for (int ci = 0; ci < mesh_.nCells(); ++ci)
-        work.nuT[ci] = std::max(work.nuT[ci], floor);
+        work.nuT[ci] = std::max(work.nuT[ci], 0.0);
     if (cs) {
         ScalarField Smag = strainRateMagnitude(computeVelocityGradients(work.U));
         const auto& wd = mesh_.wallDistance();
         cs->resize(mesh_.nCells());
         for (int ci = 0; ci < mesh_.nCells(); ++ci)
             (*cs)[ci] = sst.closureSensitivity(work.k[ci], work.omega[ci], Smag[ci],
-                                               wd[ci], nu_, work.CDkw[ci], floor);
+                                               wd[ci], nu_, work.CDkw[ci], 0.0);
     }
 }
 
@@ -243,9 +245,19 @@ TangentGradientResult ParameterSensitivity::etaJacobianTangent(
     SSTModel sst = makeModel(theta11);
     SIMPLESolver solver(mesh_, sst, bcs_, nu_, settings_);
 
-    // RHS_j = −∂R/∂θ_j  (exact analytic; 11 × N)
+    // RHS_j = −∂R/∂θ_j of the PICARD-REDUCED model: the transpose-stress
+    // deferred correction is lagged in this rung in BOTH U (operator switch
+    // below) and theta (includeTransposeTheta = false), exactly like the
+    // pressure this rung freezes, so the reduced tangent differentiates a
+    // self-consistent model. The full transpose coupling belongs to the
+    // coupled tangent and warm-FD, where pressure removes the rigid-rotation
+    // near-null mode the completed stress operator otherwise carries; the
+    // residual bias of this reduction is characterised against warm-FD by the
+    // direction tests, as the frozen-pressure bias always was.
     std::vector<std::vector<double>> dRdTheta =
-        solver.assembleResidualSensitivity(state_, sst.coeffs);
+        solver.assembleResidualSensitivity(state_, sst.coeffs,
+                                           /*includeTransposeTheta=*/false);
+    solver.setFreezeTransposeStress(true);
 
     // ---- per-DOF column scaling σ_i = max(|x_i|, floor_block) ---------------------------
     // The tangent unknown [Ux|Uy|k|ω] spans orders of magnitude (ω∼1e6 near walls, ∼1 in
