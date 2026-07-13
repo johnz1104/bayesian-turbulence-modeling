@@ -67,6 +67,15 @@ set_tests_properties(periodic_channel PROPERTIES TIMEOUT 240 LABELS "unit;mesh;s
 add_executable(test_compressible_smoke cpp/test_compressible_smoke.cpp)
 target_link_libraries(test_compressible_smoke PRIVATE btm_compressible)
 add_test(NAME compressible_smoke COMMAND test_compressible_smoke)
+
+add_executable(test_compressible_observation_contract
+               cpp/test_compressible_observation_contract.cpp)
+target_link_libraries(test_compressible_observation_contract PRIVATE btm_compressible)
+add_test(NAME compressible_observation_contract
+         COMMAND test_compressible_observation_contract)
+set_tests_properties(compressible_observation_contract PROPERTIES
+    TIMEOUT 30
+    LABELS "unit;observation;compressible")
 set_tests_properties(compressible_smoke PROPERTIES
     TIMEOUT 180
     LABELS "smoke;compressible")
