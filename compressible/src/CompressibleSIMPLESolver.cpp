@@ -732,7 +732,6 @@ CompressibleConvergenceHistory CompressibleSIMPLESolver::solve(CompressibleFlowF
         // 6. Turbulence equations
         SolverResult resK = {}, resOm = {};
         if (turbUpdate) {
-            double nu0 = mu_[0] / std::max(f.rho[0], 1e-30);
             // pre-solve fields for the change-norm convergence metric (the
             // wall re-pinning below keeps the omega EQUATION imbalance
             // permanently nonzero, so field change is the honest signal,
