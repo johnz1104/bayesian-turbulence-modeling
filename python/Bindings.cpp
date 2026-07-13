@@ -1,6 +1,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 #include <pybind11/numpy.h>
+#include <stdexcept>
 #include "ForwardModel.hpp"
 #include "ParameterSensitivity.hpp"
 #include "CompressibleForwardModel.hpp"
@@ -806,9 +807,13 @@ PYBIND11_MODULE(rans_sst_py, m) {
 
     m.def("odd_even_energy_ratio",
           [](const Mesh& mesh, const std::vector<double>& values) {
+              if ((int)values.size() != mesh.nCells()) {
+                  throw std::invalid_argument(
+                      "odd_even_energy_ratio requires exactly one value per cell");
+              }
               ScalarField phi(mesh, "probe");
-              int n = std::min<int>(mesh.nCells(), (int)values.size());
-              for (int ci = 0; ci < n; ++ci) phi[ci] = values[ci];
+              for (int ci = 0; ci < mesh.nCells(); ++ci)
+                  phi[ci] = values[ci];
               return oddEvenEnergyRatio(mesh, phi);
           },
           py::arg("mesh"), py::arg("values"),

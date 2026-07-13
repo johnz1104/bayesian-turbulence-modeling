@@ -18,6 +18,7 @@ Writes rc_probe_results.json into the working directory.
 """
 import json
 import os
+import subprocess
 import sys
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -36,6 +37,9 @@ def probe(builder, cfg, **kw):
     theta = list(fwd["ps"].pack(fwd["rs"].SSTCoefficients()))
     result = fwd["fm"].evaluate(theta)
     status = str(result.status).split(".")[-1]
+    if status != "Converged":
+        raise RuntimeError(
+            f"Rhie-Chow adjudication requires convergence, got {status}")
     row = {"status": status, "iterations": int(result.simple_iters),
            "reattachment": float(result.predictions[0])}
     if fwd["fm"].has_last_fields():
@@ -48,7 +52,16 @@ def probe(builder, cfg, **kw):
 
 
 def main():
-    out = {}
+    revision = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=_ROOT, text=True).strip()
+    out = {
+        "metadata": {
+            "schema_version": 1,
+            "git_revision": revision,
+            "diagnostic": "solved-pressure odd-even energy ratio",
+            "policy": "off/on on BFS; outlet-free hills auto-gated in both rows",
+        }
+    }
     for name, builder, kw in (("bfs", BFSBaselineRANS.build_forward, {}),
                               ("hills", HillsBaselineRANS.build_forward,
                                {"case": "1p0"})):
@@ -66,7 +79,8 @@ def main():
             "iterations": on["iterations"] - off["iterations"],
         }
     path = os.path.join(os.getcwd(), "rc_probe_results.json")
-    json.dump(out, open(path, "w"), indent=1)
+    with open(path, "w") as fh:
+        json.dump(out, fh, indent=1)
     print("wrote", path, flush=True)
 
 

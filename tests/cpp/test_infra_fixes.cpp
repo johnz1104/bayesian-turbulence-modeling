@@ -105,8 +105,8 @@ int main() {
         }
         double rSmooth = oddEvenEnergyRatio(mesh, smooth);
         double rCheck  = oddEvenEnergyRatio(mesh, checker);
-        REQUIRE(rSmooth < 0.2, "smooth field must score low");
-        REQUIRE(rCheck > 1.0, "checkerboard must score order one");
+        REQUIRE(rSmooth < 0.05, "smooth field must score low");
+        REQUIRE(rCheck > 0.99, "checkerboard must project almost exactly");
         REQUIRE(rCheck > 20.0 * rSmooth, "diagnostic must discriminate");
     }
 
@@ -120,7 +120,7 @@ int main() {
             FlowBoundaryConditions::channelDefaults(mesh, 1.0, kIn, omIn);
         SSTModel sst{SSTCoefficients{}};
 
-        struct RcResult { double ub; double chk; };
+        struct RcResult { double ub; double chk; double pSpan; };
         auto solveWith = [&](bool rcAll) -> RcResult {
             SolverSettings s;
             s.maxIterations = 20000;
@@ -141,10 +141,19 @@ int main() {
             }
             // the decisive measurement: odd-even energy of the SOLVED
             // pressure field itself, not of a synthetic checkerboard
-            return {ub / vol, oddEvenEnergyRatio(mesh, f.p)};
+            double pMin = f.p[0], pMax = f.p[0];
+            for (int ci = 1; ci < mesh.nCells(); ++ci) {
+                pMin = std::min(pMin, f.p[ci]);
+                pMax = std::max(pMax, f.p[ci]);
+            }
+            return {ub / vol, oddEvenEnergyRatio(mesh, f.p), pMax - pMin};
         };
         RcResult off = solveWith(false);
         RcResult on  = solveWith(true);
+        std::printf("  Rhie-Chow bounded probe: off(chk=%.6g, Ub=%.6g, "
+                    "dp=%.6g) on(chk=%.6g, Ub=%.6g, dp=%.6g)\n",
+                    off.chk, off.ub, off.pSpan,
+                    on.chk, on.ub, on.pSpan);
         // the default (gated-off) bounded solve must itself be checkerboard
         // free at the diagnostic level: this is the empirical evidence the
         // gate adjudication rests on, asserted rather than assumed
