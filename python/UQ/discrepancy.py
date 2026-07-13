@@ -139,9 +139,13 @@ def basis_diagnostics(T_basis, db=None, ridge=1e-12, rank_tol=1e-10):
     ev = np.linalg.eigvalsh(G)                          # ascending, >= 0
     lead = np.maximum(ev[:, -1], 1e-300)
     rank = np.sum(ev > rank_tol * lead[:, None], axis=1)
-    # condition over the numerically nonzero spectrum (the achievable subspace)
+    # condition over the numerically nonzero spectrum (the achievable
+    # subspace); a rank-zero basis has no spectrum to condition, reported as
+    # infinite, never as the misleading 1.0 the naive 0/0 would give
     ev_floor = np.where(ev > rank_tol * lead[:, None], ev, np.inf)
-    cond = lead / np.minimum(np.min(ev_floor, axis=1), lead)
+    cond = np.where(rank > 0,
+                    lead / np.minimum(np.min(ev_floor, axis=1), lead),
+                    np.inf)
     out = {"rank": rank, "cond": cond, "rel_residual": None}
     if db is not None:
         db = np.asarray(db, float)

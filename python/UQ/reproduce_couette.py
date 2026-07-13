@@ -43,6 +43,12 @@ from UQ.datasets.couette_crossflow import CrossFlowStudy
 from UQ.datasets import crossflow_companions as companions
 from UQ import cache_fingerprint as cfp
 
+# Physics schema tokens (cache identity; bump exactly when the producing
+# model changes, see UQ.cache_fingerprint): v2 marks the post-audit corrected
+# incompressible solver for both flow types.
+PHYSICS_CHANNEL = "channel-rans-v2"
+PHYSICS_COUETTE = "couette-rans-v2"
+
 CONFIG = {
     "channel_cases": [550, 1000, 2000],
     "couette_cases": [171, 260, 507, 986],
@@ -80,7 +86,8 @@ def stage_channel(regen):
                                n_stations=CONFIG["n_stations"],
                                cfg=CONFIG["channel_cfg"], sigma_floor=0.005)
         path = os.path.join(OUT, f"channel_ensemble_{n}.npz")
-        ident = {"kind": "couette_study_channel_ensemble", "case": n,
+        ident = {"kind": "couette_study_channel_ensemble",
+                 "physics": PHYSICS_CHANNEL, "case": n,
                  "n_ensemble": CONFIG["n_ensemble"], "seed": CONFIG["seed"],
                  "param_set": CONFIG["param_set"],
                  "n_stations": CONFIG["n_stations"],
@@ -119,7 +126,7 @@ def stage_couette(regen):
     cals = {}
     nus = {}
     nu_path = os.path.join(OUT, "couette_matched_nu.json")
-    nu_ident = {"kind": "couette_matched_nu",
+    nu_ident = {"kind": "couette_matched_nu", "physics": PHYSICS_COUETTE,
                 "cases": CONFIG["couette_cases"], "cfg": CONFIG["couette_cfg"]}
     if os.path.exists(nu_path) and not regen:
         raw = json.load(open(nu_path))
@@ -144,7 +151,8 @@ def stage_couette(regen):
                                n_stations=CONFIG["n_stations"],
                                cfg=CONFIG["couette_cfg"])
         path = os.path.join(OUT, f"couette_ensemble_{n}.npz")
-        ident = {"kind": "couette_ensemble", "case": n,
+        ident = {"kind": "couette_ensemble", "physics": PHYSICS_COUETTE,
+                 "case": n,
                  "n_ensemble": CONFIG["n_ensemble"], "seed": CONFIG["seed"],
                  "param_set": CONFIG["param_set"],
                  "n_stations": CONFIG["n_stations"],

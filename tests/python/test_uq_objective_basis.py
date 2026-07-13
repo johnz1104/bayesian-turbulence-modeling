@@ -116,3 +116,11 @@ def test_basis_diagnostics_rank_and_residual():
     db_out[:, 0, 2] = db_out[:, 2, 0] = 1.0
     diag_out = dc.basis_diagnostics(T, db_out)
     assert np.all(diag_out["rel_residual"] > 0.5)
+
+
+def test_basis_diagnostics_rank_zero_conditioning_is_infinite():
+    # a zero basis has no achievable subspace; conditioning must report inf
+    T = np.zeros((4, 10, 3, 3))
+    diag = dc.basis_diagnostics(T)
+    assert np.all(diag["rank"] == 0)
+    assert np.all(np.isinf(diag["cond"]))

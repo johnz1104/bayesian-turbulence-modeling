@@ -4,6 +4,8 @@ Priors over SST closure coefficients.
 Extracted from bayesian_inference.py (2026-06-12 modularization).
 """
 
+from collections.abc import Mapping
+
 import numpy as np
 
 from solver_bindings import _rs
@@ -73,7 +75,7 @@ def make_prior_from_param_set(param_set, relative_std=0.15):
 
     Returns: Prior
     """
-    if isinstance(param_set, dict):
+    if isinstance(param_set, Mapping):
         # the designed pure-Python path, selected by positive type check so it
         # is structurally incapable of touching the compiled binding (pinned
         # by test_priors_dict_path_needs_no_binding)
@@ -81,11 +83,19 @@ def make_prior_from_param_set(param_set, relative_std=0.15):
         lo = param_set['lower']
         hi = param_set['upper']
     else:
-        # C++ pybind11 InferenceParameterSet. Note the dependency direction:
-        # _rs() imports the compiled binding LAZILY, only on this branch, and
-        # reaching this branch presupposes the caller already holds a compiled
-        # object (so the binding demonstrably imports in this interpreter).
-        defaults = param_set.pack(_rs().SSTCoefficients())
+        # C++ pybind11 InferenceParameterSet, the only other supported type.
+        # Note the dependency direction: _rs() imports the compiled binding
+        # LAZILY, only on this branch, and reaching this branch presupposes
+        # the caller already holds a compiled object (so the binding
+        # demonstrably imports in this interpreter). Anything else is a
+        # contract violation reported as such, not duck-typed.
+        rs = _rs()
+        if not isinstance(param_set, rs.InferenceParameterSet):
+            raise TypeError(
+                "param_set must be a Mapping with 'defaults'/'lower'/'upper' "
+                "or a rans_sst_py.InferenceParameterSet, got "
+                f"{type(param_set).__name__}")
+        defaults = param_set.pack(rs.SSTCoefficients())
         lo = param_set.lower_bounds()
         hi = param_set.upper_bounds()
 

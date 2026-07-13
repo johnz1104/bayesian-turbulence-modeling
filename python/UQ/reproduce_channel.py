@@ -41,6 +41,13 @@ from UQ.datasets.channel_baseline import ChannelBaselineRANS
 from UQ.datasets import channel_discrepancy as cdisc
 from UQ.datasets.channel_calibration import ChannelCalibration, CrossReStudy, PARAM_SETS
 from UQ import cache_fingerprint as cfp
+
+# Physics schema token: part of every cache identity in this script. Bump it
+# exactly when the producing model changes (solver physics, closure form,
+# observation definition), never for refactors; v2 marks the post-audit
+# corrected solver (SST-2003 limited production, startup-only floor,
+# completed Boussinesq stress, honest convergence accounting).
+PHYSICS = "channel-rans-v2"
 from UQ import evaluation as ev
 
 PARAM_SETS_AVAILABLE = tuple(PARAM_SETS)
@@ -73,8 +80,8 @@ def ensemble_path(n, param_set):
 
 def stage_baselines(regen):
     path = os.path.join(OUT, "baselines.npz")
-    ident = {"kind": "channel_baselines", "cases": CONFIG["cases"],
-             "baseline_cfg": CONFIG["baseline_cfg"]}
+    ident = {"kind": "channel_baselines", "physics": PHYSICS,
+             "cases": CONFIG["cases"], "baseline_cfg": CONFIG["baseline_cfg"]}
     if os.path.exists(path) and not regen:
         d = dict(np.load(path))
         status, reason = cfp.check(d, ident)
@@ -138,7 +145,8 @@ def stage_ensembles(regen, quick):
         # the scientifically relevant cache identity: a quick run (smaller
         # ensemble) or any config change fingerprints differently, so a full
         # run can never silently reuse a quick cache under the shared filename
-        ident = {"kind": "channel_ensemble", "case": n, "n_ensemble": n_ens,
+        ident = {"kind": "channel_ensemble", "physics": PHYSICS, "case": n,
+                 "n_ensemble": n_ens,
                  "seed": CONFIG["seed"], "param_set": CONFIG["param_set"],
                  "n_stations": CONFIG["n_stations"], "cfg": CONFIG["cfg"],
                  "sigma_floor": CONFIG["sigma_floor"]}

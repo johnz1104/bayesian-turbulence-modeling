@@ -48,6 +48,12 @@ from UQ.datasets.crossmach_study import CrossMachStudy
 from UQ.datasets.compressible_baseline import FlatPlateFrozenSST
 from UQ import cache_fingerprint as cfp
 
+# Physics schema token (cache identity; bump exactly when the producing model
+# changes): the producing model here is the python 1-D compressible profile
+# baseline, which the 2-D solver audit does not touch, so v1 remains valid
+# for pre-audit ensembles once stamped.
+PHYSICS = "compressible-profile-v1"
+
 SEED = 0
 LEVEL = 0.9
 
@@ -82,7 +88,8 @@ def build_calibrations(results_dir, n_ensemble, rel, regen, quick):
         cal = CompressibleCalibration(dns, rel_sigma=rel)
         cache = os.path.join(results_dir,
                              f"ensemble_{tag}_rel{rel:g}.npz")
-        ident = {"kind": "compressible_ensemble", "case": tag,
+        ident = {"kind": "compressible_ensemble", "physics": PHYSICS,
+                 "case": tag,
                  "n_ensemble": n_ensemble, "seed": SEED + j, "rel": rel}
         loaded = False
         if os.path.isfile(cache) and not regen:

@@ -23,13 +23,17 @@ the default is refuse-and-regenerate. Blind reuse of unstamped caches is
 exactly the failure mode fingerprinting exists to close, so acceptance has
 to be a deliberate, per-run decision by whoever knows the cache's provenance.
 
-Code provenance: attach() also records the git revision that wrote the cache
-(code_rev()). The revision is PROVENANCE, not identity: it is surfaced in
-messages so a reader can decide whether intervening code changes invalidate
-the physics, but it does not enter the fingerprint hash, because any commit
-(including one that never touches the solver) would otherwise invalidate
-every ensemble. Regeneration decisions stay config-driven plus the explicit
---regen flags of the reproduce scripts.
+Code provenance versus physics identity: attach() also records the git
+revision that wrote the cache (code_rev()). The revision is PROVENANCE, not
+identity (any commit, including one that never touches the solver, would
+otherwise invalidate every ensemble). What IS identity is the producing
+model: every cache configuration carries a "physics" schema token (for
+example "channel-rans-v2") that the owning reproduce script bumps exactly
+when the physics of the producing model changes, so caches built by older
+solver physics can never be reused automatically on configuration match
+alone. Regeneration decisions are therefore config-plus-physics driven, with
+the git revision surfaced for the reader and the --regen flags as the manual
+override.
 """
 import hashlib
 import json
