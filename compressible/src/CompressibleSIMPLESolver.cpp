@@ -727,7 +727,12 @@ CompressibleConvergenceHistory CompressibleSIMPLESolver::solve(CompressibleFlowF
             resOm = tSolver_->solve(omSys, omVec, settings_.innerIterations, settings_.innerTolerance);
             for (int ci = 0; ci < mesh_.nCells(); ++ci) f.omega[ci] = omVec[ci];
             f.omega.clamp(settings_.omegaMin, 1e15);
-            applyOmegaBC(f.omega, mesh_, fbc_tmp, nu0, sst_.coeffs.beta1);
+            // boundary-face omega with the LOCAL owner-cell viscosity, not
+            // the inlet value (review fix; matches the wall-anchor treatment)
+            ScalarField nuLocalBC(mesh_, "nuLocalBC");
+            for (int ci = 0; ci < mesh_.nCells(); ++ci)
+                nuLocalBC[ci] = mu_[ci] / std::max(f.rho[ci], 1e-30);
+            applyOmegaBC(f.omega, mesh_, fbc_tmp, nuLocalBC, sst_.coeffs.beta1);
 
             // Re-pin near-wall omega.  PHASE 7 — when settings_.useWallFunctions
             // is on, blend the resolved-LES form with the log-law form so the
@@ -788,14 +793,22 @@ CompressibleConvergenceHistory CompressibleSIMPLESolver::solve(CompressibleFlowF
 
 
 
-        // Check for divergence
-        bool diverged = !std::isfinite(entry.Ux) || !std::isfinite(entry.p)
-                     || !std::isfinite(entry.k)  || !std::isfinite(entry.omega);
+        // Check for divergence: EVERY recorded residual/norm must be finite
+        // (a NaN reaching a chained std::max can otherwise be masked by
+        // operand ordering), and the thermodynamic state must stay physical
+        bool diverged = !std::isfinite(entry.Ux) || !std::isfinite(entry.Uy)
+                     || !std::isfinite(entry.p)  || !std::isfinite(entry.T)
+                     || !std::isfinite(entry.k)  || !std::isfinite(entry.omega)
+                     || !std::isfinite(uChange)  || !std::isfinite(tChange);
         if (!diverged) {
-            double pMax = 0;
-            for (int ci = 0; ci < mesh_.nCells(); ++ci)
-                pMax = std::max(pMax, std::abs(f.p[ci]));
-            diverged = (pMax > settings_.divergenceLimit);
+            double pMax = 0.0, rhoMin = 1e300, pMin = 1e300;
+            for (int ci = 0; ci < mesh_.nCells(); ++ci) {
+                pMax   = std::max(pMax, std::abs(f.p[ci]));
+                pMin   = std::min(pMin, f.p[ci]);
+                rhoMin = std::min(rhoMin, f.rho[ci]);
+            }
+            diverged = (pMax > settings_.divergenceLimit)
+                    || (pMin <= 0.0) || (rhoMin <= 0.0);
         }
         if (diverged) {
             hist.diverged  = true;
@@ -823,11 +836,19 @@ CompressibleConvergenceHistory CompressibleSIMPLESolver::solve(CompressibleFlowF
         // convergence is withheld until the startup nuT floor has released
         // so no run freezes a floored near-wall state.
         double tol = settings_.convergenceTol;
-        double maxRes = std::max({entry.Ux, entry.p, uChange, tChange});
+        double maxRes = std::max({entry.Ux, entry.Uy, entry.p,
+                                  uChange, tChange});
         if (turbActive)
             maxRes = std::max({maxRes, lastKChange, lastOmChange});
+        // convergence requires that scheduled turbulence has actually run and
+        // its startup floor released: without the turbScheduled gate a solve
+        // could declare convergence BEFORE its first turbulence update, on a
+        // laminar transient the criterion never sees
+        const bool turbScheduled =
+            settings_.turbStartIter < settings_.maxIterations;
         bool converged = (maxRes < tol) && (iter > 0)
-                         && (!turbActive || f.turbEstablished);
+                         && (!turbScheduled
+                             || (turbActive && f.turbEstablished));
         if (converged) {
             hist.converged = true;
             hist.finalIter = iter + 1;

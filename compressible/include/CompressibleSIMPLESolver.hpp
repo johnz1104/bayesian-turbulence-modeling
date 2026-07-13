@@ -18,7 +18,7 @@
 //   2. Update dynamic viscosity via Sutherland's law
 //   3. Update SST turbulence model (nuT, F1, F2, Pk)
 //   4. Solve momentum equations for U* (upwind convection, central diffusion,
-//      explicit Favre-stress completion; density-weighted face fluxes)
+//      density-weighted face fluxes)
 //   5. Solve the pressure-correction equation with density-weighted
 //      coefficients. There is NO Rhie-Chow face-flux treatment on bounded
 //      compressible meshes and NO rho' = p'/(RT) convective compressibility
@@ -31,10 +31,11 @@
 //   8. Update T from energy, update ρ from EOS
 //   9. Solve turbulence (k, ω) with density-scaled production
 //
-// Validated regime: Ma <= 0.5 (the Ma 0.1 channel carries the committed
-// regression; the omissions above are second order in Mach). Higher Mach,
-// shocks, and genuine compressible energy coupling belong to the
-// density-based DBNS solver, not to extensions of this one.
+// Evidence and applicability: the COMMITTED validation is the Ma 0.1 channel
+// regression; Ma ~0.5 is the INTENDED applicability ceiling implied by the
+// second-order-in-Mach omissions above, not yet demonstrated by a Mach
+// ladder. Higher Mach, shocks, and genuine compressible energy coupling
+// belong to the density-based DBNS solver, not to extensions of this one.
 class CompressibleSIMPLESolver {
 public:
     CompressibleSIMPLESolver(const Mesh& mesh,

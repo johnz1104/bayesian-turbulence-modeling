@@ -436,7 +436,8 @@ PYBIND11_MODULE(rans_sst_py, m) {
         .def(py::init<>())
         .def("add_drag", &ObservationOperator::addDrag,
              py::arg("wall_patch"), py::arg("cd_obs"), py::arg("sigma"),
-             py::arg("ref_area"), py::arg("ref_vel"), py::arg("sigma_model") = 0.0)
+             py::arg("ref_area"), py::arg("ref_vel"), py::arg("sigma_model") = 0.0,
+             py::arg("ref_pressure") = 0.0, py::arg("ref_density") = 1.0)
         .def("add_skin_friction", &ObservationOperator::addSkinFriction,
              py::arg("wall_patch"), py::arg("location"), py::arg("cf_obs"),
              py::arg("sigma"), py::arg("ref_vel"), py::arg("sigma_model") = 0.0)
