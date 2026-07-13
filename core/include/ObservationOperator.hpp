@@ -49,8 +49,7 @@ public:
 
     // add observable types
     void addDrag(const std::string& wallPatch, double Cd_obs, double sigma, 
-                 double refArea, double refVel, double sigma_model = 0.0,
-                 double refPressure = 0.0, double refDensity = 1.0);
+                 double refArea, double refVel, double sigma_model = 0.0);
     void addPressureTap(const Vec3& loc, double Cp_obs, double sigma, double refVel, double sigma_model = 0.0,
                         double refPressure = 0.0, double refDensity = 1.0);
     void addVelocityProfile(const Vec3& loc, int comp, double Uobs, double sigma, double sigma_model = 0.0);
@@ -90,16 +89,13 @@ private:
 
 inline void ObservationOperator::addDrag(
         const std::string& wallPatch, double Cd_obs, double sigma,
-        double refArea, double refVel, double sigma_model,
-        double refPressure, double refDensity) {
+        double refArea, double refVel, double sigma_model) {
     Observable obs;
     obs.type = ObsType::Drag;
     obs.meas = {Cd_obs, sigma, sigma_model};
     obs.patchName = wallPatch;
     obs.referenceArea = refArea;
     obs.refVelocity = refVel;
-    obs.refPressure = refPressure;
-    obs.refDensity  = refDensity;
     observables_.push_back(obs);
 }
 
@@ -202,16 +198,11 @@ inline double ObservationOperator::computeDrag(
         // UNITS CONTRACT: this generic adapter is valid on KINEMATIC-pressure
         // fields only (the incompressible convention, p stored as p/rho), where
         // the p*n*A term and the nu*dU/dn viscous term are commensurate
-        // (both m^2/s^2 per unit density). A compressible field stores
-        // dimensional pressure while this viscous term stays kinematic, and
-        // the FlowFields view carries no density to form mu*dU/dn, so drag
-        // through this adapter on a compressible field is UNSUPPORTED (not
-        // wired anywhere; the DBNS observation path owns compressible wall
-        // observables). The reference pressure is subtracted because a WALL
-        // PATCH is not a closed surface: a constant offset would otherwise
-        // dominate the drag integral (legacy incompressible taps default
-        // refPressure 0 and are unchanged).
-        double pf = fields.p[ow] - obs.refPressure;
+        // (both m^2/s^2 per unit density). CompressibleForwardModel rejects
+        // Drag observables at construction because its dimensional pressure
+        // cannot be combined with this kinematic viscous term; DBNS owns the
+        // compressible wall-observation path.
+        double pf = fields.p[ow];
         force += pf * face.normal.x * Sf;
 
         // viscous contribution: MOLECULAR wall shear tau_w = nu * dU/dn.
@@ -227,7 +218,7 @@ inline double ObservationOperator::computeDrag(
         force += tau_x * Sf;
     }
 
-    double dynPressure = 0.5 * obs.refDensity * obs.refVelocity * obs.refVelocity;
+    double dynPressure = 0.5 * obs.refVelocity * obs.refVelocity;
     return force / (dynPressure * obs.referenceArea);
 }
 

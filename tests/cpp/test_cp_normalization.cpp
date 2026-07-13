@@ -69,30 +69,6 @@ int main() {
                 "unreferenced absolute-pressure Cp is offset-dominated (the audit defect)");
     }
 
-    // 4. drag on a wall patch shares the reference treatment: on an
-    //    absolute-pressure field an unreferenced drag is offset-dominated
-    //    (a wall patch is not a closed surface), the referenced one is not
-    {
-        const double p_ref = 101325.0, rho_ref = 1.177, Uref = 34.7;
-        f.p.setUniform(p_ref);            // uniform absolute pressure: zero
-        for (int ci = 0; ci < mesh.nCells(); ++ci)   // physical pressure drag
-            f.U[ci] = Vec3(0.0, 0.0, 0.0);
-        for (int fi = mesh.nInternalFaces(); fi < mesh.nFaces(); ++fi)
-            f.U.bface(fi) = Vec3(0.0, 0.0, 0.0);
-
-        ObservationOperator good;
-        good.addDrag("bottom", 0.0, 1.0, 1.0, Uref, 0.0, p_ref, rho_ref);
-        double cd = good.evaluate(mesh, f, 1e-3)[0];
-        REQUIRE(std::fabs(cd) < 1e-12,
-                "referenced drag on a uniform absolute-pressure field must vanish");
-
-        ObservationOperator bad;
-        bad.addDrag("bottom", 0.0, 1.0, 1.0, Uref);
-        double cd_bad = bad.evaluate(mesh, f, 1e-3)[0];
-        REQUIRE(std::fabs(cd_bad) > 1.0,
-                "unreferenced absolute-pressure drag is offset-dominated (the defect)");
-    }
-
     std::printf("test_cp_normalization: all checks passed\n");
     return 0;
 }
