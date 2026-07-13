@@ -219,3 +219,17 @@ standing correction layer; sharpness is not, at this calibration-data
 sparsity. The informative repair is a better-dispersed or better-directed
 model-form rather than a wider multiplier, which is what the dense-field
 second geometry tests.
+
+
+## Post-audit note (2026-07-12)
+
+See the dated post-audit revision at the end of hills_crossgeom_finding.md; it
+applies to this memo's score tables and eigenspace naming too. For this
+geometry specifically: the committed member records are CLEAN of the
+stale-field defect (the max-iteration failure mode evaluates its own fields;
+the bit-identical duplication was a hills DivergenceDetected artifact), and
+the fair-score recomputation (fair_scores_recompute.json; the biased columns
+reproduce the committed values exactly) moves the moderated three-corner
+family from mid-pack to best-scoring on reattachment CRPS (0.380 biased to
+0.092 fair at delta 0.5), strengthening the committed statement that the flow
+does not beat the corner-family envelope.
