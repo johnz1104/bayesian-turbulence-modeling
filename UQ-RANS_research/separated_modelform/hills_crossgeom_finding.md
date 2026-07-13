@@ -296,25 +296,33 @@ injection is magnitude-capped by the running k) is unchanged by every item below
    the defect is fixed at the source (fields cleared on divergence, extraction
    status-gated, regression-tested), and any regenerated ensemble uses the fixed path.
 
-2. Superseded score table: fair estimators. The committed CRPS/energy values used the
-   biased (M^2, diagonal-included) ensemble estimators under a "fair" label; the fair
-   M(M-1) estimators (Ferro 2014) are now the library default and the mixed-ensemble-size
-   comparisons are recomputed from the committed member records
-   (fair_scores_recompute.json; the biased columns reproduce the committed values to the
-   last digit, validating the read). The material change is the small corner families,
-   which the biased estimator penalized up to fourfold:
+2. Score conventions stated precisely, and the comparison recomputed under both. The
+   committed CRPS/energy values were computed with the M^2 (diagonal-included) plug-in
+   estimator under a "fair" docstring. The correction splits by what the M members ARE.
+   For the flow and Gaussian ensembles the members are an iid sample of an underlying
+   predictive, so the fair M(M-1) estimator (Ferro 2014) is the right convention and is
+   now the library default; the recomputation from the committed member records moves
+   those scores by under three percent (BFS reattachment CRPS, truth 6.28: flow 0.651 to
+   0.634 at M = 23, Gaussian 0.318 to 0.306 at M = 24; hills: flow 1.808 to 1.795,
+   Gaussian 1.271 to 1.253) and no conclusion moves. For the eigenspace corner families
+   the members are not a sample of anything: the family IS the forecast, a finite
+   discrete distribution, and for a discrete forecast the M^2 plug-in is the EXACT CRPS,
+   not a biased estimate. The committed corner values therefore stand as exact
+   discrete-forecast scores (BFS delta 1.0: 0.839; delta 0.5: 0.380; hills delta 0.5:
+   1.265). The "fair" numbers for the corner families (0.671, 0.092, 0.619) answer a
+   hypothetical (the CRPS of an imagined predictive the corners sample) and are kept in
+   fair_scores_recompute.json as a sensitivity column only; the biased columns reproduce
+   the committed values to the last digit, validating the read.
 
-   BFS reattachment CRPS (truth 6.28): flow 0.651 -> 0.634 fair (M = 23); Gaussian
-   0.318 -> 0.306 (M = 24); corner family delta 1.0: 0.839 -> 0.671 (M = 2); delta 0.5:
-   0.380 -> 0.092 (M = 3). Hills reattachment CRPS: flow 1.808 -> 1.795; Gaussian
-   1.271 -> 1.253; corner family delta 0.5: 1.265 -> 0.619 (M = 2).
-
-   Reading: under fair scoring the MODERATED corner family is the best-scoring method on
-   reattachment CRPS on both geometries. This strengthens, not weakens, the committed
-   comparative statement (the flow does not beat the corner-family envelope), with the
-   standing caveats that a two-to-three-member fair CRPS is unbiased but high-variance,
-   and that scoring a deterministic envelope as a uniform ensemble remains the charitable
-   convention pre-registered in METHODS_OPERATIONALIZATION.md.
+   The primary pre-registered reading for the deterministic families remains envelope
+   containment (METHODS_OPERATIONALIZATION.md section 9), with CRPS on them secondary.
+   Under the corrected conventions the committed comparative statement is unchanged: the
+   flow does not beat the moderated corner family on reattachment CRPS on either
+   geometry (BFS 0.634 fair vs 0.380 exact; hills 1.795 fair vs 1.265 exact). One
+   ranking is convention-dependent and is reported as such: on the hills the Gaussian
+   fair score (1.253) and the corner family's exact score (1.265) are practically tied,
+   so "which non-flow method scores best there" has no convention-robust answer; on the
+   BFS the corner family leads under either convention.
 
 3. Precise naming of the eigenspace baseline. What this study ran is the THREE-CORNER
    EIGENVALUE-ONLY perturbation of Emory, Larsson and Iaccarino (2013): eigenvalues moved
@@ -337,6 +345,7 @@ injection is magnitude-capped by the running k) is unchanged by every item below
    the zero-correction recovery claimed in the memo holds; the audit's contrary reading
    is incorrect), so the magnitude-cap diagnosis stands as written. A BFS probe on the
    corrected solver (baseline + flow/Gaussian injection ensembles + three-corner AND
-   five-state families, fair scoring, status-gated members) re-tests the verdict:
+   five-state families, fair scoring for the sampled ensembles and exact discrete-
+   forecast scoring for the bounding families, status-gated members) re-tests the verdict:
    [pending probe results; hills regeneration follows only if the probe moves a
    conclusion rather than a number].

@@ -113,10 +113,13 @@ def _hills(out):
 
 
 def main():
-    out = {"note": ("Post-audit fair-score recomputation from committed member "
-                    "records; biased columns reproduce the committed values, "
-                    "fair columns are the corrected mixed-ensemble-size "
-                    "comparison (Ferro 2014).")}
+    out = {"note": ("Post-audit score-convention recomputation from committed "
+                    "member records. Biased columns reproduce the committed "
+                    "values; for the sampled flow/Gaussian ensembles the fair "
+                    "column (Ferro 2014) is the corrected comparison, while "
+                    "for the deterministic eigenspace families the biased "
+                    "column IS the exact CRPS of the finite discrete forecast "
+                    "and the fair column is a sensitivity reading only.")}
     _bfs(out)
     _hills(out)
     path = os.path.join(OUT_DIR, "fair_scores_recompute.json")
