@@ -550,7 +550,12 @@ void DBNSSolver::addTurbulenceSources() {
 
         double Dk = bStar * rho * k * w * comprFactor;          // k dissipation
         double sourceK = Pk - Dk;
-        double Pw = alpha * rho * S2;                           // omega production
+        // omega production: alpha*rho*Pk_limited/muT = alpha*rho*min(S2, 10 bStar rho k w / muT)
+        // (SST-2003 corrected form; alpha*rho*S2 is the paper's documented misprint, see the
+        // NASA TMR SST page). Singular-safe: as muT -> 0 the min selects S2, the correct
+        // limit; min(S2, lim) <= S2 so the corrected term is bounded by the old one.
+        double PwSpec = std::min(S2, 10.0 * bStar * rho * k * w / std::max(muT, 1e-30));
+        double Pw = alpha * rho * PwSpec;                       // omega production
         double Dw = beta * rho * w * w;
         double crossW = 2.0 * (1.0 - F1) * rho * sstCoeffs_.sigma_w2 / w * gkgw;
         double sourceW = Pw - Dw + crossW;
