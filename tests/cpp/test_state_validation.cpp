@@ -26,8 +26,10 @@ static void REQUIRE(bool ok, const char* msg) {
 int main() {
     const double NaN = std::numeric_limits<double>::quiet_NaN();
 
-    // 1. the masking defect itself: a max-reduction over a NaN-corrupted
-    //    vector reports a finite aggregate
+    // 1. The masking defect is operand-order dependent. A max-reduction over
+    //    a NaN-corrupted vector supplies the running finite aggregate first
+    //    and therefore reports a finite result. Conversely, the temperature
+    //    clamp supplies NaN first and preserves it for stateIsValid.
     {
         double vals[4] = {1.0, NaN, 2.0, 0.5};
         double agg = 0.0;
@@ -35,6 +37,8 @@ int main() {
         REQUIRE(std::isfinite(agg),
                 "premise: max-reduction must mask the NaN (else the old check "
                 "was sufficient and this test is vacuous)");
+        REQUIRE(std::isnan(std::max(NaN, 1.0)),
+                "NaN as the first std::max operand must be preserved");
     }
 
     IdealGasEOS eos;
