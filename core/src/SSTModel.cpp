@@ -83,8 +83,9 @@ double SSTModel::production(double nuT, double S, double k, double omega) const 
 // returns 0, the k-equation-consistent choice (no k production means no omega
 // production), erring on the reducing side; solvers seed k > 0 at initialization so the
 // state does not persist. Because min(S^2, lim) <= S^2 pointwise, this term is bounded
-// above by the S^2 misprint, so it can only REDUCE omega production (no positive
-// feedback is possible); the two coincide wherever the k-production limiter is inactive
+// above by the S^2 misprint: the corrected production can never exceed the former term
+// at the same state (a statement about this term, not about every coupled path in the
+// model); the two coincide wherever the k-production limiter is inactive
 // (the equilibrium log layer of attached flows; limiter-ACTIVE states, including
 // near-wall and startup states of attached runs, shift toward less production).
 double SSTModel::productionOmega(double nuT, double S, double k, double omega) const {
