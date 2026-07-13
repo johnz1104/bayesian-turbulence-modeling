@@ -129,16 +129,18 @@ int main() {
         REQUIRE(maxDiff < 1e-6 * std::max(uBulk, 1e-12),
                 "solution is not streamwise-invariant");
 
-        // global momentum balance: f * V_total = integral of wall shear, with
-        // the DISCRETE wall stress the solver imposes, (nu + nuT_owner) U/delta
-        // (the eddy viscosity enters the wall diffusion, including its floor)
+        // Global momentum balance: f * V_total = integral of wall shear, with
+        // the DISCRETE wall stress the solver imposes. At a wall-resolved face
+        // nuT is zero, so the integrated face coefficient is molecular nu;
+        // owner-cell nuT belongs to the interior and must not be extrapolated
+        // across the wall half-cell.
         double drive = fb * uBulkDen;
         double shear = 0.0;
         for (int pi = 0; pi < mesh.nPatches(); ++pi) {
             for (FaceID fi : mesh.patch(pi).faces) {
                 const Face& fc = mesh.face(fi);
                 double du = fld.U[fc.owner].x;   // wall value is zero
-                shear += (nu + fld.nuT[fc.owner]) * du / fc.delta * fc.area;
+                shear += nu * du / fc.delta * fc.area;
             }
         }
         REQUIRE(std::fabs(shear - drive) / drive < 0.05,

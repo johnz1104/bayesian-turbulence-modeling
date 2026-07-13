@@ -29,7 +29,9 @@
 //      ∇·(ρ U Cp T) = ∇·(λ_eff ∇T): pressure work, kinetic energy, and
 //      viscous/turbulent dissipation are NOT modeled.
 //   8. Update T from energy, update ρ from EOS
-//   9. Solve turbulence (k, ω) with density-scaled production
+//   9. Solve turbulence (k, ω) with density-scaled production; because k is
+//      part of the two-pressure EOS, refresh rho and the mechanical outlet
+//      pressure after a k update before convergence can be declared.
 //
 // Evidence and applicability: the COMMITTED validation is the Ma 0.1 channel
 // regression; Ma ~0.5 is the INTENDED applicability ceiling implied by the
@@ -48,7 +50,8 @@ public:
 
     // Direct per-cell state validation: every component of every solved field
     // (U including the spanwise component, p, T, rho, k, omega) is checked
-    // with std::isfinite, plus positivity of T, rho and p. Aggregate max/min
+    // with std::isfinite, plus positivity of T, rho, mechanical p and the
+    // recovered thermodynamic p. Aggregate max/min
     // reductions can never prove this: std::max(a, NaN) evaluates the
     // comparison as false and KEEPS a, so a NaN entering a chained reduction
     // is silently dropped. Public so the divergence detection is unit-testable

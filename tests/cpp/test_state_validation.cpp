@@ -94,6 +94,13 @@ int main() {
     {
         CompressibleFlowFields g = f; g.p[probe] = 0.0;
         REQUIRE(!solver.stateIsValid(g), "p <= 0 must invalidate"); }
+    {
+        CompressibleFlowFields g = f;
+        g.p[probe] = 1.0;
+        g.rho[probe] = 1.0;
+        g.k[probe] = 3.0;
+        REQUIRE(!solver.stateIsValid(g),
+                "positive mechanical p with negative thermodynamic p must invalidate"); }
 
     // 4. an infinity is as invalid as a NaN
     {

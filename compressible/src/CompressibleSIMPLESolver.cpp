@@ -99,16 +99,19 @@ bool CompressibleSIMPLESolver::stateIsValid(const CompressibleFlowFields& f) con
     // explicit per-cell sweep; see the header note on why max/min reductions
     // cannot substitute (they drop NaN operands)
     for (int ci = 0; ci < mesh_.nCells(); ++ci) {
+        const double pThermo = f.p[ci]
+            - (2.0 / 3.0) * f.rho[ci] * std::max(f.k[ci], 0.0);
         const bool finite = std::isfinite(f.U[ci].x) && std::isfinite(f.U[ci].y)
                          && std::isfinite(f.U[ci].z)
                          && std::isfinite(f.p[ci]) && std::isfinite(f.T[ci])
                          && std::isfinite(f.rho[ci])
-                         && std::isfinite(f.k[ci]) && std::isfinite(f.omega[ci]);
-        // positivity: temperature, density, and the working pressure (the
-        // working pressure bounds the thermodynamic one from above while the
-        // trace absorption holds, so this check stays valid after the
-        // two-pressure integration and is tightened there if needed)
-        if (!finite || f.T[ci] <= 0.0 || f.rho[ci] <= 0.0 || f.p[ci] <= 0.0)
+                         && std::isfinite(f.k[ci]) && std::isfinite(f.omega[ci])
+                         && std::isfinite(pThermo);
+        // The stored pressure is mechanical. Check BOTH it and the recovered
+        // thermodynamic pressure: positivity of the larger mechanical value
+        // alone cannot validate an arbitrarily corrupted rho/k state.
+        if (!finite || f.T[ci] <= 0.0 || f.rho[ci] <= 0.0
+                    || f.p[ci] <= 0.0 || pThermo <= 0.0)
             return false;
     }
     return true;
@@ -123,6 +126,10 @@ void CompressibleSIMPLESolver::updateDensity(CompressibleFlowFields& f) {
         f.rho[ci] = f.p[ci]
             / (eos_.R * std::max(f.T[ci], 1.0)
                + (2.0 / 3.0) * std::max(f.k[ci], 0.0));
+    // The prescribed outlet is thermodynamic while the stored face value is
+    // mechanical. Density changes after pressure, energy, or k updates, so
+    // keep that crossing point synchronized with every EOS refresh.
+    mechanicalizeOutletPressure(f);
 }
 
 // ─── Momentum equation ────────────────────────────────────────────────────────
@@ -645,7 +652,7 @@ CompressibleConvergenceHistory CompressibleSIMPLESolver::solve(CompressibleFlowF
     ScalarField  SmagFrozen(mesh_, "Smag");
 
     // Reference nu for BCs (at inlet temperature; updated each iteration)
-    double nu_ref = eos_.mu_ref / eos_.density(f.p[0], f.T[0]);
+    double nu_ref = eos_.mu_ref / std::max(f.rho[0], 1e-30);
 
     // carried turbulence change norms (initialised to 1 so nothing can claim
     // turbulence convergence before the first update)
@@ -904,9 +911,6 @@ CompressibleConvergenceHistory CompressibleSIMPLESolver::solve(CompressibleFlowF
         entry.omega = turbActive ? lastOmChange : 0.0;
         hist.entries.push_back(entry);
 
-
-
-
         // Check for divergence. Every recorded residual/norm and both
         // residuals returned by every linear solve must be finite. The state
         // itself is also validated DIRECTLY per cell (stateIsValid): a
@@ -974,6 +978,16 @@ CompressibleConvergenceHistory CompressibleSIMPLESolver::solve(CompressibleFlowF
                          && (!turbScheduled
                              || (turbActive && f.turbEstablished));
         if (converged) {
+            // k participates in the two-pressure EOS but is intentionally
+            // lagged during the segregated turbulence sweep. Refresh the
+            // algebraic thermodynamic state once at the accepted fixed point
+            // so returned rho and the outlet face correspond to final k.
+            updateDensity(f);
+            if (!stateIsValid(f)) {
+                hist.diverged = true;
+                hist.finalIter = iter + 1;
+                return hist;
+            }
             hist.converged = true;
             hist.finalIter = iter + 1;
             if (settings_.verbose)
