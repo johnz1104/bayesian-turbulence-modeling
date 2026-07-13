@@ -11,19 +11,19 @@
   "converged": true,
   "diverged": false,
   "positivity_ok": true,
-  "simple_iters": 1294,
-  "Ma_max": 0.10283301332493351,
-  "T_min": 299.9528156849036,
-  "T_max": 300.05813877495376,
-  "rho_min": 1.1767747139503635,
-  "rho_max": 1.1774947009588557,
-  "U_max": 35.70244008274242,
+  "simple_iters": 2069,
+  "Ma_max": 0.10294631032022733,
+  "T_min": 299.95038051951843,
+  "T_max": 300.06099383736773,
+  "rho_min": 1.176788992176573,
+  "rho_max": 1.1775098142974798,
+  "U_max": 35.74177534537607,
   "Cf_at_stations": [
-   0.002418529028113919,
-   0.0021921879162378212,
-   0.0020892459563128657
+   0.0026570217238938657,
+   0.002409082296156431,
+   0.002296226851030112
   ],
-  "mass_flux_rel_imbalance": 4.945748654320978e-05
+  "mass_flux_rel_imbalance": 3.75746610489607e-05
  },
  "tolerances": {
   "simple_iters_abs": 50,
@@ -35,5 +35,5 @@
   "mass_flux_rel_imbalance_max": 0.001
  },
  "rationale": "Tolerances are loose enough to absorb 64-bit FP non-determinism between runs and between minor SST/EOS code changes, but tight enough to flag a real regression (e.g. solver instability, mass-conservation drift, or wall-clustering changes that shift Cf or T).",
- "note": "Regenerated 2026-07-13 on this branch after the two-pressure convention (mechanical momentum pressure, thermodynamic EOS/observables) and the molecular wall transpose coefficient: same converged state within the field tolerances, slower residual path (the EOS k-coupling), so the iteration count moved. The post-merge integration pass regenerates once more on the combined solver."
+ "note": "Regenerated 2026-07-13 on this branch after the two-pressure convention (mechanical momentum pressure, thermodynamic EOS/observables/boundaries/initialization) and the molecular wall treatment of the implicit momentum diffusion and the transpose correction: same physics contract, shifted discrete wall shear and residual path. The post-merge integration pass regenerates once more on the combined solver."
 }

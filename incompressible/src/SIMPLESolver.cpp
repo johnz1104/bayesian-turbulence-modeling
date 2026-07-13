@@ -90,7 +90,20 @@ void SIMPLESolver::assembleMomentum(LinearSystem& sys, const FlowFields& f, int 
         sys.lower[fi] = -(Df + cPos);   // off-diag contribution to neighbor from owner
     }
 
-    // boundary faces
+    // boundary faces. At RESOLVED walls the eddy viscosity vanishes on the
+    // face (SST asymptotics), so the implicit wall diffusion uses the
+    // MOLECULAR viscosity only: extrapolating the owner-cell nuT (nonzero at
+    // y+ ~ 1) overestimates the discrete wall shear the momentum equation
+    // carries, inconsistently with the molecular wall-stress observation and
+    // the wall-zero transpose treatment. Under wall functions the owner
+    // value stays (the modeled stress carrier). Non-wall boundaries keep
+    // owner extrapolation.
+    std::vector<char> isWall(mesh_.nFaces(), 0);
+    for (int pi = 0; pi < mesh_.nPatches(); ++pi) {
+        const Patch& pat = mesh_.patch(pi);
+        if (pat.type != "wall") continue;
+        for (FaceID wfi : pat.faces) isWall[wfi] = 1;
+    }
     for (int fi = nIF; fi < mesh_.nFaces(); ++fi) {
 
         // face geometry
@@ -98,7 +111,8 @@ void SIMPLESolver::assembleMomentum(LinearSystem& sys, const FlowFields& f, int 
         int o = face.owner;
         double Sf = face.area;
         double delta = std::max(face.delta, 1e-20);
-        double nuEff = nu_ + f.nuT[o];
+        double nuEff = (isWall[fi] && !settings_.useWallFunctions)
+                       ? nu_ : nu_ + f.nuT[o];
 
         // diffusion term
         double Db = nuEff * Sf / delta;
@@ -1083,6 +1097,17 @@ std::vector<std::vector<double>> SIMPLESolver::assembleResidualSensitivity(
     }
 
     // ---- boundary faces: both in/out branches give dDb·(φ_b − φ_o) (mFlux θ-indep) ---
+    // wall faces carry a MOLECULAR momentum diffusion coefficient at resolved
+    // walls (assembleMomentum), so their U-block theta-derivative is zero
+    // there; the k/omega wall diffusion keeps its nuT dependence unchanged
+    std::vector<char> isWallB(mesh_.nFaces(), 0);
+    if (!settings_.useWallFunctions) {
+        for (int pi = 0; pi < mesh_.nPatches(); ++pi) {
+            const Patch& pat = mesh_.patch(pi);
+            if (pat.type != "wall") continue;
+            for (FaceID wfi : pat.faces) isWallB[wfi] = 1;
+        }
+    }
     for (int fi = nIF; fi < mesh_.nFaces(); ++fi) {
         const Face& face = mesh_.face(fi);
         const int o = face.owner;
@@ -1097,7 +1122,7 @@ std::vector<std::vector<double>> SIMPLESolver::assembleResidualSensitivity(
 
         for (int j = 0; j < 11; ++j) {
             const double dnuTo = cs[o].dnuT[j], dF1o = cs[o].dF1[j];
-            const double dDbm = SfD * dnuTo;
+            const double dDbm = isWallB[fi] ? 0.0 : SfD * dnuTo;
             if (dDbm != 0.0) { dR[j][BUX + o] += dDbm * dUx; dR[j][BUY + o] += dDbm * dUy; }
             double dsk = (sk1 - sk2) * dF1o;
             if (j == 0) dsk += F1o; else if (j == 4) dsk += (1.0 - F1o);

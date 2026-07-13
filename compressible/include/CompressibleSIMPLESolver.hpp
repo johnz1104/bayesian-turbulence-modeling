@@ -64,6 +64,12 @@ private:
 
     void updateViscosity(const CompressibleFlowFields& f);
     void updateDensity(CompressibleFlowFields& f);
+    // The prescribed outlet pressure is a THERMODYNAMIC static value; the
+    // field carries the mechanical working pressure, so every BC application
+    // is followed by this conversion of the outlet boundary faces,
+    // p_mech,b = p_out + (2/3) rho_o k_o with the owner-cell state standing
+    // in for the boundary turbulence energy.
+    void mechanicalizeOutletPressure(CompressibleFlowFields& f) const;
 
     void assembleMomentum(LinearSystem& sys, const CompressibleFlowFields& f,
                           int component, std::vector<double>& aP);

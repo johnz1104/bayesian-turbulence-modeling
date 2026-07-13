@@ -30,7 +30,11 @@ void CompressibleSIMPLESolver::initUniform(CompressibleFlowFields& f,
                                             double kInit, double omegaInit)
 {
     f.U.setUniform(Uinit);
-    f.p.setUniform(p_init);
+    // p_init is the THERMODYNAMIC initialization pressure; the field carries
+    // the MECHANICAL working pressure p_mech = p_thermo + (2/3) rho k, so the
+    // stored value converts with the exact closed form (rho0 solves the plain
+    // EOS at (p_init, T_init), and with p_mech0 below, updateDensity's
+    // two-pressure inversion returns exactly rho0 at iteration zero)
     f.T.setUniform(T_init);
     f.k.setUniform(kInit);
     f.omega.setUniform(omegaInit);
@@ -39,9 +43,10 @@ void CompressibleSIMPLESolver::initUniform(CompressibleFlowFields& f,
     f.Pk.setUniform(0.0);
     f.CDkw.setUniform(0.0);
 
-    // Density from EOS
+    // Density from EOS at the thermodynamic state, then the mechanical field
     const double rho0 = eos_.density(p_init, T_init);
     f.rho.setUniform(rho0);
+    f.p.setUniform(p_init + (2.0 / 3.0) * rho0 * std::max(kInit, 0.0));
 
     // Sutherland viscosity at T_init
     const double mu0 = eos_.viscosity(T_init);
@@ -63,6 +68,7 @@ void CompressibleSIMPLESolver::initUniform(CompressibleFlowFields& f,
     // Apply BCs
     double nu0 = mu0 / rho0;
     applyAllCompressibleBCs(f.U, f.p, f.T, f.k, f.omega, mesh_, bcs_, nu0);
+    mechanicalizeOutletPressure(f);
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -70,6 +76,22 @@ void CompressibleSIMPLESolver::initUniform(CompressibleFlowFields& f,
 void CompressibleSIMPLESolver::updateViscosity(const CompressibleFlowFields& f) {
     for (int ci = 0; ci < mesh_.nCells(); ++ci)
         mu_[ci] = eos_.viscosity(f.T[ci]);
+}
+
+void CompressibleSIMPLESolver::mechanicalizeOutletPressure(
+        CompressibleFlowFields& f) const {
+    for (int pi = 0; pi < mesh_.nPatches(); ++pi) {
+        const Patch& pat = mesh_.patch(pi);
+        if (pat.type != "outlet") continue;
+        const PatchBC& bc = bcs_.pressureBC[pi];
+        if (bc.type != BCType::OutletPressure && bc.type != BCType::Dirichlet)
+            continue;
+        for (FaceID fi : pat.faces) {
+            int o = mesh_.face(fi).owner;
+            f.p.bface(fi) = bc.value
+                + (2.0 / 3.0) * f.rho[o] * std::max(f.k[o], 0.0);
+        }
+    }
 }
 
 void CompressibleSIMPLESolver::updateDensity(CompressibleFlowFields& f) {
@@ -125,7 +147,19 @@ void CompressibleSIMPLESolver::assembleMomentum(LinearSystem& sys,
         sys.lower[fi] = -(Df + cPos);
     }
 
-    // Boundary faces
+    // Boundary faces. At RESOLVED walls the turbulent viscosity vanishes on
+    // the face, so the implicit wall diffusion is MOLECULAR mu(T) only (the
+    // same convention as the transpose correction and the wall-stress
+    // observation); owner-cell extrapolation of nuT overestimates the
+    // discrete wall shear. Under wall functions the owner value stays.
+    std::vector<char> isWallM(mesh_.nFaces(), 0);
+    if (!settings_.useWallFunctions) {
+        for (int pi = 0; pi < mesh_.nPatches(); ++pi) {
+            const Patch& pat = mesh_.patch(pi);
+            if (pat.type != "wall") continue;
+            for (FaceID wfi : pat.faces) isWallM[wfi] = 1;
+        }
+    }
     for (int fi = nIF; fi < mesh_.nFaces(); ++fi) {
         const Face& face = mesh_.face(fi);
         int o     = face.owner;
@@ -133,7 +167,7 @@ void CompressibleSIMPLESolver::assembleMomentum(LinearSystem& sys,
         double mu_b  = mu_[o];
         double nuT_b = f.nuT[o];
         double rho_b = f.rho[o];
-        double muEff = mu_b + rho_b * nuT_b;
+        double muEff = isWallM[fi] ? mu_b : mu_b + rho_b * nuT_b;
         double Db    = muEff * Sf / delta;
 
         double Ub_comp;
@@ -554,6 +588,7 @@ void CompressibleSIMPLESolver::correctPressure(CompressibleFlowFields& f,
     fbc.kBC        = bcs_.kBC;
     fbc.omegaBC    = bcs_.omegaBC;
     applyPressureBC(f.p, mesh_, fbc);
+    mechanicalizeOutletPressure(f);
 }
 
 double CompressibleSIMPLESolver::computeResidual(const CompressibleFlowFields&, int) {

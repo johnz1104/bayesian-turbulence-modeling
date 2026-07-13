@@ -120,3 +120,28 @@ class TestPositivityInvariants:
 
     def test_max_Mach_subsonic(self, actual_summary):
         assert actual_summary["Ma_max"] < 0.8
+
+
+def test_last_fields_pressure_is_thermodynamic(rs):
+    """The exported "p" is the thermodynamic static pressure; the mechanical
+    working variable is exposed separately and differs by exactly
+    (2/3) rho k, the Favre-trace absorption of the two-pressure convention."""
+    import numpy as np
+    from compressible_diagnostics import make_validation_case
+    case = make_validation_case(name="ma_0_1_export", Ma=0.1, nx=16, ny=12,
+                                max_iterations=800)
+    fwd = case["forward"]
+    theta = list(case["param_set"].pack(rs.SSTCoefficients()))
+    result = fwd.evaluate(theta)
+    # the export identity is state-independent, so any evaluated (non-diverged)
+    # state discriminates it; full convergence is the smoke test's job
+    assert str(result.status).split(".")[-1] in ("Converged", "Unconverged")
+    assert fwd.has_last_fields()
+    ff = fwd.last_fields()
+    p_t = np.asarray(ff["p"]); p_m = np.asarray(ff["p_mechanical"])
+    rho = np.asarray(ff["rho"]); k = np.asarray(ff["k"])
+    assert np.allclose(p_m - p_t, (2.0 / 3.0) * rho * np.maximum(k, 0.0),
+                       rtol=0, atol=1e-9 * np.max(p_m))
+    assert np.all(p_t > 0.0)
+    # the shim is not a no-op: turbulence is live somewhere in the channel
+    assert np.max(p_m - p_t) > 0.0
