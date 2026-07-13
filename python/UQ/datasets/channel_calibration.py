@@ -225,6 +225,30 @@ class ChannelCalibration:
 
     # ---- posterior and posterior predictive -------------------------------
 
+    def refit_likelihood_subset(self, fit_index=None, noise_floor=1e-3):
+        """Refit the LOG-LIKELIHOOD surrogate on a station subset (or restore).
+
+        POST-AUDIT conformal design: the posterior must be fit on stations
+        DISJOINT from the conformal calibration/test stations, or the
+        split-conformal quantile is computed on units that already shaped the
+        predictor (the audited defect). The cached ensemble stores per-QoI
+        predictions, so the subset log-likelihood
+            -0.5 sum_{i in fit} ((y_i - pred_i)/sigma_i)^2
+        is recomputed here without any re-solving; the all-QoI prediction
+        surrogate is untouched (point predictions on held-out stations remain
+        available). fit_index=None restores the full-likelihood surrogate so
+        the transfer studies (cross-Re pooling) see the original design.
+        """
+        if fit_index is None:
+            target = self.loglik
+        else:
+            fit_index = np.asarray(fit_index, int)
+            resid = (self.qoi_truth[fit_index][None, :]
+                     - self.preds[:, fit_index]) / self.qoi_sigma[fit_index][None, :]
+            target = -0.5 * np.sum(resid ** 2, axis=1)
+        self.gp = GPSurrogate()
+        self.gp.train(self.X, target, noise_floor=noise_floor)
+
     def sample_posterior(self, eta=1.0, n_walkers=24, n_steps=2000, burn_in=500,
                          seed=0):
         """Power (Gibbs) posterior at learning rate eta via the existing sampler.

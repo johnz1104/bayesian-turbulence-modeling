@@ -41,6 +41,7 @@ from UQ.datasets.channel_baseline import ChannelBaselineRANS
 from UQ.datasets import channel_discrepancy as cdisc
 from UQ.datasets.channel_calibration import ChannelCalibration, CrossReStudy, PARAM_SETS
 from UQ import cache_fingerprint as cfp
+from UQ import conformal as cf
 from UQ import evaluation as ev
 
 PARAM_SETS_AVAILABLE = tuple(PARAM_SETS)
@@ -164,42 +165,83 @@ def stage_ensembles(regen, quick):
 # ---- stage 4: in-distribution overconfidence and correction ----------------
 
 def stage_in_distribution(cals):
+    """POST-AUDIT in-distribution design with genuinely held-out stations.
+
+    The pre-audit stage fit the posterior and surrogate on EVERY QoI and then
+    randomly relabeled those same QoIs into conformal calibration/test sets,
+    so the split-conformal guarantee's untouched-calibration precondition was
+    violated (audit claim 7). Now, per case: the skin friction and the odd
+    velocity stations fit the posterior (refit_likelihood_subset, no
+    re-solving); the even stations are split alternately into conformal
+    CALIBRATION and TEST sets that never entered any fit. Sigma-normalized
+    residuals are POOLED across cases for the calibration quantile (a
+    per-case set is too small for a finite quantile at alpha = 0.1) and
+    coverage is reported per case and pooled. The remaining approximation is
+    exchangeability of correlated stations within a profile, stated wherever
+    these numbers are quoted. All coverage is evaluated on the TEST stations
+    only, for the Bayes and tempered legs too.
+    """
     level = CONFIG["level"]
     seed = CONFIG["seed"]
-    rng = np.random.default_rng(seed)
+    alpha = 1.0 - level
     rows = []
+    pooled_cal = []
+    pooled_test = []
     for n in CONFIG["cases"]:
         c = cals[n]
-        # standard Bayes (eta = 1): posterior predictive coverage of the DNS QoIs
-        post1 = c.sample_posterior(eta=1.0, seed=seed)
-        pp1 = c.posterior_predictive(post1, eta=1.0, seed=seed + 1)
-        cov1, sharp1 = c.coverage_vs_truth(pp1, level=level)
-
-        # generalized Bayes: learning rate moment-matched on a calibration split
         idx = np.arange(c.n_qoi)
-        cal_idx = np.sort(rng.choice(idx, size=c.n_qoi // 2, replace=False))
-        test_idx = np.array([i for i in idx if i not in set(cal_idx)])
+        fit_idx = np.array([0] + [i for i in idx[1:] if (i - 1) % 2 == 0])
+        held = [i for i in idx[1:] if (i - 1) % 2 == 1]
+        cal_idx = np.array(held[0::2])
+        test_idx = np.array(held[1::2])
+        c.refit_likelihood_subset(fit_idx)
+
+        post1 = c.sample_posterior(eta=1.0, seed=seed)
+        pp1 = c.posterior_predictive(post1, eta=1.0, qoi_index=test_idx,
+                                     seed=seed + 1)
+        cov1, sharp1 = c.coverage_vs_truth(pp1, qoi_index=test_idx, level=level)
+
         eta = c.calibrate_eta(post1, cal_idx)
         post_t = c.sample_posterior(eta=eta, seed=seed)
-        pp_t = c.posterior_predictive(post_t, eta=eta, seed=seed + 2)
-        cov_t, sharp_t = c.coverage_vs_truth(pp_t, level=level)
+        pp_t = c.posterior_predictive(post_t, eta=eta, qoi_index=test_idx,
+                                      seed=seed + 2)
+        cov_t, sharp_t = c.coverage_vs_truth(pp_t, qoi_index=test_idx,
+                                             level=level)
 
-        # conformal: width from the calibration-split residuals, coverage on test
         pred_cal = c.point_prediction(post1, cal_idx)
         pred_test = c.point_prediction(post1, test_idx)
-        cov_c, half_c, gap_c = c.conformal_coverage(pred_cal, pred_test,
-                                                    cal_idx, test_idx,
-                                                    alpha=1.0 - level)
+        r_cal = np.abs(c.qoi_truth[cal_idx] - pred_cal) / c.qoi_sigma[cal_idx]
+        r_test = np.abs(c.qoi_truth[test_idx] - pred_test) / c.qoi_sigma[test_idx]
+        pooled_cal.append(r_cal)
+        pooled_test.append((n, r_test, float(np.mean(c.qoi_sigma[test_idx]))))
+
         rows.append({
             "re_tau": c.dns.re_tau, "eta": eta,
+            "n_fit": int(fit_idx.size), "n_cal": int(cal_idx.size),
+            "n_test": int(test_idx.size),
             "standard_coverage": cov1, "standard_sharpness": sharp1,
             "tempered_coverage": cov_t, "tempered_sharpness": sharp_t,
-            "conformal_coverage": cov_c, "conformal_halfwidth": half_c,
         })
-        print(f"  Re_tau {n:>4}: standard cov={cov1:.3f}  "
-              f"tempered(eta={eta:.3f}) cov={cov_t:.3f}  conformal cov={cov_c:.3f}  "
-              f"[nominal {level:.2f}]")
-    return rows
+        c.refit_likelihood_subset(None)   # restore for the transfer stages
+
+    # pooled sigma-normalized conformal quantile on NEVER-FITTED stations
+    q = cf.conformal_quantile(np.concatenate(pooled_cal), alpha=alpha)
+    pooled_hits = []
+    for row, (n, r_test, sig_mean) in zip(rows, pooled_test):
+        hits = (r_test <= q)
+        pooled_hits.append(hits)
+        row["conformal_coverage"] = float(np.mean(hits))
+        row["conformal_halfwidth_sigma_units"] = float(q)
+        row["conformal_halfwidth"] = float(q * sig_mean)
+        print(f"  Re_tau {row['re_tau']:>6.0f}: standard cov={row['standard_coverage']:.3f}  "
+              f"tempered(eta={row['eta']:.3f}) cov={row['tempered_coverage']:.3f}  "
+              f"conformal cov={row['conformal_coverage']:.3f}  [nominal {level:.2f}]")
+    pooled_cov = float(np.mean(np.concatenate(pooled_hits)))
+    print(f"  pooled held-out-station conformal coverage: {pooled_cov:.3f} "
+          f"(quantile {q:.3f} sigma units, {sum(len(r) for r in pooled_cal)} "
+          f"calibration stations)")
+    return {"per_case": rows, "pooled_conformal_coverage": pooled_cov,
+            "conformal_quantile_sigma_units": float(q)}
 
 
 # ---- stage 5: cross-Re generalization --------------------------------------
@@ -308,8 +350,9 @@ def make_figures(indist, evaluation):
     fig.savefig(os.path.join(fig_dir, "pit_histograms.png"), dpi=140)
     plt.close(fig)
 
-    # coverage bar chart (in-distribution, per Re)
+    # coverage bar chart (in-distribution, per Re; held-out-station design)
     fig, ax = plt.subplots(figsize=(7, 4))
+    indist = indist["per_case"] if isinstance(indist, dict) else indist
     re = [r["re_tau"] for r in indist]
     x = np.arange(len(re))
     ax.bar(x - 0.25, [r["standard_coverage"] for r in indist], 0.25, label="standard")

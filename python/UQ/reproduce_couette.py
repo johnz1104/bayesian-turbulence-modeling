@@ -42,6 +42,7 @@ from UQ.datasets.couette_forward import CouetteForwardRANS, CouetteCalibration, 
 from UQ.datasets.couette_crossflow import CrossFlowStudy
 from UQ.datasets import crossflow_companions as companions
 from UQ import cache_fingerprint as cfp
+from UQ import conformal as cf
 
 CONFIG = {
     "channel_cases": [550, 1000, 2000],
@@ -184,22 +185,56 @@ def stage_within_couette(couette_cals):
     study = CrossReStudy(couette_cals)
     seed = CONFIG["seed"]
     level = CONFIG["level"]
-    # in-distribution: calibrate on Couette, predict the same Couette case
+    # in-distribution with GENUINELY HELD-OUT stations (post-audit design,
+    # mirroring reproduce_channel): the posterior fits Cf plus the odd
+    # stations, the even stations split alternately into an eta-calibration
+    # set and a test set that never entered any fit; coverage is evaluated on
+    # the test stations only, and a pooled sigma-normalized split-conformal
+    # line is computed on the never-fitted stations across cases
     indist = []
-    rng = np.random.default_rng(seed)
+    pooled_cal, pooled_test = [], []
     for n, c in couette_cals.items():
-        post1 = c.sample_posterior(eta=1.0, seed=seed)
         idx = np.arange(c.n_qoi)
-        cal_idx = np.sort(rng.choice(idx, size=c.n_qoi // 2, replace=False))
+        fit_idx = np.array([0] + [i for i in idx[1:] if (i - 1) % 2 == 0])
+        held = [i for i in idx[1:] if (i - 1) % 2 == 1]
+        cal_idx = np.array(held[0::2])
+        test_idx = np.array(held[1::2])
+        c.refit_likelihood_subset(fit_idx)
+
+        post1 = c.sample_posterior(eta=1.0, seed=seed)
         eta = c.calibrate_eta(post1, cal_idx)
         post_t = c.sample_posterior(eta=eta, seed=seed)
-        cov1, _ = c.coverage_vs_truth(c.posterior_predictive(post1, eta=1.0, seed=seed + 1),
-                                      level=level)
-        cov_t, _ = c.coverage_vs_truth(c.posterior_predictive(post_t, eta=eta, seed=seed + 2),
-                                       level=level)
+        cov1, _ = c.coverage_vs_truth(
+            c.posterior_predictive(post1, eta=1.0, qoi_index=test_idx,
+                                   seed=seed + 1),
+            qoi_index=test_idx, level=level)
+        cov_t, _ = c.coverage_vs_truth(
+            c.posterior_predictive(post_t, eta=eta, qoi_index=test_idx,
+                                   seed=seed + 2),
+            qoi_index=test_idx, level=level)
+
+        pred_cal = c.point_prediction(post1, cal_idx)
+        pred_test = c.point_prediction(post1, test_idx)
+        pooled_cal.append(np.abs(c.qoi_truth[cal_idx] - pred_cal)
+                          / c.qoi_sigma[cal_idx])
+        pooled_test.append((n, np.abs(c.qoi_truth[test_idx] - pred_test)
+                            / c.qoi_sigma[test_idx]))
+
         indist.append({"re": n, "eta": eta, "standard_coverage": cov1,
-                       "tempered_coverage": cov_t})
+                       "tempered_coverage": cov_t,
+                       "n_fit": int(fit_idx.size), "n_cal": int(cal_idx.size),
+                       "n_test": int(test_idx.size)})
+        c.refit_likelihood_subset(None)   # restore for the cross-Re axis below
         print(f"    within-Couette Re_tau {n:>4}: standard={cov1:.3f} genBayes={cov_t:.3f}")
+    q = cf.conformal_quantile(np.concatenate(pooled_cal), alpha=1.0 - level)
+    hits_all = []
+    for row, (n, r_test) in zip(indist, pooled_test):
+        hits = (r_test <= q)
+        hits_all.append(hits)
+        row["conformal_coverage"] = float(np.mean(hits))
+        row["conformal_quantile_sigma_units"] = float(q)
+    pooled_cov = float(np.mean(np.concatenate(hits_all)))
+    print(f"    pooled held-out-station conformal coverage: {pooled_cov:.3f}")
     # cross-Re within Couette: leave-one-Re-out
     loro = []
     cases = list(couette_cals)
@@ -210,7 +245,9 @@ def stage_within_couette(couette_cals):
         print(f"    held-out Couette Re_tau {test:>4}: standard={r['standard_coverage']:.3f}"
               f" genBayes={r['tempered_coverage']:.3f} conformal={r['conformal_coverage']:.3f}"
               f" (gap {r['conformal_gap']:+.3f})")
-    return {"in_distribution": indist, "cross_re_loro": loro}
+    return {"in_distribution": indist,
+            "pooled_conformal_coverage": pooled_cov,
+            "cross_re_loro": loro}
 
 
 # ---- stage 5: a-priori companions (pipe, rotating channel) -----------------
