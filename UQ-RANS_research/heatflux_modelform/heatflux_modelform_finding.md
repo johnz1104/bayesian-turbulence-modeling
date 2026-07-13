@@ -291,3 +291,19 @@ Mech. 305 (1995) 159-183; Zhang, Duan and Choudhari, AIAA Journal 56(11)
 (2018) 4297-4311, doi:10.2514/1.J057296. The latter two are hosted by the
 migrated NASA Turbulence Modeling Resource (tmbwg.github.io/turbmodels).
 Raw fields stay local and gitignored.
+
+
+## Post-audit note (2026-07-12)
+
+Read this memo with the audit-driven precision fixes recorded in the
+compressible-attached revision: "held-out thermal" names the heat-flux block
+(B_q and the wall-normal flux profile; the temperature profile is fitted), the
+evaluation library's CRPS/energy estimators are now the fair M(M-1) forms
+(every comparison in this study is equal-ensemble-size, so no ordering here
+changes), the discrete-PIT KS p-values were heuristic and no conclusion rested
+on one, and the eigenspace-perturbation framework named in the structural-
+exclusion argument is the three-corner eigenvalue-only method of Emory et al.
+2013 (the exclusion is representational, anisotropy-only, and applies equally
+to the five-state 2017 extension now implemented). The scalar-leg
+conditionally-Gaussian degeneracy note and the pre-registered verdicts stand
+unchanged.
