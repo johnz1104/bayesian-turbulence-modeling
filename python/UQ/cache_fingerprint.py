@@ -28,7 +28,7 @@ revision that wrote the cache (code_rev()). The revision is PROVENANCE, not
 identity (any commit, including one that never touches the solver, would
 otherwise invalidate every ensemble). What IS identity is the producing
 model: every cache configuration carries a "physics" schema token (for
-example "channel-rans-v2") that the owning reproduce script bumps exactly
+example "channel-rans-v3") that the owning reproduce script bumps exactly
 when the physics of the producing model changes, so caches built by older
 solver physics can never be reused automatically on configuration match
 alone. Regeneration decisions are therefore config-plus-physics driven, with

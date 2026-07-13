@@ -24,6 +24,10 @@ Validation oracle (mirrors python/gradient_inference.py conventions):
     are NONLINEAR (eddy-viscosity max()/Menter min()/F1 tanh) and use a SMALL step so the
     stencil does not straddle a branch kink (the analytic is one-sided-exact at a kink;
     a straddling FD cannot verify it — confirmed by rel err collapsing as h_nl shrinks).
+    h_nl is 1e-6: at the wall-molecular momentum treatment's converged BFS state the
+    near-step omega rows sit close enough to a closure kink that a 1e-5 relative step
+    straddles it (rel err 1.1e-2 at 1e-5, 1.3e-8 at 1e-6, converged at 1e-7); the gate
+    itself is unchanged.
 
 Gate: relative error < 1e-6 for every coefficient whose analytic derivative is
 non-trivial; a coefficient with analytic ∂R/∂θ ≡ 0 (κ, unused) must FD to ~0.
@@ -46,7 +50,7 @@ TRIVIAL   = 1e-7            # |FD| below this ⇒ coefficient is structurally ze
 # --------------------------------------------------------------------------- #
 # Fixed-state finite-difference Jacobian of a vector field f(θ)
 # --------------------------------------------------------------------------- #
-def fd_jacobian(fn, theta0, n_out, *, h_lin=5e-4, h_nl=1e-5, h_floor=1e-7):
+def fd_jacobian(fn, theta0, n_out, *, h_lin=5e-4, h_nl=1e-6, h_floor=1e-7):
     """Difference-first 4th-order central FD of f: R^11 -> R^n_out, at fixed state."""
     theta0 = np.asarray(theta0, float)
     d = len(theta0)
@@ -185,6 +189,11 @@ def test_residual_sensitivity_bfs(bfs_sens):
 
 
 def test_kappa_residual_is_exactly_zero(channel_sens):
+    # INTENT (audit-documented): this PINS that the inferential kappa is inert
+    # by construction (no transport equation reads it; wall functions read
+    # settings_.vonKarman). all11 keeps kappa only for reproducibility of the
+    # archived identifiability study; new studies use live10. If this test
+    # ever fails, kappa became live and the parameter sets need rethinking.
     """κ (index 10) enters no residual term ⇒ ∂R/∂κ ≡ 0 analytically and FD ≈ 0."""
     rs, sens, _mesh, _status = channel_sens
     th = _theta_points(rs)[0]

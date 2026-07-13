@@ -1,5 +1,6 @@
 #include "SIMPLESolver.hpp"
 #include "AnisotropyTools.hpp"
+#include "StressOperators.hpp"
 #include <iostream>
 #include <cmath>
 #include <algorithm>
@@ -28,6 +29,7 @@ void SIMPLESolver::initUniform(FlowFields& f, const Vec3& Uinit, double pInit, d
     f.F2.setUniform(1.0);
     f.Pk.setUniform(0.0);
     f.CDkw.setUniform(0.0);
+    f.turbEstablished = false;   // cold start: the startup nuT floor window applies
 
     // Initialize omega with the wall-distance profile omega = max(60nu/(beta1*y^2), omegaInit).
     // A uniform omega = omegaInit everywhere creates a cliff-edge gradient when wall cells are
@@ -48,8 +50,8 @@ void SIMPLESolver::initUniform(FlowFields& f, const Vec3& Uinit, double pInit, d
     applyAllBCs(f.U, f.p, f.k, f.omega, mesh_, bcs_, nu_);
 }
 
-// Momentum equation assembly (Ux, Uy, or Uz) 
-// constructs a linear system for finite-volume discretization of momentum equation 
+// Momentum equation assembly (Ux, Uy, or Uz)
+// constructs a linear system for finite-volume discretization of momentum equation
 // builds A_U * U_component = b (where A_U is in LDU and b is source)
 void SIMPLESolver::assembleMomentum(LinearSystem& sys, const FlowFields& f, int component, std::vector<double>& aP) {
     sys.zero();         // resets linear system
@@ -89,7 +91,20 @@ void SIMPLESolver::assembleMomentum(LinearSystem& sys, const FlowFields& f, int 
         sys.lower[fi] = -(Df + cPos);   // off-diag contribution to neighbor from owner
     }
 
-    // boundary faces
+    // boundary faces. At RESOLVED walls the eddy viscosity vanishes on the
+    // face (SST asymptotics), so the implicit wall diffusion uses the
+    // MOLECULAR viscosity only: extrapolating the owner-cell nuT (nonzero at
+    // y+ ~ 1) overestimates the discrete wall shear the momentum equation
+    // carries, inconsistently with the molecular wall-stress observation and
+    // the wall-zero transpose treatment. Under wall functions the owner
+    // value stays (the modeled stress carrier). Non-wall boundaries keep
+    // owner extrapolation.
+    std::vector<char> isWall(mesh_.nFaces(), 0);
+    for (int pi = 0; pi < mesh_.nPatches(); ++pi) {
+        const Patch& pat = mesh_.patch(pi);
+        if (pat.type != "wall") continue;
+        for (FaceID wfi : pat.faces) isWall[wfi] = 1;
+    }
     for (int fi = nIF; fi < mesh_.nFaces(); ++fi) {
 
         // face geometry
@@ -97,7 +112,8 @@ void SIMPLESolver::assembleMomentum(LinearSystem& sys, const FlowFields& f, int 
         int o = face.owner;
         double Sf = face.area;
         double delta = std::max(face.delta, 1e-20);
-        double nuEff = nu_ + f.nuT[o];
+        double nuEff = (isWall[fi] && !settings_.useWallFunctions)
+                       ? nu_ : nu_ + f.nuT[o];
 
         // diffusion term
         double Db = nuEff * Sf / delta;
@@ -143,6 +159,26 @@ void SIMPLESolver::assembleMomentum(LinearSystem& sys, const FlowFields& f, int 
     if (fb != 0.0)
         for (int ci = 0; ci < mesh_.nCells(); ++ci)
             sys.source[ci] += fb * mesh_.cell(ci).volume;
+
+    // variable-viscosity transpose stress div(nuT (grad U)^T), the explicit
+    // half completing the Boussinesq deviatoric stress divergence (the
+    // implicit diffusion above is only the componentwise Laplacian); the
+    // constant-nu molecular transpose is analytically zero for solenoidal U,
+    // so only nuT enters, and the -2/3 k I normal stress stays absorbed in
+    // the working pressure. See core/include/StressOperators.hpp. The
+    // freeze switch is the frozen-pressure tangent's reduced operator (the
+    // source is lagged there, matching the solver's own Picard operator).
+    if (!freezeTransposeStress_) {
+        // wall faces carry ZERO transpose coefficient: the eddy viscosity
+        // vanishes AT a no-slip wall even though the owner-cell value does
+        // not, so owner extrapolation would overweight the wall flux
+        // (review fix, pinned by the wall-adjacent manufactured test)
+        std::vector<double> zeroWall(mesh_.nCells(), 0.0);
+        std::vector<double> tsrc =
+            transposeStressSource(mesh_, f.nuT, f.U, component, &zeroWall);
+        for (int ci = 0; ci < mesh_.nCells(); ++ci)
+            sys.source[ci] += tsrc[ci];
+    }
 
     // a-posteriori Reynolds-stress injection (explicit deferred-correction)
     if (bTarget6_) addInjectionSource(sys, f, component);
@@ -303,9 +339,26 @@ void SIMPLESolver::assemblePressureCorrection(LinearSystem& sys,
         if (mesh_.patch(pi).type == "outlet" && !mesh_.patch(pi).faces.empty())
             hasOutlet = true;
 
+    // Audit adjudication of this gate: the outlet test identifies where the
+    // p' system is all-Neumann and the odd-even mode is an EXACT null mode.
+    // An outlet's Dirichlet row removes the exact null mode and the
+    // singularity, but interior odd-even susceptibility on a collocated
+    // grid is a local stencil property that boundary rows only damp, so the
+    // question on bounded meshes is EMPIRICAL, not settled by the gate:
+    // the bounded production cases are DNS-validated without the
+    // dissipation and their solved-pressure checkerboard energy measures
+    // low (oddEvenEnergyRatio, pinned by test on the bounded channel), and
+    // the coupled tangent linearises the legacy bounded operator
+    // bit-for-bit. The term therefore stays gated by default with
+    // settings_.rhieChowAllMeshes as the standing probe; enabling it
+    // globally is a reviewed physics change to make if the diagnostic ever
+    // measures otherwise on a production case. The pressure PIN below
+    // remains outlet-free-only, where the singular system needs it.
+    const bool rcActive = !hasOutlet || settings_.rhieChowAllMeshes;
+
     // cell pressure gradient for the Rhie-Chow face-flux dissipation below
     VectorField gradP(mesh_, "gradP");
-    if (!hasOutlet) gradP = greenGaussGrad(f.p);
+    if (rcActive) gradP = greenGaussGrad(f.p);
 
     // internal faces
     for (int fi = 0; fi < nIF; ++fi) {
@@ -344,7 +397,7 @@ void SIMPLESolver::assemblePressureCorrection(LinearSystem& sys,
         Vec3 Uf = f.U[o] * face.weight + f.U[n] * (1.0 - face.weight);
         double massFlux = (Uf.x * face.normal.x + Uf.y * face.normal.y
                          + Uf.z * face.normal.z) * Sf;
-        if (!hasOutlet) {
+        if (rcActive) {
             Vec3 ehat = face.d / std::max(face.delta, 1e-30);
             Vec3 gbar = gradP[o] * face.weight + gradP[n] * (1.0 - face.weight);
             massFlux += -dP_f * Sf * ((f.p[n] - f.p[o]) / delta - gbar.dot(ehat));
@@ -587,22 +640,24 @@ void SIMPLESolver::assembleOmegaEquation(LinearSystem& sys, const FlowFields& f,
         double F1  = f.F1[ci];
         double omC = std::max(f.omega[ci], 1e-20);
 
-        // production: alpha * S^2  (standard Menter SST formulation)
-        // This is naturally self-limiting: as omega grows, destruction (beta*omega^2)
-        // increases quadratically while production (alpha*S^2) stays fixed, guaranteeing
-        // omega convergence.  
-        // After fiddling: DO NOT use Pk/nuT: when the Bradshaw limiter reduces nuT,  dividing by the 
-        // reduced nuT amplifies production and creates a positive feedback.
+        // production: alpha * Pk_limited/nuT = alpha * min(S^2, 10*betaStar*k*omega/nuT)
+        // (SST-2003 corrected form; the 2003 paper's alpha*S^2 is a documented misprint,
+        // see the NASA TMR SST page). min(S^2, lim) <= S^2 pointwise, so this term is
+        // bounded above by the S^2 form: reducing nuT cannot amplify it, and destruction
+        // (beta*omega^2, implicit below) still grows quadratically, so the equation stays
+        // self-limiting. The two forms coincide wherever the k-production limiter is
+        // inactive (equilibrium attached flows).
         double alphaB = sst_.coeffs.alpha(F1);
         double S = Smag[ci];
-        sys.source[ci] += alphaB * S * S * vol;
+        sys.source[ci] += alphaB * sst_.productionOmega(f.nuT[ci], S, f.k[ci], f.omega[ci]) * vol;
 
         // destruction term (linearised) beta*omega^2 → diag += beta*omega*V
         double betaB = sst_.coeffs.beta(F1);
         sys.diag[ci] += betaB * omC * vol;
 
-        // cross-diffusion (explicit): (1-F1)*max(CDkw, 0)
-        sys.source[ci] += (1.0 - F1) * std::max(f.CDkw[ci], 0.0) * vol;
+        // cross-diffusion (explicit): (1-F1)*CDkw, UNCLIPPED per SST-2003 (only the CDkw
+        // inside the F1 argument is clipped; the source term itself may be negative)
+        sys.source[ci] += (1.0 - F1) * f.CDkw[ci] * vol;
     }
 
     // under-relaxation
@@ -642,6 +697,14 @@ ConvergenceHistory SIMPLESolver::solve(FlowFields& f) { // input: FlowField obje
     // Passed to assembleOmegaEquation so both k and omega production see the same velocity gradients, preventing omega blow-up.
     ScalarField SmagFrozen(mesh_, "Smag");
 
+    // Last-computed turbulence field-change norms, CARRIED ACROSS iterations:
+    // on non-update iterations (turb_update_interval > 1) the convergence
+    // check must see the most recent turbulence state, never a fresh zero
+    // (a zero would let the solve declare convergence between turbulence
+    // updates while k/omega are still moving). Initialised to 1 so nothing
+    // can claim turbulence convergence before the first update.
+    double lastKChange = 1.0, lastOmChange = 1.0;
+
     // SIMPLE Iteration loop
     for (int iter = 0; iter < settings_.maxIterations; ++iter) {
         // 1. Update SST fields (at turbUpdateInterval cadence after turbStartIter)
@@ -666,13 +729,18 @@ ConvergenceHistory SIMPLESolver::solve(FlowFields& f) { // input: FlowField obje
             // Using the frozen Smag decouples the turbulence model from these numerical oscillations
             SmagFrozen = strainRateMagnitude(computeVelocityGradients(f.U));
 
-            // nuT floor: prevents nuT from collapsing to zero in early iterations
-            // Set `nuT_min = 0.1 * nu` 
-            // This prevents eddy viscosity from collapsing to zero in cells where the Bradshaw limiter produces 
-            // extremely small values (like near-wall cells where omega is very large and drive nuT -> 0)
-            //    - prevents cases that removes turbulent diffusion from the momentum equation 
-            //      and creates unphysical laminar-like velocity gradients
-            const double nuTMin = 0.1 * nu_;
+            // nuT floor, STARTUP-ONLY: guards against early k-omega collapse
+            // (cells where the Bradshaw limiter drives nuT toward zero before
+            // the turbulence fields establish). SST requires nuT -> 0 at a
+            // resolved no-slip wall, so the floor releases after the startup
+            // window and the converged state is floor-free; a permanent floor
+            // biases the near-wall diffusion and the wall stress (~+10 percent
+            // where it binds at y+ ~ 1). Warm restarts carry
+            // f.turbEstablished = true and never re-engage the floor.
+            if (!f.turbEstablished
+                && iter >= settings_.turbStartIter + settings_.nuTFloorIters)
+                f.turbEstablished = true;
+            const double nuTMin = f.turbEstablished ? 0.0 : 0.1 * nu_;
             for (int ci = 0; ci < mesh_.nCells(); ++ci)
                 f.nuT[ci] = std::max(f.nuT[ci], nuTMin);
         }
@@ -817,6 +885,8 @@ ConvergenceHistory SIMPLESolver::solve(FlowFields& f) { // input: FlowField obje
             }
             kChangeNorm  = kMaxDiff / kMaxVal;
             omChangeNorm = omMaxDiff / omMaxVal;
+            lastKChange  = kChangeNorm;
+            lastOmChange = omChangeNorm;
         }
 
         // 6. Track residuals
@@ -830,8 +900,11 @@ ConvergenceHistory SIMPLESolver::solve(FlowFields& f) { // input: FlowField obje
         entry.Uy    = resUy.initialRes;
         entry.Uz    = resUz.initialRes;
         entry.p     = resP.initialRes;
-        entry.k     = kChangeNorm;
-        entry.omega = omChangeNorm;
+        // the CARRIED norms: on non-update iterations these hold the most
+        // recent turbulence change, so the recorded history and the
+        // convergence check below never see a false zero
+        entry.k     = turbActive ? lastKChange  : 0.0;
+        entry.omega = turbActive ? lastOmChange : 0.0;
 
         // store iter-0 norms for normalisation. The pressure norm keeps a
         // running max over a short warmup: on a fully periodic domain a
@@ -866,9 +939,10 @@ ConvergenceHistory SIMPLESolver::solve(FlowFields& f) { // input: FlowField obje
         double nUx = safeNorm(entry.Ux, normMom0);
         double nUy = safeNorm(entry.Uy, normMom0);
         double nP  = safeNorm(entry.p,  normP0_);
-        // k and omega: field-change norms are already normalised (no iter-0 reference needed)
-        double nK  = kChangeNorm;
-        double nOm = omChangeNorm;
+        // k and omega: carried field-change norms (already normalised; the
+        // most recent update's change, never a fresh zero between updates)
+        double nK  = lastKChange;
+        double nOm = lastOmChange;
         hist.entries.push_back(entry);
 
         // computes maximum normalised residual
@@ -885,20 +959,32 @@ ConvergenceHistory SIMPLESolver::solve(FlowFields& f) { // input: FlowField obje
             std::cout << "\n";
         }
 
-        // convergence check (all normalised residuals below tolerance)
-        if (maxRes < settings_.convergenceTol && iter > 0) {
+        // If any individual residual or carried norm is non-finite, force
+        // maxRes to infinity BEFORE the convergence test so a NaN can neither
+        // be masked by chained std::max operand ordering nor slip past the
+        // (NaN < tol) == false accident into a later iteration
+        if (!std::isfinite(entry.Ux) || !std::isfinite(entry.Uy)
+            || !std::isfinite(entry.Uz) || !std::isfinite(entry.p)
+            || !std::isfinite(entry.k) || !std::isfinite(entry.omega)
+            || !std::isfinite(lastKChange) || !std::isfinite(lastOmChange))
+            maxRes = std::numeric_limits<double>::infinity();
+
+        // convergence check (all normalised residuals below tolerance).
+        // Scheduled turbulence must have RUN and its startup floor released:
+        // without the turbScheduled gate a solve could declare convergence
+        // before its first turbulence update, on a laminar transient the
+        // criterion never sees; with it, no run can freeze a floored or
+        // turbulence-free state as its converged solution.
+        const bool turbScheduled =
+            settings_.turbStartIter < settings_.maxIterations;
+        if (maxRes < settings_.convergenceTol && iter > 0
+            && (!turbScheduled || (turbActive && f.turbEstablished))) {
             hist.converged = true;
             hist.finalIter = iter;
             if (settings_.verbose)
                 std::cout << "  SIMPLE converged at iteration " << iter << "\n";
             return hist;
         }
-
-        // If any individual residual is NaN, force maxRes to infinity so divergence is caught
-        // (std::max silently propagates NaN, masking divergence as a false convergence)
-        if (std::isnan(entry.Ux) || std::isnan(entry.Uy) || std::isnan(entry.Uz)
-            || std::isnan(entry.p) || std::isnan(entry.k) || std::isnan(entry.omega))
-            maxRes = std::numeric_limits<double>::infinity();
 
         // divergence check
         if (std::isnan(maxRes) || std::isinf(maxRes) || maxRes > settings_.divergenceLimit) {
@@ -925,14 +1011,16 @@ ConvergenceHistory SIMPLESolver::solve(FlowFields& f) { // input: FlowField obje
 //  touched.
 // ===================================================================================
 
-// Recompute the SST closure of `work` from sst_.coeffs (computeFields + 0.1ν floor) and
-// the frozen |S|, exactly mirroring the turbulence-update branch of solve().
+// Recompute the SST closure of `work` from sst_.coeffs, exactly mirroring the
+// turbulence-update branch of solve() at a CONVERGED state: the startup-only
+// nuT floor has released by convergence, so the mirror applies only the
+// non-negativity clamp (a floored mirror would make residual/derivative
+// evaluations disagree with the converged assembly).
 void SIMPLESolver::recomputeClosure(FlowFields& work, ScalarField& Smag) {
     sst_.computeFields(mesh_, work.k, work.omega, work.U, nu_,
                        work.nuT, work.F1, work.F2, work.Pk, work.CDkw);
-    const double nuTMin = 0.1 * nu_;
     for (int ci = 0; ci < mesh_.nCells(); ++ci)
-        work.nuT[ci] = std::max(work.nuT[ci], nuTMin);
+        work.nuT[ci] = std::max(work.nuT[ci], 0.0);
     Smag = strainRateMagnitude(computeVelocityGradients(work.U));
 }
 
@@ -995,7 +1083,8 @@ std::vector<double> SIMPLESolver::assembleResidual(const FlowFields& state,
 // pointwise closure sensitivities.  Convection (frozen U), the pressure-gradient source
 // and all boundary VALUES are θ-independent and drop out.
 std::vector<std::vector<double>> SIMPLESolver::assembleResidualSensitivity(
-        const FlowFields& state, const SSTCoefficients& theta) {
+        const FlowFields& state, const SSTCoefficients& theta,
+        bool includeTransposeTheta) {
     const int nc  = mesh_.nCells();
     const int nIF = mesh_.nInternalFaces();
     SSTCoefficients saved = sst_.coeffs;
@@ -1005,13 +1094,14 @@ std::vector<std::vector<double>> SIMPLESolver::assembleResidualSensitivity(
     ScalarField Smag(mesh_, "Smag");
     recomputeClosure(work, Smag);
 
-    // pointwise closure sensitivities per cell (Layer 1)
+    // pointwise closure sensitivities per cell (Layer 1); the startup-only
+    // nuT floor has released at the converged states this is evaluated on,
+    // so the derivative carries no floor dead-zone
     const auto& wd = mesh_.wallDistance();
-    const double nuTMin = 0.1 * nu_;
     std::vector<SSTClosureSensitivity> cs(nc);
     for (int ci = 0; ci < nc; ++ci)
         cs[ci] = sst_.closureSensitivity(work.k[ci], work.omega[ci], Smag[ci],
-                                         wd[ci], nu_, work.CDkw[ci], nuTMin);
+                                         wd[ci], nu_, work.CDkw[ci], 0.0);
 
     std::vector<std::vector<double>> dR(11, std::vector<double>(4 * nc, 0.0));
     const int BUX = 0, BUY = nc, BK = 2 * nc, BOM = 3 * nc;
@@ -1061,6 +1151,17 @@ std::vector<std::vector<double>> SIMPLESolver::assembleResidualSensitivity(
     }
 
     // ---- boundary faces: both in/out branches give dDb·(φ_b − φ_o) (mFlux θ-indep) ---
+    // wall faces carry a MOLECULAR momentum diffusion coefficient at resolved
+    // walls (assembleMomentum), so their U-block theta-derivative is zero
+    // there; the k/omega wall diffusion keeps its nuT dependence unchanged
+    std::vector<char> isWallB(mesh_.nFaces(), 0);
+    if (!settings_.useWallFunctions) {
+        for (int pi = 0; pi < mesh_.nPatches(); ++pi) {
+            const Patch& pat = mesh_.patch(pi);
+            if (pat.type != "wall") continue;
+            for (FaceID wfi : pat.faces) isWallB[wfi] = 1;
+        }
+    }
     for (int fi = nIF; fi < mesh_.nFaces(); ++fi) {
         const Face& face = mesh_.face(fi);
         const int o = face.owner;
@@ -1075,7 +1176,7 @@ std::vector<std::vector<double>> SIMPLESolver::assembleResidualSensitivity(
 
         for (int j = 0; j < 11; ++j) {
             const double dnuTo = cs[o].dnuT[j], dF1o = cs[o].dF1[j];
-            const double dDbm = SfD * dnuTo;
+            const double dDbm = isWallB[fi] ? 0.0 : SfD * dnuTo;
             if (dDbm != 0.0) { dR[j][BUX + o] += dDbm * dUx; dR[j][BUY + o] += dDbm * dUy; }
             double dsk = (sk1 - sk2) * dF1o;
             if (j == 0) dsk += F1o; else if (j == 4) dsk += (1.0 - F1o);
@@ -1088,6 +1189,55 @@ std::vector<std::vector<double>> SIMPLESolver::assembleResidualSensitivity(
         }
     }
 
+    // ---- transpose-stress theta-derivative ------------------------------------------
+    // the momentum source carries div(nuT (grad U)^T) (StressOperators.hpp), whose
+    // theta-dependence is through nuT alone (U is the frozen state):
+    //   d(flux)/dtheta_j = dnuT_f (dU_./dx_i)_f . n A, mirrored face-by-face
+    if (includeTransposeTheta) {
+        VelocityGradients vgT = computeVelocityGradients(work.U);
+        auto gcol = [&](int ci, int comp) -> Vec3 {
+            if (comp == 0)
+                return Vec3(vgT.dudx[ci].x, vgT.dvdx[ci].x, vgT.dwdx[ci].x);
+            return Vec3(vgT.dudx[ci].y, vgT.dvdx[ci].y, vgT.dwdx[ci].y);
+        };
+        for (int fi = 0; fi < nIF; ++fi) {
+            const Face& face = mesh_.face(fi);
+            const int o = face.owner, n2 = face.neighbor;
+            const double w = face.weight;
+            const Vec3 gx = gcol(o, 0) * w + gcol(n2, 0) * (1.0 - w);
+            const Vec3 gy = gcol(o, 1) * w + gcol(n2, 1) * (1.0 - w);
+            const double fx = gx.dot(face.normal) * face.area;
+            const double fy = gy.dot(face.normal) * face.area;
+            for (int j = 0; j < 11; ++j) {
+                const double dnuTf = w * cs[o].dnuT[j] + (1.0 - w) * cs[n2].dnuT[j];
+                if (dnuTf == 0.0) continue;
+                dR[j][BUX + o] += dnuTf * fx;  dR[j][BUX + n2] -= dnuTf * fx;
+                dR[j][BUY + o] += dnuTf * fy;  dR[j][BUY + n2] -= dnuTf * fy;
+            }
+        }
+        // boundary faces, patch-aware: WALL faces carry a zero transpose
+        // coefficient in the assembly (the eddy viscosity vanishes at the
+        // wall), so their theta-derivative is identically zero and they are
+        // skipped here to keep the analytic dR matched to an FD of the
+        // assembled residual
+        for (int pi = 0; pi < mesh_.nPatches(); ++pi) {
+            const Patch& pat = mesh_.patch(pi);
+            if (pat.type == "wall") continue;
+            for (FaceID fi : pat.faces) {
+                const Face& face = mesh_.face(fi);
+                const int o = face.owner;
+                const double fx = gcol(o, 0).dot(face.normal) * face.area;
+                const double fy = gcol(o, 1).dot(face.normal) * face.area;
+                for (int j = 0; j < 11; ++j) {
+                    const double dnuTo = cs[o].dnuT[j];
+                    if (dnuTo == 0.0) continue;
+                    dR[j][BUX + o] += dnuTo * fx;
+                    dR[j][BUY + o] += dnuTo * fy;
+                }
+            }
+        }
+    }
+
     // ---- volumetric sources -------------------------------------------------------
     for (int ci = 0; ci < nc; ++ci) {
         const double V   = mesh_.cell(ci).volume;
@@ -1095,22 +1245,37 @@ std::vector<std::vector<double>> SIMPLESolver::assembleResidualSensitivity(
         const double omc = std::max(work.omega[ci], 1e-20);
         const double S   = Smag[ci];
         const double ko  = work.k[ci], wo = work.omega[ci];
-        const double maxCD = std::max(work.CDkw[ci], 0.0);
+        // corrected omega production q = min(S², 10 β* k ω / νT): the branch decision
+        // must mirror productionOmega/the assembly exactly (same guards) so this
+        // analytic derivative matches a FD of the assembled residual
+        const double bS   = sst_.coeffs.betaStar;
+        const double alB  = sst_.coeffs.alpha(F1);
+        const double nuTc = std::max(work.nuT[ci], 1e-30);
+        const double lim  = 10.0 * bS * std::max(ko, 0.0) * omc / nuTc;
+        const bool   limActive = lim < S * S;   // std::min(S², lim) picks S² on ties
+        const double q = limActive ? lim : S * S;
         for (int j = 0; j < 11; ++j) {
             // k production +V·∂Pk ;  k destruction −V·∂β*·ω·k (β* = idx 8)
             dR[j][BK + ci] += V * cs[ci].dPk[j];
             if (j == 8) dR[j][BK + ci] -= omc * V * ko;
-            // ω production +V·∂α·S²
+            // ω production +V·∂[α·q]: ∂α·q always; the limiter branch adds
+            // α·∂q with ∂q = lim·(δ_{j,β*}/β* − ∂νT/νT) (k, ω are frozen state;
+            // the S² branch has ∂q = 0, reproducing the pre-correction ∂α·S²)
             double dal = (al1 - al2) * cs[ci].dF1[j];
             if (j == 3) dal += F1; else if (j == 7) dal += (1.0 - F1);
-            dR[j][BOM + ci] += dal * S * S * V;
+            double dq = 0.0;
+            if (limActive)
+                dq = (j == 8 ? lim / bS : 0.0) - lim * cs[ci].dnuT[j] / nuTc;
+            dR[j][BOM + ci] += (dal * q + alB * dq) * V;
             // ω destruction −V·∂β·ω·ω
             double dbe = (be1 - be2) * cs[ci].dF1[j];
             if (j == 2) dbe += F1; else if (j == 6) dbe += (1.0 - F1);
             dR[j][BOM + ci] -= dbe * omc * V * wo;
-            // ω cross-diffusion +V·[ −∂F1·max(CDkw,0) + (1−F1)·(CDkw>0 ? ∂CDkw : 0) ]
-            double dcross = -cs[ci].dF1[j] * maxCD;
-            if (work.CDkw[ci] > 0.0) dcross += (1.0 - F1) * cs[ci].dCDkw[j];
+            // ω cross-diffusion +V·[ −∂F1·CDkw + (1−F1)·∂CDkw ], UNCLIPPED per
+            // SST-2003 (matches the corrected assembly; only F1's internal CDkw
+            // is clipped, and that path is inside cs.dF1 already)
+            double dcross = -cs[ci].dF1[j] * work.CDkw[ci]
+                            + (1.0 - F1) * cs[ci].dCDkw[j];
             dR[j][BOM + ci] += V * dcross;
         }
     }

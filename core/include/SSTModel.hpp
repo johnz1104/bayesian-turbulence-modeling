@@ -80,8 +80,10 @@ public:
     double crossDiffusion(const Vec3& gradK, const Vec3& gradOmega, double omega) const;        // computes cross-diffusion term in omega equation
     double eddyViscosity(double k, double omega, double S, double F2) const;                    // computes turbulent viscosity
     double production(double nuT, double S, double k, double omega) const;                      // computes turbulence production term
+    double productionOmega(double nuT, double S, double k, double omega) const;                 // specific omega production Pk_limited/nuT (SST-2003 corrected form)
     double sourceK(double Pk, double k, double omega) const;                                    // computes source term in k equation
-    double sourceOmega(double Pk, double nuT, double omega, double F1, double CDkw) const;      // computes RHS of omega equation
+    double sourceOmega(double S, double nuT, double k, double omega, double F1,
+                       double CDkw) const;                                                      // reference omega-equation RHS (corrected 2003 form, unclipped cross-diffusion)
 
     // ADJOINT GROUNDWORK — pointwise analytic ∂(closure)/∂θ at one cell, holding the
     // primary state (k, ω, U) fixed.  Re-derives the same branch decisions computeFields
@@ -100,6 +102,16 @@ public:
     void computeFields(const Mesh& mesh,
                        const ScalarField& k, const ScalarField& omega,
                        const VectorField& U, double nu,
+                       ScalarField& nuT, ScalarField& F1field,
+                       ScalarField& F2field, ScalarField& Pk,
+                       ScalarField& CDkwField) const;
+
+    // Per-cell-viscosity overload: identical closure evaluation with the
+    // LOCAL kinematic viscosity mu(T)/rho entering the F1/F2 blending
+    // arguments, replacing the low-Mach shortcut of a single inlet-cell value.
+    void computeFields(const Mesh& mesh,
+                       const ScalarField& k, const ScalarField& omega,
+                       const VectorField& U, const ScalarField& nuLocal,
                        ScalarField& nuT, ScalarField& F1field,
                        ScalarField& F2field, ScalarField& Pk,
                        ScalarField& CDkwField) const;

@@ -45,10 +45,12 @@ from UQ import conformal as cf
 
 # Physics schema token: part of every cache identity in this script. Bump it
 # exactly when the producing model changes (solver physics, closure form,
-# observation definition), never for refactors; v2 marks the post-audit
-# corrected solver (SST-2003 limited production, startup-only floor,
-# completed Boussinesq stress, honest convergence accounting).
-PHYSICS = "channel-rans-v2"
+# observation definition), never for refactors. v3 marks the INTEGRATED
+# post-audit solver: SST-2003 limited production, startup-only nuT floor,
+# completed Boussinesq stress, molecular resolved-wall diffusion, and complete
+# convergence accounting. v2 was stamped before those branches were combined
+# and must not authorize reuse under the final producer.
+PHYSICS = "channel-rans-v3"
 from UQ import evaluation as ev
 
 PARAM_SETS_AVAILABLE = tuple(PARAM_SETS)

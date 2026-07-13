@@ -12,15 +12,17 @@ import numpy as np
 from UQ import cache_fingerprint as cfp
 
 
-def _cfg(n_ensemble=48):
+def _cfg(n_ensemble=48, physics="channel-rans-v3"):
     return {"kind": "channel_ensemble", "case": 5200, "n_ensemble": n_ensemble,
-            "seed": 0, "cfg": {"nx": 40, "ny": 56, "conv_tol": 1.0e-3}}
+            "seed": 0, "physics": physics,
+            "cfg": {"nx": 40, "ny": 56, "conv_tol": 1.0e-3}}
 
 
 def test_fingerprint_stable_and_numpy_normalised():
     a = cfp.fingerprint(_cfg())
     b = cfp.fingerprint({"kind": "channel_ensemble", "case": np.int64(5200),
                          "n_ensemble": np.int32(48), "seed": 0,
+                         "physics": "channel-rans-v3",
                          "cfg": {"nx": 40, "ny": 56,
                                  "conv_tol": np.float64(1.0e-3)}})
     assert a == b, "numpy scalar types must not change the fingerprint"
@@ -44,6 +46,15 @@ def test_quick_cache_is_refused_by_full_config(tmp_path):
     status, reason = cfp.check(d, _cfg(n_ensemble=48))
     assert status == "mismatch"
     assert "n_ensemble" in reason and "12" in reason and "48" in reason
+
+
+def test_preintegration_physics_cache_is_refused():
+    """Matching numerics cannot authorize reuse across a producer change."""
+    old = cfp.attach({"X": np.zeros((48, 2))},
+                     _cfg(physics="channel-rans-v2"))
+    status, reason = cfp.check(old, _cfg(physics="channel-rans-v3"))
+    assert status == "mismatch"
+    assert "channel-rans-v2" in reason and "channel-rans-v3" in reason
 
 
 def test_pre_fingerprint_cache_classifies_legacy(tmp_path):

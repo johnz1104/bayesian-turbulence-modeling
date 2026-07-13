@@ -1,6 +1,7 @@
 #include "CompressibleSIMPLESolver.hpp"
 #include "LinearSolver.hpp"
 #include "BoundaryCondition.hpp"
+#include "StressOperators.hpp"
 #include <iostream>
 #include <cmath>
 #include <algorithm>
@@ -29,7 +30,11 @@ void CompressibleSIMPLESolver::initUniform(CompressibleFlowFields& f,
                                             double kInit, double omegaInit)
 {
     f.U.setUniform(Uinit);
-    f.p.setUniform(p_init);
+    // p_init is the THERMODYNAMIC initialization pressure; the field carries
+    // the MECHANICAL working pressure p_mech = p_thermo + (2/3) rho k, so the
+    // stored value converts with the exact closed form (rho0 solves the plain
+    // EOS at (p_init, T_init), and with p_mech0 below, updateDensity's
+    // two-pressure inversion returns exactly rho0 at iteration zero)
     f.T.setUniform(T_init);
     f.k.setUniform(kInit);
     f.omega.setUniform(omegaInit);
@@ -37,10 +42,12 @@ void CompressibleSIMPLESolver::initUniform(CompressibleFlowFields& f,
     f.F2.setUniform(1.0);
     f.Pk.setUniform(0.0);
     f.CDkw.setUniform(0.0);
+    f.turbEstablished = false;   // cold start: the startup nuT floor window applies
 
-    // Density from EOS
+    // Density from EOS at the thermodynamic state, then the mechanical field
     const double rho0 = eos_.density(p_init, T_init);
     f.rho.setUniform(rho0);
+    f.p.setUniform(p_init + (2.0 / 3.0) * rho0 * std::max(kInit, 0.0));
 
     // Sutherland viscosity at T_init
     const double mu0 = eos_.viscosity(T_init);
@@ -62,6 +69,7 @@ void CompressibleSIMPLESolver::initUniform(CompressibleFlowFields& f,
     // Apply BCs
     double nu0 = mu0 / rho0;
     applyAllCompressibleBCs(f.U, f.p, f.T, f.k, f.omega, mesh_, bcs_, nu0);
+    mechanicalizeOutletPressure(f);
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -71,9 +79,57 @@ void CompressibleSIMPLESolver::updateViscosity(const CompressibleFlowFields& f) 
         mu_[ci] = eos_.viscosity(f.T[ci]);
 }
 
+void CompressibleSIMPLESolver::mechanicalizeOutletPressure(
+        CompressibleFlowFields& f) const {
+    for (int pi = 0; pi < mesh_.nPatches(); ++pi) {
+        const Patch& pat = mesh_.patch(pi);
+        if (pat.type != "outlet") continue;
+        const PatchBC& bc = bcs_.pressureBC[pi];
+        if (bc.type != BCType::OutletPressure && bc.type != BCType::Dirichlet)
+            continue;
+        for (FaceID fi : pat.faces) {
+            int o = mesh_.face(fi).owner;
+            f.p.bface(fi) = bc.value
+                + (2.0 / 3.0) * f.rho[o] * std::max(f.k[o], 0.0);
+        }
+    }
+}
+
+bool CompressibleSIMPLESolver::stateIsValid(const CompressibleFlowFields& f) const {
+    // explicit per-cell sweep; see the header note on why max/min reductions
+    // cannot substitute (they drop NaN operands)
+    for (int ci = 0; ci < mesh_.nCells(); ++ci) {
+        const double pThermo = f.p[ci]
+            - (2.0 / 3.0) * f.rho[ci] * std::max(f.k[ci], 0.0);
+        const bool finite = std::isfinite(f.U[ci].x) && std::isfinite(f.U[ci].y)
+                         && std::isfinite(f.U[ci].z)
+                         && std::isfinite(f.p[ci]) && std::isfinite(f.T[ci])
+                         && std::isfinite(f.rho[ci])
+                         && std::isfinite(f.k[ci]) && std::isfinite(f.omega[ci])
+                         && std::isfinite(pThermo);
+        // The stored pressure is mechanical. Check BOTH it and the recovered
+        // thermodynamic pressure: positivity of the larger mechanical value
+        // alone cannot validate an arbitrarily corrupted rho/k state.
+        if (!finite || f.T[ci] <= 0.0 || f.rho[ci] <= 0.0
+                    || f.p[ci] <= 0.0 || pThermo <= 0.0)
+            return false;
+    }
+    return true;
+}
+
 void CompressibleSIMPLESolver::updateDensity(CompressibleFlowFields& f) {
+    // f.p is the MECHANICAL pressure (thermodynamic + (2/3) rho k, the
+    // absorbed turbulent normal stress); the thermodynamic density follows
+    // from rho R T = p_mech - (2/3) rho k exactly:
+    //   rho = p_mech / (R T + (2/3) k)
     for (int ci = 0; ci < mesh_.nCells(); ++ci)
-        f.rho[ci] = eos_.density(f.p[ci], f.T[ci]);
+        f.rho[ci] = f.p[ci]
+            / (eos_.R * std::max(f.T[ci], 1.0)
+               + (2.0 / 3.0) * std::max(f.k[ci], 0.0));
+    // The prescribed outlet is thermodynamic while the stored face value is
+    // mechanical. Density changes after pressure, energy, or k updates, so
+    // keep that crossing point synchronized with every EOS refresh.
+    mechanicalizeOutletPressure(f);
 }
 
 // ─── Momentum equation ────────────────────────────────────────────────────────
@@ -118,7 +174,19 @@ void CompressibleSIMPLESolver::assembleMomentum(LinearSystem& sys,
         sys.lower[fi] = -(Df + cPos);
     }
 
-    // Boundary faces
+    // Boundary faces. At RESOLVED walls the turbulent viscosity vanishes on
+    // the face, so the implicit wall diffusion is MOLECULAR mu(T) only (the
+    // same convention as the transpose correction and the wall-stress
+    // observation); owner-cell extrapolation of nuT overestimates the
+    // discrete wall shear. Under wall functions the owner value stays.
+    std::vector<char> isWallM(mesh_.nFaces(), 0);
+    if (!settings_.useWallFunctions) {
+        for (int pi = 0; pi < mesh_.nPatches(); ++pi) {
+            const Patch& pat = mesh_.patch(pi);
+            if (pat.type != "wall") continue;
+            for (FaceID wfi : pat.faces) isWallM[wfi] = 1;
+        }
+    }
     for (int fi = nIF; fi < mesh_.nFaces(); ++fi) {
         const Face& face = mesh_.face(fi);
         int o     = face.owner;
@@ -126,7 +194,7 @@ void CompressibleSIMPLESolver::assembleMomentum(LinearSystem& sys,
         double mu_b  = mu_[o];
         double nuT_b = f.nuT[o];
         double rho_b = f.rho[o];
-        double muEff = mu_b + rho_b * nuT_b;
+        double muEff = isWallM[fi] ? mu_b : mu_b + rho_b * nuT_b;
         double Db    = muEff * Sf / delta;
 
         double Ub_comp;
@@ -156,6 +224,48 @@ void CompressibleSIMPLESolver::assembleMomentum(LinearSystem& sys,
                     : (component == 1) ? gradP[ci].y
                                        : gradP[ci].z;
         sys.source[ci] -= dpdx * vol;
+    }
+
+    // Favre-stress completion (explicit deferred correction): the implicit
+    // diffusion above is the componentwise Laplacian div(muEff grad U_i); the
+    // full modeled stress (TMR Favre-averaged form) additionally carries
+    //   div(muEff (grad U)^T) - (2/3) d/dx_i(muEff div U) - (2/3) d/dx_i(rho k)
+    // with muEff = mu + rho nuT covering the viscous and turbulent parts.
+    // TWO-PRESSURE CONVENTION for the isotropic -(2/3) rho k part: the near-
+    // wall balance p + (2/3) rho k ~ const makes that term and the pressure
+    // gradient a stiff cancelling pair, and applying it as an explicit source
+    // diverges the startup even blended and ramped, so the MOMENTUM equation
+    // solves in the MECHANICAL pressure p_mech = p_thermo + (2/3) rho k (the
+    // pair absorbed, stable), while the EOS and the observation path use the
+    // THERMODYNAMIC pressure: updateDensity evaluates the exact closed form
+    // rho = p_mech / (R T + (2/3) k), which is identically
+    // rho = p_thermo / (R T), and the forward-model observation shim maps
+    // p_thermo = p_mech - (2/3) rho k. Density is therefore never mispriced
+    // by the turbulence bookkeeping term (review fix). At wall faces the
+    // transpose coefficient keeps only the MOLECULAR viscosity (the
+    // turbulent part vanishes at a no-slip wall; owner extrapolation of
+    // muEff would overweight the wall flux).
+    {
+        ScalarField muEff(mesh_, "muEff");
+        for (int ci = 0; ci < mesh_.nCells(); ++ci)
+            muEff[ci] = mu_[ci] + f.rho[ci] * f.nuT[ci];
+        std::vector<double> tsrc =
+            transposeStressSource(mesh_, muEff, f.U, component, &mu_);
+
+        VelocityGradients vg = computeVelocityGradients(f.U);
+        ScalarField muDivU(mesh_, "muDivU");
+        for (int ci = 0; ci < mesh_.nCells(); ++ci) {
+            double divU = vg.dudx[ci].x + vg.dvdx[ci].y + vg.dwdx[ci].z;
+            muDivU[ci] = muEff[ci] * divU;
+        }
+        VectorField gTr = greenGaussGrad(muDivU);
+        for (int ci = 0; ci < mesh_.nCells(); ++ci) {
+            double vol = mesh_.cell(ci).volume;
+            double gi = (component == 0) ? gTr[ci].x
+                      : (component == 1) ? gTr[ci].y
+                                         : gTr[ci].z;
+            sys.source[ci] += tsrc[ci] - (2.0 / 3.0) * gi * vol;
+        }
     }
 
     // Under-relaxation
@@ -453,14 +563,19 @@ void CompressibleSIMPLESolver::assembleOmegaEquation(LinearSystem& sys,
         double rhoC  = f.rho[ci];
         double omC   = std::max(f.omega[ci], 1e-20);
 
+        // production: rho * alpha * Pk_limited/nuT (SST-2003 corrected form, bounded
+        // above by the rho*alpha*S^2 misprint; see incompressible assembly note)
         double alphaB = sst_.coeffs.alpha(F1);
         double S      = Smag[ci];
-        sys.source[ci] += rhoC * alphaB * S * S * vol;
+        sys.source[ci] += rhoC * alphaB
+                          * sst_.productionOmega(f.nuT[ci], S, f.k[ci], f.omega[ci]) * vol;
 
         double betaB = sst_.coeffs.beta(F1);
         sys.diag[ci] += rhoC * betaB * omC * vol;
 
-        sys.source[ci] += (1.0 - F1) * std::max(f.CDkw[ci], 0.0) * vol;
+        // cross-diffusion: rho-weighted like the other omega sources (f.CDkw is the
+        // kinematic 2*sigma_w2/omega gradK.gradOmega), UNCLIPPED per SST-2003
+        sys.source[ci] += rhoC * (1.0 - F1) * f.CDkw[ci] * vol;
     }
 
     const double alphaW = settings_.alphaOmega;
@@ -505,6 +620,7 @@ void CompressibleSIMPLESolver::correctPressure(CompressibleFlowFields& f,
     fbc.kBC        = bcs_.kBC;
     fbc.omegaBC    = bcs_.omegaBC;
     applyPressureBC(f.p, mesh_, fbc);
+    mechanicalizeOutletPressure(f);
 }
 
 double CompressibleSIMPLESolver::computeResidual(const CompressibleFlowFields&, int) {
@@ -536,9 +652,15 @@ CompressibleConvergenceHistory CompressibleSIMPLESolver::solve(CompressibleFlowF
     ScalarField  SmagFrozen(mesh_, "Smag");
 
     // Reference nu for BCs (at inlet temperature; updated each iteration)
-    double nu_ref = eos_.mu_ref / eos_.density(f.p[0], f.T[0]);
+    double nu_ref = eos_.mu_ref / std::max(f.rho[0], 1e-30);
 
+    // carried turbulence change norms (initialised to 1 so nothing can claim
+    // turbulence convergence before the first update)
+    double lastKChange = 1.0, lastOmChange = 1.0;
+
+    VectorField Uprev(mesh_, "Uprev");
     for (int iter = 0; iter < settings_.maxIterations; ++iter) {
+        for (int ci = 0; ci < mesh_.nCells(); ++ci) Uprev[ci] = f.U[ci];
 
         // 1. Update thermodynamic state: ρ, μ from current p, T
         updateDensity(f);
@@ -562,12 +684,30 @@ CompressibleConvergenceHistory CompressibleSIMPLESolver::solve(CompressibleFlowF
                 k_scaled[ci] = f.k[ci];
 
             double nu0 = mu_[0] / std::max(f.rho[0], 1e-30);
-            sst_.computeFields(mesh_, k_scaled, f.omega, f.U, nu0,
+            // LOCAL kinematic viscosity mu(T)/rho per cell for the F1/F2
+            // blending arguments (the inlet-cell nu0 remains only as the
+            // steady startup-floor value below)
+            ScalarField nuLocal(mesh_, "nuLocal");
+            for (int ci = 0; ci < mesh_.nCells(); ++ci)
+                nuLocal[ci] = mu_[ci] / std::max(f.rho[ci], 1e-30);
+            sst_.computeFields(mesh_, k_scaled, f.omega, f.U, nuLocal,
                                f.nuT, f.F1, f.F2, f.Pk, f.CDkw);
 
             SmagFrozen = strainRateMagnitude(computeVelocityGradients(f.U));
 
-            const double nuTMin = 0.1 * nu0;
+            // startup-only floor (see SolverSettings::nuTFloorIters); releases
+            // to a non-negativity clamp afterwards, and warm restarts
+            // (turbEstablished carried in the fields) never re-engage it. The
+            // floor VALUE stays the steady inlet-cell nu0: a per-cell
+            // mu(T)/rho floor jitters with the startup pressure transient
+            // (rho = p/RT locally) and destabilizes marginal developing
+            // channels; a startup-only numerical guard wants a constant, and
+            // the local-viscosity treatment belongs to the blending
+            // functions, not the floor.
+            if (!f.turbEstablished
+                && iter >= settings_.turbStartIter + settings_.nuTFloorIters)
+                f.turbEstablished = true;
+            const double nuTMin = f.turbEstablished ? 0.0 : 0.1 * nu0;
             for (int ci = 0; ci < mesh_.nCells(); ++ci)
                 f.nuT[ci] = std::max(f.nuT[ci], nuTMin);
         }
@@ -626,7 +766,34 @@ CompressibleConvergenceHistory CompressibleSIMPLESolver::solve(CompressibleFlowF
         correctVelocity(f, pPrime, aPstore);
         correctPressure(f, pPrime);
 
-        // 5. Energy equation for T
+        // velocity field-change norm over the full iteration (momentum solve
+        // plus correction): the dimensionless signal that covers BOTH
+        // components, in particular the wall-normal one whose raw equation
+        // imbalance is not commensurate with the absolute Ux/p thresholds
+        double uChange = 0.0;
+        {
+            double uMaxVal = 1e-30, uMaxDiff = 0.0;
+            for (int ci = 0; ci < mesh_.nCells(); ++ci) {
+                double mag = std::sqrt(f.U[ci].x * f.U[ci].x
+                                       + f.U[ci].y * f.U[ci].y
+                                       + f.U[ci].z * f.U[ci].z);
+                double dx = f.U[ci].x - Uprev[ci].x;
+                double dy = f.U[ci].y - Uprev[ci].y;
+                double dz = f.U[ci].z - Uprev[ci].z;
+                uMaxVal  = std::max(uMaxVal, mag);
+                uMaxDiff = std::max(uMaxDiff,
+                                    std::sqrt(dx * dx + dy * dy + dz * dz));
+            }
+            uChange = uMaxDiff / uMaxVal;
+        }
+
+        // 5. Energy equation for T. The convergence signal is the FIELD-CHANGE
+        // norm ||T_new - T_old||_inf / ||T||_inf (the same convention as k and
+        // omega): at low Mach the temperature is nearly unforced, so its
+        // dimensional equation residual decays too slowly for a reduction
+        // criterion while the field itself stopped changing long before.
+        double tChange = 0.0;
+        SolverResult resT = {};
         {
             ScalarField T_old(mesh_, "T_old");
             for (int ci = 0; ci < mesh_.nCells(); ++ci) T_old[ci] = f.T[ci];
@@ -634,13 +801,26 @@ CompressibleConvergenceHistory CompressibleSIMPLESolver::solve(CompressibleFlowF
             assembleEnergy(eSys, f);
             std::vector<double> Tvec(mesh_.nCells());
             for (int ci = 0; ci < mesh_.nCells(); ++ci) Tvec[ci] = f.T[ci];
-            SolverResult resT = eSolver_->solve(eSys, Tvec,
-                                                 settings_.innerIterations,
-                                                 settings_.innerTolerance);
+            resT = eSolver_->solve(eSys, Tvec,
+                            settings_.innerIterations,
+                            settings_.innerTolerance);
             for (int ci = 0; ci < mesh_.nCells(); ++ci) {
-                f.T[ci] = std::max(Tvec[ci], 1.0);  // prevent non-physical T ≤ 0
+                // Prevent non-physical T <= 0. With NaN as the FIRST
+                // argument, std::max(NaN, 1.0) returns that first argument,
+                // so this clamp preserves a NaN for stateIsValid to detect.
+                // We also retain the linear-solver result below so a
+                // non-finite residual is diagnosed directly rather than only
+                // through its eventual effect on the field.
+                f.T[ci] = std::max(Tvec[ci], 1.0);
             }
             applyTemperatureBC(f.T, mesh_, bcs_);
+
+            double tMaxVal = 1e-30, tMaxDiff = 0.0;
+            for (int ci = 0; ci < mesh_.nCells(); ++ci) {
+                tMaxVal  = std::max(tMaxVal,  std::abs(f.T[ci]));
+                tMaxDiff = std::max(tMaxDiff, std::abs(f.T[ci] - T_old[ci]));
+            }
+            tChange = tMaxDiff / tMaxVal;
 
             // Update density from updated p, T
             updateDensity(f);
@@ -649,7 +829,12 @@ CompressibleConvergenceHistory CompressibleSIMPLESolver::solve(CompressibleFlowF
         // 6. Turbulence equations
         SolverResult resK = {}, resOm = {};
         if (turbUpdate) {
-            double nu0 = mu_[0] / std::max(f.rho[0], 1e-30);
+            // pre-solve fields for the change-norm convergence metric (the
+            // wall re-pinning below keeps the omega EQUATION imbalance
+            // permanently nonzero, so field change is the honest signal,
+            // exactly as the incompressible solver tracks it)
+            std::vector<double> kOld = f.k.data();
+            std::vector<double> omOld = f.omega.data();
 
             assembleKEquation(kSys, f);
             std::vector<double> kVec = f.k.data();
@@ -663,7 +848,12 @@ CompressibleConvergenceHistory CompressibleSIMPLESolver::solve(CompressibleFlowF
             resOm = tSolver_->solve(omSys, omVec, settings_.innerIterations, settings_.innerTolerance);
             for (int ci = 0; ci < mesh_.nCells(); ++ci) f.omega[ci] = omVec[ci];
             f.omega.clamp(settings_.omegaMin, 1e15);
-            applyOmegaBC(f.omega, mesh_, fbc_tmp, nu0, sst_.coeffs.beta1);
+            // boundary-face omega with the LOCAL owner-cell viscosity, not
+            // the inlet value (review fix; matches the wall-anchor treatment)
+            ScalarField nuLocalBC(mesh_, "nuLocalBC");
+            for (int ci = 0; ci < mesh_.nCells(); ++ci)
+                nuLocalBC[ci] = mu_[ci] / std::max(f.rho[ci], 1e-30);
+            applyOmegaBC(f.omega, mesh_, fbc_tmp, nuLocalBC, sst_.coeffs.beta1);
 
             // Re-pin near-wall omega.  PHASE 7 — when settings_.useWallFunctions
             // is on, blend the resolved-LES form with the log-law form so the
@@ -677,7 +867,9 @@ CompressibleConvergenceHistory CompressibleSIMPLESolver::solve(CompressibleFlowF
                     const Face& face = mesh_.face(fi);
                     int       o    = face.owner;
                     double    y1   = std::max(face.delta, 1e-20);
-                    double omRes = 60.0 * nu0 / (sst_.coeffs.beta1 * y1 * y1);
+                    // wall anchor with the LOCAL owner-cell viscosity
+                    double nuO   = mu_[o] / std::max(f.rho[o], 1e-30);
+                    double omRes = 60.0 * nuO / (sst_.coeffs.beta1 * y1 * y1);
                     if (settings_.useWallFunctions) {
                         double k_p   = std::max(f.k[o], 1e-30);
                         double uTau  = std::sqrt(std::sqrt(betaStar) * k_p);
@@ -688,23 +880,60 @@ CompressibleConvergenceHistory CompressibleSIMPLESolver::solve(CompressibleFlowF
                     }
                 }
             }
+
+            // field-change norms ||new - old||_inf / ||new||_inf, CARRIED
+            // between updates (never fresh zeros)
+            double kMaxVal = 1e-30, omMaxVal = 1e-30;
+            double kMaxDiff = 0.0, omMaxDiff = 0.0;
+            for (int ci = 0; ci < mesh_.nCells(); ++ci) {
+                kMaxVal  = std::max(kMaxVal,  std::abs(f.k[ci]));
+                omMaxVal = std::max(omMaxVal, std::abs(f.omega[ci]));
+                kMaxDiff  = std::max(kMaxDiff,  std::abs(f.k[ci] - kOld[ci]));
+                omMaxDiff = std::max(omMaxDiff, std::abs(f.omega[ci] - omOld[ci]));
+            }
+            lastKChange  = kMaxDiff / kMaxVal;
+            lastOmChange = omMaxDiff / omMaxVal;
         }
 
-        // 7. Convergence and divergence check
+        // 7. Convergence and divergence check. Turbulence change norms are
+        // CARRIED between updates (never fresh zeros), the temperature
+        // residual is recorded (it was previously computed and discarded),
+        // and convergence judges EVERY solved equation, not only Ux and p.
+        // resP is the pressure-correction (continuity) imbalance, so mass
+        // conservation is inside the criterion through nP.
         CompressibleResidualEntry entry;
         entry.iteration = iter + 1;
         entry.Ux    = resUx.initialRes;
         entry.Uy    = resUy.initialRes;
         entry.p     = resP.initialRes;
-        entry.k     = turbUpdate ? resK.initialRes  : 0.0;
-        entry.omega = turbUpdate ? resOm.initialRes : 0.0;
+        entry.T     = tChange;
+        entry.k     = turbActive ? lastKChange  : 0.0;
+        entry.omega = turbActive ? lastOmChange : 0.0;
         hist.entries.push_back(entry);
 
-        // Check for divergence
-        bool diverged = !std::isfinite(entry.Ux) || !std::isfinite(entry.p)
-                     || !std::isfinite(entry.k)  || !std::isfinite(entry.omega);
+        // Check for divergence. Every recorded residual/norm and both
+        // residuals returned by every linear solve must be finite. The state
+        // itself is also validated DIRECTLY per cell (stateIsValid): a
+        // reduction such as std::max(finite, NaN) keeps its finite first
+        // argument, so aggregate norms alone cannot prove field integrity.
+        // The amplitude limit then runs on a state known finite.
+        auto solverResultFinite = [](const SolverResult& r) {
+            return std::isfinite(r.initialRes) && std::isfinite(r.finalRes);
+        };
+        bool diverged = !std::isfinite(entry.Ux) || !std::isfinite(entry.Uy)
+                     || !std::isfinite(entry.p)  || !std::isfinite(entry.T)
+                     || !std::isfinite(entry.k)  || !std::isfinite(entry.omega)
+                     || !std::isfinite(uChange)  || !std::isfinite(tChange)
+                     || !solverResultFinite(resUx)
+                     || !solverResultFinite(resUy)
+                     || !solverResultFinite(resUz)
+                     || !solverResultFinite(resP)
+                     || !solverResultFinite(resT)
+                     || (turbUpdate && (!solverResultFinite(resK)
+                                     || !solverResultFinite(resOm)))
+                     || !stateIsValid(f);
         if (!diverged) {
-            double pMax = 0;
+            double pMax = 0.0;
             for (int ci = 0; ci < mesh_.nCells(); ++ci)
                 pMax = std::max(pMax, std::abs(f.p[ci]));
             diverged = (pMax > settings_.divergenceLimit);
@@ -719,14 +948,46 @@ CompressibleConvergenceHistory CompressibleSIMPLESolver::solve(CompressibleFlowF
 
         if (settings_.verbose && ((iter + 1) % settings_.reportInterval == 0)) {
             std::cout << "  iter " << iter + 1
-                      << "  Ux=" << entry.Ux << "  p=" << entry.p
+                      << "  Ux=" << entry.Ux << "  Uy=" << entry.Uy
+                      << "  p=" << entry.p << "  T=" << entry.T
                       << "  k="  << entry.k  << "  om=" << entry.omega << "\n";
         }
 
-        // Check convergence
+        // Check convergence over EVERY solved quantity. Ux and p keep this
+        // solver's established ABSOLUTE-threshold semantics for
+        // convergenceTol (the committed regression baselines define it); the
+        // velocity FIELD (both components, in particular the wall-normal one
+        // whose raw equation imbalance is not commensurate with those
+        // thresholds), the temperature, and the carried k/omega all enter as
+        // dimensionless field-change norms. No solved quantity is ignored,
+        // skipped turbulence updates can never inject a false zero, and
+        // convergence is withheld until the startup nuT floor has released
+        // so no run freezes a floored near-wall state.
         double tol = settings_.convergenceTol;
-        bool converged = (entry.Ux < tol) && (entry.p < tol);
+        double maxRes = std::max({entry.Ux, entry.Uy, entry.p,
+                                  uChange, tChange});
+        if (turbActive)
+            maxRes = std::max({maxRes, lastKChange, lastOmChange});
+        // convergence requires that scheduled turbulence has actually run and
+        // its startup floor released: without the turbScheduled gate a solve
+        // could declare convergence BEFORE its first turbulence update, on a
+        // laminar transient the criterion never sees
+        const bool turbScheduled =
+            settings_.turbStartIter < settings_.maxIterations;
+        bool converged = (maxRes < tol) && (iter > 0)
+                         && (!turbScheduled
+                             || (turbActive && f.turbEstablished));
         if (converged) {
+            // k participates in the two-pressure EOS but is intentionally
+            // lagged during the segregated turbulence sweep. Refresh the
+            // algebraic thermodynamic state once at the accepted fixed point
+            // so returned rho and the outlet face correspond to final k.
+            updateDensity(f);
+            if (!stateIsValid(f)) {
+                hist.diverged = true;
+                hist.finalIter = iter + 1;
+                return hist;
+            }
             hist.converged = true;
             hist.finalIter = iter + 1;
             if (settings_.verbose)

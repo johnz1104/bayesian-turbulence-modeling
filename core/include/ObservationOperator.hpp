@@ -31,6 +31,14 @@ struct Observable {
     int    component = 0;           // velocity component for profiles (0=x,1=y,2=z)
     double referenceArea = 1.0;     // for drag normalisation
     double refVelocity = 1.0;       // for Cf / Cd normalisation
+    // Pressure-coefficient references. The incompressible solver stores the
+    // KINEMATIC pressure p/rho, so its legacy taps (refPressure 0,
+    // refDensity 1) are already dimensionally consistent and unchanged. A
+    // COMPRESSIBLE field stores absolute static pressure in Pa, so a tap
+    // must carry the freestream reference pressure and density for
+    // Cp = (p - p_ref) / (0.5 rho_ref U_ref^2) to be a coefficient at all.
+    double refPressure = 0.0;
+    double refDensity  = 1.0;
 };
 
 // maps flow fields to predicted measurements
@@ -42,7 +50,8 @@ public:
     // add observable types
     void addDrag(const std::string& wallPatch, double Cd_obs, double sigma, 
                  double refArea, double refVel, double sigma_model = 0.0);
-    void addPressureTap(const Vec3& loc, double Cp_obs, double sigma, double refVel, double sigma_model = 0.0);
+    void addPressureTap(const Vec3& loc, double Cp_obs, double sigma, double refVel, double sigma_model = 0.0,
+                        double refPressure = 0.0, double refDensity = 1.0);
     void addVelocityProfile(const Vec3& loc, int comp, double Uobs, double sigma, double sigma_model = 0.0);
     void addSkinFriction(const std::string& wallPatch, const Vec3& loc, double Cf_obs, 
                          double sigma, double refVel, double sigma_model = 0.0);
@@ -92,12 +101,15 @@ inline void ObservationOperator::addDrag(
 
 inline void ObservationOperator::addPressureTap(
         const Vec3& loc, double Cp_obs, double sigma,
-        double refVel, double sigma_model) {
+        double refVel, double sigma_model,
+        double refPressure, double refDensity) {
     Observable obs;
     obs.type = ObsType::PressureTap;
     obs.meas = {Cp_obs, sigma, sigma_model};
     obs.location = loc;
     obs.refVelocity = refVel;
+    obs.refPressure = refPressure;
+    obs.refDensity  = refDensity;
     observables_.push_back(obs);
 }
 
@@ -183,16 +195,26 @@ inline double ObservationOperator::computeDrag(
         int ow = face.owner;
         double Sf = face.area;
 
-        // pressure contribution (x-component by convention)
-        double pf = fields.p[ow];   // zero-gradient at wall
+        // UNITS CONTRACT: this generic adapter is valid on KINEMATIC-pressure
+        // fields only (the incompressible convention, p stored as p/rho), where
+        // the p*n*A term and the nu*dU/dn viscous term are commensurate
+        // (both m^2/s^2 per unit density). CompressibleForwardModel rejects
+        // Drag observables at construction because its dimensional pressure
+        // cannot be combined with this kinematic viscous term; DBNS owns the
+        // compressible wall-observation path.
+        double pf = fields.p[ow];
         force += pf * face.normal.x * Sf;
 
-        // viscous contribution: tau_wall ≈ (nu + nuT) * dU/dn
-        double nuEff = nu + fields.nuT[ow];
+        // viscous contribution: MOLECULAR wall shear tau_w = nu * dU/dn.
+        // At a no-slip wall the eddy viscosity vanishes (SST asymptotics),
+        // so the molecular stress IS the wall stress and matches the DNS
+        // definition; including the wall-adjacent cell's nuT would import
+        // any numerical nuT bound into the observable (a permanent 0.1*nu
+        // floor biased it by ~+10 percent). Valid for wall-resolved first
+        // cells; wall-function runs must use the log-law stress instead.
         double delta = std::max(face.delta, 1e-20);
-        // wall shear in x-direction: nuEff * (U_cell - U_wall) / delta
         double Uw_x = fields.U.bface(fi).x;
-        double tau_x = nuEff * (fields.U[ow].x - Uw_x) / delta;
+        double tau_x = nu * (fields.U[ow].x - Uw_x) / delta;
         force += tau_x * Sf;
     }
 
@@ -208,14 +230,19 @@ inline double ObservationOperator::computeSkinFrictionAt(
     if (fi < 0) return 0.0;
     const Face& face = mesh.face(fi);
     int ow = face.owner;
-    double nuEff = nu + fields.nuT[ow];
     double delta = std::max(face.delta, 1e-20);
 
-    // wall-tangential velocity magnitude
+    // MOLECULAR wall shear (see computeDrag): the DNS-comparable Cf, free of
+    // any numerical nuT bound at the wall-adjacent cell. On a compressible
+    // field this normalization is a LOW-MACH NEARLY-CONSTANT-DENSITY
+    // convention: the kinematic stress over 0.5 U^2 equals the dimensional
+    // Cf only up to the wall-to-reference density ratio, which is ~1 for the
+    // committed Ma 0.1 validation; cooled walls or strong density ratios are
+    // NOT supported here (that regime belongs to the DBNS observation path).
     Vec3 Uc = fields.U[ow];
     Vec3 Un = face.normal * Uc.dot(face.normal);   // normal component
     Vec3 Ut = Uc - Un;                              // tangential
-    double tau = nuEff * Ut.norm() / delta;
+    double tau = nu * Ut.norm() / delta;
     double dynP = 0.5 * obs.refVelocity * obs.refVelocity;
     return tau / std::max(dynP, 1e-20);
 }
@@ -235,8 +262,12 @@ inline double ObservationOperator::computePressureAt(
         const Mesh& mesh, const FlowFields& fields,
         const Observable& obs) const {
     int ci = findNearestCell(mesh, obs.location);
-    double dynP = 0.5 * obs.refVelocity * obs.refVelocity;
-    return fields.p[ci] / std::max(dynP, 1e-20);
+    // Cp = (p - p_ref) / (0.5 rho_ref U_ref^2). Legacy incompressible taps
+    // (kinematic p, refPressure 0, refDensity 1) evaluate bit-identically;
+    // compressible absolute-pressure fields need both references or the
+    // "coefficient" is dominated by the ~1e5 Pa offset.
+    double dynP = 0.5 * obs.refDensity * obs.refVelocity * obs.refVelocity;
+    return (fields.p[ci] - obs.refPressure) / std::max(dynP, 1e-20);
 }
 
 // separation point: x-location where wall shear = 0.
@@ -255,12 +286,13 @@ inline double ObservationOperator::computeSeparationPoint(
     for (FaceID fi : pat.faces) {
         const Face& face = mesh.face(fi);
         int ow = face.owner;
-        double nuEff = nu + fields.nuT[ow];
         double delta = std::max(face.delta, 1e-20);
         Vec3 Uc = fields.U[ow];
         Vec3 Ut = Uc - face.normal * Uc.dot(face.normal);
-        // signed tangential shear (use x-component as streamwise indicator)
-        double tau = nuEff * Ut.x / delta;
+        // signed MOLECULAR tangential shear (x-component as streamwise
+        // indicator); the zero-crossing is invariant to the positive
+        // viscosity factor, so this is a consistency change only
+        double tau = nu * Ut.x / delta;
         double x   = face.center.x;
 
         // positive -> non-positive crossing: interpolate x where tau = 0
@@ -289,11 +321,11 @@ inline double ObservationOperator::computeReattachmentLength(
     for (FaceID fi : pat.faces) {
         const Face& face = mesh.face(fi);
         int ow = face.owner;
-        double nuEff = nu + fields.nuT[ow];
         double delta  = std::max(face.delta, 1e-20);
         Vec3 Uc = fields.U[ow];
         Vec3 Ut = Uc - face.normal * Uc.dot(face.normal);
-        double tau = nuEff * Ut.x / delta;
+        // molecular shear; zero-crossing invariant (see computeSeparationPoint)
+        double tau = nu * Ut.x / delta;
         double x   = face.center.x;
 
         // negative -> non-negative crossing: interpolate x where tau = 0

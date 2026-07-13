@@ -3,14 +3,19 @@
 // Purpose: lock in the validated Ma=0.1 channel baseline so future changes to
 // btm_compressible cannot silently break the only validated case.
 //
-// Tolerances are loose (smoke-grade, not validation-grade): the test passes if
-//   - the solver does NOT diverge,
+// Post-audit acceptance: the test passes only if
+//   - the solver GENUINELY converges under the full-residual criterion
+//     (Ux, Uy, p, T, and the carried k/omega change norms; MaxIter fails),
 //   - density and temperature stay positive everywhere,
-//   - the computed Cf is within an order of magnitude of the Dean correlation,
+//   - the computed Cf is within coarse-mesh headroom [0.3x, 3x] of Dean
+//     (the 40x30 regression suite carries the quantitative guard),
 //   - the maximum Mach number remains subsonic (< 0.8).
 //
-// Mesh is intentionally small (16x12) so the test runs in a few seconds even
-// in Debug builds.  Tighter quantitative regression tests belong in a dedicated suite.
+// Mesh is intentionally small (20x16) so the test runs in a few seconds even
+// in Debug builds.  The former 16x12 grid is below the demonstrated resolution
+// threshold for this Re=2.2e6 wall-resolved case and enters a turbulence
+// fixed-point limit cycle after the startup nuT floor is released.  Tighter
+// quantitative regression tests belong in a dedicated suite.
 
 #include "Mesh.hpp"
 #include "SSTModel.hpp"
@@ -36,7 +41,7 @@ namespace {
 
 int main() {
     // Small mesh for fast turnaround; same physics as compressible/Main.cpp.
-    const int nx = 16, ny = 12;
+    const int nx = 20, ny = 16;
     const double Lx = 10.0, H = 1.0;
 
     IdealGasEOS eos;
@@ -61,7 +66,13 @@ int main() {
         mesh, Uin, T_in, p_ref, kIn, omIn);
 
     SolverSettings settings;
-    settings.maxIterations      = 1500;
+    // budget sized for the audit's complete convergence criterion (absolute
+    // Ux, Uy and p thresholds plus dimensionless field-change gates on the
+    // velocity field, T, and the carried k/omega norms; the review added Uy,
+    // whose raw residual is the slowest): genuine convergence lands near
+    // iteration 3600 on this coarse case, versus the premature Ux/p-only
+    // declaration the old 1500 budget was sized for
+    settings.maxIterations      = 5000;
     settings.convergenceTol     = 1e-3;
     settings.divergenceLimit    = 1e10;
     settings.alphaU             = 0.5;
@@ -83,16 +94,44 @@ int main() {
 
     const auto hist = solver.solve(fields);
 
-    REQUIRE(!hist.diverged, "compressible solver diverged at Ma=0.1");
-    REQUIRE(!hist.entries.empty(), "no residual history recorded");
+    if (!hist.entries.empty()) {
+        const auto& e = hist.entries.back();
+        std::printf("  final residuals at %d: Ux=%.6g Uy=%.6g p=%.6g "
+                    "T=%.6g k=%.6g omega=%.6g\n",
+                    hist.finalIter, e.Ux, e.Uy, e.p, e.T, e.k, e.omega);
+    }
 
-    // Positivity invariants: density/temperature/pressure must stay > 0.
+    REQUIRE(!hist.diverged, "compressible solver diverged at Ma=0.1");
+    // audit tightening: a smoke pass requires a GENUINE converged
+    // classification (MaxIter no longer passes silently), under the
+    // full-residual criterion incl. Uy, T and the carried k/omega norms
+    REQUIRE(hist.converged, "compressible solver did not converge at Ma=0.1");
+    REQUIRE(!hist.entries.empty(), "no residual history recorded");
+    // the temperature norm is genuinely recorded (previously discarded):
+    // finite everywhere, and strictly positive somewhere during the transient
+    // (a hardcoded zero would pass a plain >= 0 check)
+    bool anyT = false;
+    for (const auto& e : hist.entries) {
+        REQUIRE(std::isfinite(e.T), "temperature norm must be finite");
+        if (e.T > 0.0) anyT = true;
+    }
+    REQUIRE(anyT, "temperature norm was never positive; not actually recorded");
+
+    // Positivity and EOS invariants. The stored pressure is mechanical; the
+    // recovered thermodynamic pressure must be positive and must equal rho RT
+    // on the RETURNED state, including a final iteration that updated k.
     double rho_min = 1e30, T_min = 1e30, p_min = 1e30;
+    double eos_rel_max = 0.0;
     double Umax = 0.0, Tmax = 0.0;
     for (int ci = 0; ci < mesh.nCells(); ++ci) {
         rho_min = std::min(rho_min, fields.rho[ci]);
         T_min   = std::min(T_min,   fields.T[ci]);
-        p_min   = std::min(p_min,   fields.p[ci]);
+        const double pThermo = fields.p[ci]
+            - (2.0 / 3.0) * fields.rho[ci] * std::max(fields.k[ci], 0.0);
+        p_min   = std::min(p_min, pThermo);
+        const double pEOS = fields.rho[ci] * eos.R * fields.T[ci];
+        eos_rel_max = std::max(eos_rel_max,
+            std::fabs(pThermo - pEOS) / std::max(std::fabs(pEOS), 1.0));
         Tmax    = std::max(Tmax,    fields.T[ci]);
         const double um = std::sqrt(fields.U[ci].x*fields.U[ci].x
                                   + fields.U[ci].y*fields.U[ci].y);
@@ -100,12 +139,29 @@ int main() {
     }
     REQUIRE(rho_min > 0.0, "negative or zero density encountered");
     REQUIRE(T_min   > 0.0, "negative or zero temperature encountered");
-    REQUIRE(p_min   > 0.0, "negative or zero absolute pressure encountered");
+    REQUIRE(p_min   > 0.0, "negative or zero thermodynamic pressure encountered");
+    REQUIRE(eos_rel_max < 1e-12,
+            "returned two-pressure state is not EOS-consistent");
+
+    // The prescribed outlet is thermodynamic. Its stored mechanical boundary
+    // value must use the final owner rho/k, not a state from before energy or
+    // turbulence was updated.
+    for (int pi = 0; pi < mesh.nPatches(); ++pi) {
+        const Patch& pat = mesh.patch(pi);
+        if (pat.type != "outlet") continue;
+        for (FaceID fi : pat.faces) {
+            int o = mesh.face(fi).owner;
+            double pThermoFace = fields.p.bface(fi)
+                - (2.0 / 3.0) * fields.rho[o] * std::max(fields.k[o], 0.0);
+            REQUIRE(std::fabs(pThermoFace - p_ref) < 1e-12 * p_ref,
+                    "outlet mechanical pressure is stale against final rho/k");
+        }
+    }
 
     const double Ma_max = Umax / eos.soundSpeed(Tmax);
     REQUIRE(Ma_max < 0.8, "max Mach exceeded subsonic regime; solver invalid");
 
-    // Loose Cf check: integrate dp/dx and compare to Dean correlation within 10x.
+    // Loose Cf check: integrate dp/dx and compare to the Dean correlation.
     double p_in_avg = 0, p_out_avg = 0;
     int n_in = 0, n_out = 0;
     for (int ci = 0; ci < mesh.nCells(); ++ci) {
@@ -130,13 +186,17 @@ int main() {
                 "Cf=%.5f  Cf_dean=%.5f\n",
                 rho_min, T_min, p_min, Ma_max, Cf, Cf_dean);
 
-    // Cf should be order 1e-3 for Re_D ~ 1.4e5; allow a wide [0.1x, 10x] band so
-    // this remains a smoke test rather than a quantitative validation.
-    if (std::isfinite(Cf) && Cf > 0.0) {
-        const double ratio = Cf / Cf_dean;
-        REQUIRE(ratio > 0.1 && ratio < 10.0,
-                "Cf differs from Dean correlation by more than an order of magnitude");
-    }
+    // audit tightening: the factor-of-ten band was no guard at all. On this
+    // deliberately coarse 20x16 developing channel the dp/dx-integral Cf at
+    // genuine convergence measures 1.28x Dean. Sixteen cells across a
+    // Re=2.2e6 layer under-resolve the log region and the integral spans the
+    // entry length, so the smoke band is [0.3x, 3x]: it catches a broken
+    // momentum/pressure path while the 40x30 station-sampled regression
+    // suite carries the quantitative few-percent guard.
+    REQUIRE(std::isfinite(Cf) && Cf > 0.0, "developed-flow Cf not measurable");
+    const double ratio = Cf / Cf_dean;
+    REQUIRE(ratio > 0.3 && ratio < 3.0,
+            "Cf inconsistent with the Dean correlation beyond coarse-mesh headroom");
 
     std::printf("test_compressible_smoke: all checks passed\n");
     return 0;
