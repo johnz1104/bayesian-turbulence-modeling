@@ -143,6 +143,8 @@ def test_crossmach_study_blocks(cal):
     # single-case train cannot split fit and calibration roles; the record
     # must say so instead of silently sharing the case
     assert out["conformal_roles_disjoint"] is False
+    from UQ.reproduce_compressible import _conformal_claim_tag
+    assert "excluded from formal conformal claims" in _conformal_claim_tag(out)
 
 
 def test_crossmach_multicase_conformal_roles_are_disjoint(cal):

@@ -68,6 +68,14 @@ CONFIG = {
 OUT = os.path.join(_HERE, "..", "..", "results", "couette")
 
 
+def _conformal_claim_tag(row):
+    """Visible guard for diagnostics that cannot make a formal split claim."""
+    if row.get("conformal_roles_disjoint", True):
+        return ""
+    return ("  [single-case fallback: roles NOT disjoint; "
+            "excluded from formal conformal claims]")
+
+
 def _quick(cfg):
     cfg["channel_cases"] = [1000, 2000]
     cfg["couette_cases"] = [171, 507]
@@ -205,7 +213,8 @@ def stage_crossflow(channel_cals, couette_cals):
             print(f"    Couette Re_tau {r['re']:>4}: standard={r['standard_coverage']:.3f}"
                   f"  genBayes={r['tempered_coverage']:.3f}"
                   f"  conformal={r['conformal_coverage']:.3f}"
-                  f" (gap {r['conformal_gap']:+.3f})  [nominal {CONFIG['level']:.2f}]")
+                  f" (gap {r['conformal_gap']:+.3f})  [nominal {CONFIG['level']:.2f}]"
+                  f"{_conformal_claim_tag(r)}")
     return res
 
 
@@ -274,10 +283,9 @@ def stage_within_couette(couette_cals):
         train = tuple(r for r in cases if r != test)
         r = study.predict_heldout(train, test, level=level, seed=seed)
         loro.append(r)
-        tag = "" if r.get("conformal_roles_disjoint", True) else             "  [single-case fallback: roles NOT disjoint, excluded from formal conformal claims]"
         print(f"    held-out Couette Re_tau {test:>4}: standard={r['standard_coverage']:.3f}"
               f" genBayes={r['tempered_coverage']:.3f} conformal={r['conformal_coverage']:.3f}"
-              f" (gap {r['conformal_gap']:+.3f}){tag}")
+              f" (gap {r['conformal_gap']:+.3f}){_conformal_claim_tag(r)}")
     return {"in_distribution": indist,
             "pooled_conformal_coverage": pooled_cov,
             "cross_re_loro": loro}

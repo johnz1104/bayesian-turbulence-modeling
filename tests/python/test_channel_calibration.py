@@ -135,6 +135,8 @@ def test_cross_re_conformal_roles_are_disjoint(rs):
     out1 = study.predict_heldout((550,), 1000, level=0.9, seed=0)
     assert not out1["conformal_roles_disjoint"]
     assert out1["fit_cases"] == [550]
+    from UQ.reproduce_channel import _conformal_claim_tag
+    assert "excluded from formal conformal claims" in _conformal_claim_tag(out1)
 
 
 def test_crossflow_channel_posteriors_reserve_conformal_case(rs):
@@ -157,3 +159,5 @@ def test_crossflow_channel_posteriors_reserve_conformal_case(rs):
     # the conformal posterior is fit on a strict subset of the cases, so it
     # cannot coincide with the full-train tempered posterior
     assert not np.allclose(np.mean(post_conf, axis=0), np.mean(post_t, axis=0))
+    from UQ.reproduce_couette import _conformal_claim_tag
+    assert _conformal_claim_tag({"conformal_roles_disjoint": True}) == ""

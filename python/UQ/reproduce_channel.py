@@ -55,6 +55,14 @@ from UQ import evaluation as ev
 
 PARAM_SETS_AVAILABLE = tuple(PARAM_SETS)
 
+
+def _conformal_claim_tag(row):
+    """Visible guard for diagnostics that cannot make a formal split claim."""
+    if row.get("conformal_roles_disjoint", True):
+        return ""
+    return ("  [single-case fallback: roles NOT disjoint; "
+            "excluded from formal conformal claims]")
+
 CONFIG = {
     "cases": list(CHANNEL_CASES),
     "n_stations": 20,
@@ -279,7 +287,8 @@ def stage_cross_re(cals):
         results["loro"].append(r)
         print(f"    held-out Re_tau {test:>4}: standard cov={r['standard_coverage']:.3f} "
               f"tempered cov={r['tempered_coverage']:.3f} "
-              f"conformal cov={r['conformal_coverage']:.3f} (gap {r['conformal_gap']:+.3f})")
+              f"conformal cov={r['conformal_coverage']:.3f} "
+              f"(gap {r['conformal_gap']:+.3f}){_conformal_claim_tag(r)}")
 
     # held-out-high-Re split: train low, predict high
     train = (180, 550, 1000)
@@ -290,7 +299,8 @@ def stage_cross_re(cals):
         hi.append(r)
         print(f"    held-out Re_tau {test:>4}: standard cov={r['standard_coverage']:.3f} "
               f"tempered cov={r['tempered_coverage']:.3f} "
-              f"conformal cov={r['conformal_coverage']:.3f} (gap {r['conformal_gap']:+.3f})")
+              f"conformal cov={r['conformal_coverage']:.3f} "
+              f"(gap {r['conformal_gap']:+.3f}){_conformal_claim_tag(r)}")
     results["high_re_holdout"] = {"train": list(train), "results": hi}
     return results
 

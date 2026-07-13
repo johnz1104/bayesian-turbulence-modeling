@@ -66,6 +66,12 @@ class CrossFlowStudy:
 
         conf_cal_case = min(self.channel_cals)
         fit_cases = tuple(r for r in train if r != conf_cal_case)
+        # A one-case smoke configuration cannot provide disjoint fit and
+        # calibration cases. Keep the diagnostic computable, but propagate a
+        # machine-readable non-disjoint label from predict_couette so no
+        # consumer can mistake it for a formal conformal result.
+        if not fit_cases:
+            fit_cases = train
         post1_fit = self.channel.pooled_posterior_samples(fit_cases, 1.0,
                                                           seed=seed)
         eta_fit = float(np.mean([self.channel_cals[r].calibrate_eta(
@@ -87,7 +93,8 @@ class CrossFlowStudy:
         """
         cou = self.couette_cals[re]
         cou.set_observation_band(rel)
-        out = {"re": re, "rel": rel, "eta": eta, "level": level}
+        out = {"re": re, "rel": rel, "eta": eta, "level": level,
+               "conformal_roles_disjoint": len(self.channel_cals) > 1}
 
         pp1 = cou.posterior_predictive(post1, eta=1.0, seed=seed + 1)
         out["standard_coverage"], out["standard_sharpness"] = \
