@@ -64,11 +64,12 @@ int main() {
 
     SolverSettings settings;
     // budget sized for the audit's complete convergence criterion (absolute
-    // Ux/p thresholds plus dimensionless field-change gates on the velocity
-    // field, T, and the carried k/omega norms): genuine convergence lands
-    // near iteration 2900 on this coarse case, versus the premature
-    // Ux/p-only declaration the old 1500 budget was sized for
-    settings.maxIterations      = 4000;
+    // Ux, Uy and p thresholds plus dimensionless field-change gates on the
+    // velocity field, T, and the carried k/omega norms; the review added Uy,
+    // whose raw residual is the slowest): genuine convergence lands near
+    // iteration 4900 on this coarse case, versus the premature Ux/p-only
+    // declaration the old 1500 budget was sized for
+    settings.maxIterations      = 7000;
     settings.convergenceTol     = 1e-3;
     settings.divergenceLimit    = 1e10;
     settings.alphaU             = 0.5;
@@ -96,8 +97,15 @@ int main() {
     // full-residual criterion incl. Uy, T and the carried k/omega norms
     REQUIRE(hist.converged, "compressible solver did not converge at Ma=0.1");
     REQUIRE(!hist.entries.empty(), "no residual history recorded");
-    // the temperature residual is recorded (it was previously discarded)
-    REQUIRE(hist.entries.back().T >= 0.0, "temperature residual not recorded");
+    // the temperature norm is genuinely recorded (previously discarded):
+    // finite everywhere, and strictly positive somewhere during the transient
+    // (a hardcoded zero would pass a plain >= 0 check)
+    bool anyT = false;
+    for (const auto& e : hist.entries) {
+        REQUIRE(std::isfinite(e.T), "temperature norm must be finite");
+        if (e.T > 0.0) anyT = true;
+    }
+    REQUIRE(anyT, "temperature norm was never positive; not actually recorded");
 
     // Positivity invariants: density/temperature/pressure must stay > 0.
     double rho_min = 1e30, T_min = 1e30, p_min = 1e30;
