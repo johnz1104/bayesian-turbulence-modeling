@@ -568,19 +568,21 @@ CompressibleConvergenceHistory CompressibleSIMPLESolver::solve(CompressibleFlowF
 
             SmagFrozen = strainRateMagnitude(computeVelocityGradients(f.U));
 
-            // startup-only floor (see SolverSettings::nuTFloorIters), with the
-            // LOCAL kinematic viscosity mu(T)/rho per cell rather than the
-            // inlet-cell value; releases to a non-negativity clamp afterwards,
-            // and warm restarts (turbEstablished carried in the fields) never
-            // re-engage it
+            // startup-only floor (see SolverSettings::nuTFloorIters); releases
+            // to a non-negativity clamp afterwards, and warm restarts
+            // (turbEstablished carried in the fields) never re-engage it. The
+            // floor VALUE stays the steady inlet-cell nu0: a per-cell
+            // mu(T)/rho floor jitters with the startup pressure transient
+            // (rho = p/RT locally) and destabilizes marginal developing
+            // channels; a startup-only numerical guard wants a constant, and
+            // the local-viscosity treatment belongs to the blending
+            // functions, not the floor.
             if (!f.turbEstablished
                 && iter >= settings_.turbStartIter + settings_.nuTFloorIters)
                 f.turbEstablished = true;
-            for (int ci = 0; ci < mesh_.nCells(); ++ci) {
-                double nuTMin = f.turbEstablished
-                    ? 0.0 : 0.1 * mu_[ci] / std::max(f.rho[ci], 1e-30);
+            const double nuTMin = f.turbEstablished ? 0.0 : 0.1 * nu0;
+            for (int ci = 0; ci < mesh_.nCells(); ++ci)
                 f.nuT[ci] = std::max(f.nuT[ci], nuTMin);
-            }
         }
 
         // 3. Momentum equations
