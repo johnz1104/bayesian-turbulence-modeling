@@ -1,6 +1,7 @@
 #include "CompressibleForwardModel.hpp"
 #include <cmath>
 #include <algorithm>
+#include <stdexcept>
 
 CompressibleForwardModel::CompressibleForwardModel(
     const Mesh& mesh,
@@ -16,7 +17,20 @@ CompressibleForwardModel::CompressibleForwardModel(
       bcs_(bcs), eos_(eos), settings_(settings),
       uInit_(uInit), pInit_(pInit), TInit_(TInit),
       kInit_(kInit), omegaInit_(omegaInit)
-{}
+{
+    // The shared observation adapter receives a FlowFields view with no
+    // density or local dynamic viscosity. Its drag operator is therefore
+    // dimensionally valid only for the incompressible kinematic-pressure
+    // convention. Reject the unsupported combination at the typed boundary
+    // instead of leaving a comment on a silently executable mixed-units path.
+    for (const Observable& obs : obsOp_.observables()) {
+        if (obs.type == ObsType::Drag) {
+            throw std::invalid_argument(
+                "CompressibleForwardModel does not support generic Drag "
+                "observations; use the DBNS wall-observation path");
+        }
+    }
+}
 
 EvaluationResult CompressibleForwardModel::evaluate(const std::vector<double>& theta) {
     EvaluationResult result;

@@ -29,6 +29,7 @@ void SIMPLESolver::initUniform(FlowFields& f, const Vec3& Uinit, double pInit, d
     f.F2.setUniform(1.0);
     f.Pk.setUniform(0.0);
     f.CDkw.setUniform(0.0);
+    f.turbEstablished = false;   // cold start: the startup nuT floor window applies
 
     // Initialize omega with the wall-distance profile omega = max(60nu/(beta1*y^2), omegaInit).
     // A uniform omega = omegaInit everywhere creates a cliff-edge gradient when wall cells are
@@ -338,9 +339,26 @@ void SIMPLESolver::assemblePressureCorrection(LinearSystem& sys,
         if (mesh_.patch(pi).type == "outlet" && !mesh_.patch(pi).faces.empty())
             hasOutlet = true;
 
+    // Audit adjudication of this gate: the outlet test identifies where the
+    // p' system is all-Neumann and the odd-even mode is an EXACT null mode.
+    // An outlet's Dirichlet row removes the exact null mode and the
+    // singularity, but interior odd-even susceptibility on a collocated
+    // grid is a local stencil property that boundary rows only damp, so the
+    // question on bounded meshes is EMPIRICAL, not settled by the gate:
+    // the bounded production cases are DNS-validated without the
+    // dissipation and their solved-pressure checkerboard energy measures
+    // low (oddEvenEnergyRatio, pinned by test on the bounded channel), and
+    // the coupled tangent linearises the legacy bounded operator
+    // bit-for-bit. The term therefore stays gated by default with
+    // settings_.rhieChowAllMeshes as the standing probe; enabling it
+    // globally is a reviewed physics change to make if the diagnostic ever
+    // measures otherwise on a production case. The pressure PIN below
+    // remains outlet-free-only, where the singular system needs it.
+    const bool rcActive = !hasOutlet || settings_.rhieChowAllMeshes;
+
     // cell pressure gradient for the Rhie-Chow face-flux dissipation below
     VectorField gradP(mesh_, "gradP");
-    if (!hasOutlet) gradP = greenGaussGrad(f.p);
+    if (rcActive) gradP = greenGaussGrad(f.p);
 
     // internal faces
     for (int fi = 0; fi < nIF; ++fi) {
@@ -379,7 +397,7 @@ void SIMPLESolver::assemblePressureCorrection(LinearSystem& sys,
         Vec3 Uf = f.U[o] * face.weight + f.U[n] * (1.0 - face.weight);
         double massFlux = (Uf.x * face.normal.x + Uf.y * face.normal.y
                          + Uf.z * face.normal.z) * Sf;
-        if (!hasOutlet) {
+        if (rcActive) {
             Vec3 ehat = face.d / std::max(face.delta, 1e-30);
             Vec3 gbar = gradP[o] * face.weight + gradP[n] * (1.0 - face.weight);
             massFlux += -dP_f * Sf * ((f.p[n] - f.p[o]) / delta - gbar.dot(ehat));
@@ -679,6 +697,14 @@ ConvergenceHistory SIMPLESolver::solve(FlowFields& f) { // input: FlowField obje
     // Passed to assembleOmegaEquation so both k and omega production see the same velocity gradients, preventing omega blow-up.
     ScalarField SmagFrozen(mesh_, "Smag");
 
+    // Last-computed turbulence field-change norms, CARRIED ACROSS iterations:
+    // on non-update iterations (turb_update_interval > 1) the convergence
+    // check must see the most recent turbulence state, never a fresh zero
+    // (a zero would let the solve declare convergence between turbulence
+    // updates while k/omega are still moving). Initialised to 1 so nothing
+    // can claim turbulence convergence before the first update.
+    double lastKChange = 1.0, lastOmChange = 1.0;
+
     // SIMPLE Iteration loop
     for (int iter = 0; iter < settings_.maxIterations; ++iter) {
         // 1. Update SST fields (at turbUpdateInterval cadence after turbStartIter)
@@ -703,13 +729,18 @@ ConvergenceHistory SIMPLESolver::solve(FlowFields& f) { // input: FlowField obje
             // Using the frozen Smag decouples the turbulence model from these numerical oscillations
             SmagFrozen = strainRateMagnitude(computeVelocityGradients(f.U));
 
-            // nuT floor: prevents nuT from collapsing to zero in early iterations
-            // Set `nuT_min = 0.1 * nu` 
-            // This prevents eddy viscosity from collapsing to zero in cells where the Bradshaw limiter produces 
-            // extremely small values (like near-wall cells where omega is very large and drive nuT -> 0)
-            //    - prevents cases that removes turbulent diffusion from the momentum equation 
-            //      and creates unphysical laminar-like velocity gradients
-            const double nuTMin = 0.1 * nu_;
+            // nuT floor, STARTUP-ONLY: guards against early k-omega collapse
+            // (cells where the Bradshaw limiter drives nuT toward zero before
+            // the turbulence fields establish). SST requires nuT -> 0 at a
+            // resolved no-slip wall, so the floor releases after the startup
+            // window and the converged state is floor-free; a permanent floor
+            // biases the near-wall diffusion and the wall stress (~+10 percent
+            // where it binds at y+ ~ 1). Warm restarts carry
+            // f.turbEstablished = true and never re-engage the floor.
+            if (!f.turbEstablished
+                && iter >= settings_.turbStartIter + settings_.nuTFloorIters)
+                f.turbEstablished = true;
+            const double nuTMin = f.turbEstablished ? 0.0 : 0.1 * nu_;
             for (int ci = 0; ci < mesh_.nCells(); ++ci)
                 f.nuT[ci] = std::max(f.nuT[ci], nuTMin);
         }
@@ -854,6 +885,8 @@ ConvergenceHistory SIMPLESolver::solve(FlowFields& f) { // input: FlowField obje
             }
             kChangeNorm  = kMaxDiff / kMaxVal;
             omChangeNorm = omMaxDiff / omMaxVal;
+            lastKChange  = kChangeNorm;
+            lastOmChange = omChangeNorm;
         }
 
         // 6. Track residuals
@@ -867,8 +900,11 @@ ConvergenceHistory SIMPLESolver::solve(FlowFields& f) { // input: FlowField obje
         entry.Uy    = resUy.initialRes;
         entry.Uz    = resUz.initialRes;
         entry.p     = resP.initialRes;
-        entry.k     = kChangeNorm;
-        entry.omega = omChangeNorm;
+        // the CARRIED norms: on non-update iterations these hold the most
+        // recent turbulence change, so the recorded history and the
+        // convergence check below never see a false zero
+        entry.k     = turbActive ? lastKChange  : 0.0;
+        entry.omega = turbActive ? lastOmChange : 0.0;
 
         // store iter-0 norms for normalisation. The pressure norm keeps a
         // running max over a short warmup: on a fully periodic domain a
@@ -903,9 +939,10 @@ ConvergenceHistory SIMPLESolver::solve(FlowFields& f) { // input: FlowField obje
         double nUx = safeNorm(entry.Ux, normMom0);
         double nUy = safeNorm(entry.Uy, normMom0);
         double nP  = safeNorm(entry.p,  normP0_);
-        // k and omega: field-change norms are already normalised (no iter-0 reference needed)
-        double nK  = kChangeNorm;
-        double nOm = omChangeNorm;
+        // k and omega: carried field-change norms (already normalised; the
+        // most recent update's change, never a fresh zero between updates)
+        double nK  = lastKChange;
+        double nOm = lastOmChange;
         hist.entries.push_back(entry);
 
         // computes maximum normalised residual
@@ -922,20 +959,32 @@ ConvergenceHistory SIMPLESolver::solve(FlowFields& f) { // input: FlowField obje
             std::cout << "\n";
         }
 
-        // convergence check (all normalised residuals below tolerance)
-        if (maxRes < settings_.convergenceTol && iter > 0) {
+        // If any individual residual or carried norm is non-finite, force
+        // maxRes to infinity BEFORE the convergence test so a NaN can neither
+        // be masked by chained std::max operand ordering nor slip past the
+        // (NaN < tol) == false accident into a later iteration
+        if (!std::isfinite(entry.Ux) || !std::isfinite(entry.Uy)
+            || !std::isfinite(entry.Uz) || !std::isfinite(entry.p)
+            || !std::isfinite(entry.k) || !std::isfinite(entry.omega)
+            || !std::isfinite(lastKChange) || !std::isfinite(lastOmChange))
+            maxRes = std::numeric_limits<double>::infinity();
+
+        // convergence check (all normalised residuals below tolerance).
+        // Scheduled turbulence must have RUN and its startup floor released:
+        // without the turbScheduled gate a solve could declare convergence
+        // before its first turbulence update, on a laminar transient the
+        // criterion never sees; with it, no run can freeze a floored or
+        // turbulence-free state as its converged solution.
+        const bool turbScheduled =
+            settings_.turbStartIter < settings_.maxIterations;
+        if (maxRes < settings_.convergenceTol && iter > 0
+            && (!turbScheduled || (turbActive && f.turbEstablished))) {
             hist.converged = true;
             hist.finalIter = iter;
             if (settings_.verbose)
                 std::cout << "  SIMPLE converged at iteration " << iter << "\n";
             return hist;
         }
-
-        // If any individual residual is NaN, force maxRes to infinity so divergence is caught
-        // (std::max silently propagates NaN, masking divergence as a false convergence)
-        if (std::isnan(entry.Ux) || std::isnan(entry.Uy) || std::isnan(entry.Uz)
-            || std::isnan(entry.p) || std::isnan(entry.k) || std::isnan(entry.omega))
-            maxRes = std::numeric_limits<double>::infinity();
 
         // divergence check
         if (std::isnan(maxRes) || std::isinf(maxRes) || maxRes > settings_.divergenceLimit) {
@@ -962,14 +1011,16 @@ ConvergenceHistory SIMPLESolver::solve(FlowFields& f) { // input: FlowField obje
 //  touched.
 // ===================================================================================
 
-// Recompute the SST closure of `work` from sst_.coeffs (computeFields + 0.1ν floor) and
-// the frozen |S|, exactly mirroring the turbulence-update branch of solve().
+// Recompute the SST closure of `work` from sst_.coeffs, exactly mirroring the
+// turbulence-update branch of solve() at a CONVERGED state: the startup-only
+// nuT floor has released by convergence, so the mirror applies only the
+// non-negativity clamp (a floored mirror would make residual/derivative
+// evaluations disagree with the converged assembly).
 void SIMPLESolver::recomputeClosure(FlowFields& work, ScalarField& Smag) {
     sst_.computeFields(mesh_, work.k, work.omega, work.U, nu_,
                        work.nuT, work.F1, work.F2, work.Pk, work.CDkw);
-    const double nuTMin = 0.1 * nu_;
     for (int ci = 0; ci < mesh_.nCells(); ++ci)
-        work.nuT[ci] = std::max(work.nuT[ci], nuTMin);
+        work.nuT[ci] = std::max(work.nuT[ci], 0.0);
     Smag = strainRateMagnitude(computeVelocityGradients(work.U));
 }
 
@@ -1043,13 +1094,14 @@ std::vector<std::vector<double>> SIMPLESolver::assembleResidualSensitivity(
     ScalarField Smag(mesh_, "Smag");
     recomputeClosure(work, Smag);
 
-    // pointwise closure sensitivities per cell (Layer 1)
+    // pointwise closure sensitivities per cell (Layer 1); the startup-only
+    // nuT floor has released at the converged states this is evaluated on,
+    // so the derivative carries no floor dead-zone
     const auto& wd = mesh_.wallDistance();
-    const double nuTMin = 0.1 * nu_;
     std::vector<SSTClosureSensitivity> cs(nc);
     for (int ci = 0; ci < nc; ++ci)
         cs[ci] = sst_.closureSensitivity(work.k[ci], work.omega[ci], Smag[ci],
-                                         wd[ci], nu_, work.CDkw[ci], nuTMin);
+                                         wd[ci], nu_, work.CDkw[ci], 0.0);
 
     std::vector<std::vector<double>> dR(11, std::vector<double>(4 * nc, 0.0));
     const int BUX = 0, BUY = nc, BK = 2 * nc, BOM = 3 * nc;

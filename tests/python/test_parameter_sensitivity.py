@@ -189,6 +189,11 @@ def test_residual_sensitivity_bfs(bfs_sens):
 
 
 def test_kappa_residual_is_exactly_zero(channel_sens):
+    # INTENT (audit-documented): this PINS that the inferential kappa is inert
+    # by construction (no transport equation reads it; wall functions read
+    # settings_.vonKarman). all11 keeps kappa only for reproducibility of the
+    # archived identifiability study; new studies use live10. If this test
+    # ever fails, kappa became live and the parameter sets need rethinking.
     """κ (index 10) enters no residual term ⇒ ∂R/∂κ ≡ 0 analytically and FD ≈ 0."""
     rs, sens, _mesh, _status = channel_sens
     th = _theta_points(rs)[0]

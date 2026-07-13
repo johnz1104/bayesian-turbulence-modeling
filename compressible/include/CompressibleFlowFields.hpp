@@ -24,6 +24,11 @@ struct CompressibleFlowFields {
     ScalarField Pk;     // turbulence production
     ScalarField CDkw;   // cross-diffusion
 
+    // Turbulence-establishment marker (see FlowFields::turbEstablished): the
+    // startup-only nuT floor applies until this flips, and warm restarts carry
+    // it so the floor never re-engages on an established state.
+    bool turbEstablished = false;
+
     CompressibleFlowFields() = default;
     explicit CompressibleFlowFields(const Mesh& mesh)
         : U(mesh,"U"), p(mesh,"p"), T(mesh,"T"), rho(mesh,"rho"),

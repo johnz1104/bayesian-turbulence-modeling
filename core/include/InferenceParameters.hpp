@@ -96,8 +96,11 @@ struct InferenceParameterSet {
         return bounds;
     }
 
-    // check if theta is within physical bounds
+    // check if theta is within physical bounds; a size mismatch is
+    // out-of-bounds by definition (the audit found the loop indexing theta
+    // before any size check, undefined behaviour on a short vector)
     bool inBounds(const std::vector<double>& theta) const {
+        if (static_cast<int>(theta.size()) != nActive()) return false;
         auto lo = lowerBounds();
         auto hi = upperBounds();
         for (int i = 0; i < nActive(); ++i) {
@@ -124,9 +127,21 @@ struct InferenceParameterSet {
         return {"nearWall4", {9, 8, 2, 0}, SSTCoefficients{}};
     }
 
-    // all 11 — only with large multi-QoI datasets
+    // all 11 — only with large multi-QoI datasets. NOTE: index 10 (kappa)
+    // is INERT by construction: no transport equation reads the inferential
+    // kappa (wall functions read settings_.vonKarman), and the suite pins the
+    // exactly-zero sensitivity. Kept for reproducibility of the archived
+    // identifiability study, whose "kappa unidentifiable" reading is a
+    // structural disconnection, not a physical result. New studies should
+    // prefer live10.
     static InferenceParameterSet all11() {
         return {"all11", {0,1,2,3,4,5,6,7,8,9,10}, SSTCoefficients{}};
+    }
+
+    // the 10 coefficients that actually enter the solved equations (all11
+    // minus the inert kappa): the full-dimensional set for new studies
+    static InferenceParameterSet live10() {
+        return {"live10", {0,1,2,3,4,5,6,7,8,9}, SSTCoefficients{}};
     }
 
     // Arbitrary active subset — enables the d_theta scaling sweep (e.g. d_theta=8)

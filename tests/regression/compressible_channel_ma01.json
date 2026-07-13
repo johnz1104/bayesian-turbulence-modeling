@@ -35,5 +35,5 @@
   "mass_flux_rel_imbalance_max": 0.001
  },
  "rationale": "Tolerances are loose enough to absorb 64-bit FP non-determinism between runs and between minor SST/EOS code changes, but tight enough to flag a real regression (e.g. solver instability, mass-conservation drift, or wall-clustering changes that shift Cf or T).",
- "note": "Regenerated 2026-07-13 on this branch after the two-pressure convention (mechanical momentum pressure, thermodynamic EOS/observables/boundaries/initialization) and the molecular wall treatment of the implicit momentum diffusion and the transpose correction: same physics contract, shifted discrete wall shear and residual path. The post-merge integration pass regenerates once more on the combined solver."
+ "note": "Temporary merge resolution from the two-pressure branch; regenerated once below on the authoritative integrated solver head."
 }

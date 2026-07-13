@@ -158,6 +158,9 @@ class HillsBaselineRANS:
         settings.convergence_tol = cfg["conv_tol"]
         settings.alpha_u = cfg["alpha_u"]
         settings.alpha_p = cfg["alpha_p"]
+        # standing probe hook: Rhie-Chow face dissipation on all meshes
+        # (default off; the separated-flow off/on adjudication sets it)
+        settings.rhie_chow_all_meshes = cfg.get("rhie_chow_all_meshes", False)
         settings.alpha_k = 0.4
         settings.alpha_omega = 0.4
         settings.inner_iterations = 300

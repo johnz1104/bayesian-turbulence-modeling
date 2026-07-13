@@ -41,11 +41,39 @@ target_link_libraries(test_sst_production_2003 PRIVATE btm_core)
 add_test(NAME sst_production_2003 COMMAND test_sst_production_2003)
 set_tests_properties(sst_production_2003 PROPERTIES TIMEOUT 30 LABELS "unit;sst")
 
+# ---- cp_normalization: pressure-coefficient references (audit fix) ----
+add_executable(test_cp_normalization cpp/test_cp_normalization.cpp)
+target_link_libraries(test_cp_normalization PRIVATE btm_core)
+add_test(NAME cp_normalization COMMAND test_cp_normalization)
+set_tests_properties(cp_normalization PROPERTIES TIMEOUT 30 LABELS "unit;observation")
+
+# ---- infra_fixes: Gauss-Seidel sweep, inBounds guard, cache copy, RC probe ----
+add_executable(test_infra_fixes cpp/test_infra_fixes.cpp)
+target_link_libraries(test_infra_fixes PRIVATE btm_incompressible)
+add_test(NAME infra_fixes COMMAND test_infra_fixes)
+set_tests_properties(infra_fixes PROPERTIES TIMEOUT 240 LABELS "unit;infra")
+
 # ---- injection_source: Reynolds-stress injection manufactured-field test ----
 add_executable(test_injection_source cpp/test_injection_source.cpp)
 target_link_libraries(test_injection_source PRIVATE btm_incompressible)
 add_test(NAME injection_source COMMAND test_injection_source)
 set_tests_properties(injection_source PROPERTIES TIMEOUT 30 LABELS "unit;injection")
+
+# ---- nut_floor_release: startup-only floor + molecular wall-stress observable ----
+add_executable(test_nut_floor_release cpp/test_nut_floor_release.cpp)
+target_link_libraries(test_nut_floor_release PRIVATE btm_incompressible)
+add_test(NAME nut_floor_release COMMAND test_nut_floor_release)
+set_tests_properties(nut_floor_release PROPERTIES TIMEOUT 240 LABELS "unit;solver;sst")
+
+# ---- convergence_accounting: carried turbulence norms under update intervals ----
+add_executable(test_convergence_accounting cpp/test_convergence_accounting.cpp)
+target_link_libraries(test_convergence_accounting PRIVATE btm_incompressible)
+add_test(NAME convergence_accounting COMMAND test_convergence_accounting)
+
+add_executable(test_state_validation cpp/test_state_validation.cpp)
+target_link_libraries(test_state_validation PRIVATE btm_compressible)
+add_test(NAME state_validation COMMAND test_state_validation)
+set_tests_properties(convergence_accounting PROPERTIES TIMEOUT 240 LABELS "unit;solver")
 
 # ---- periodic_channel: streamwise-periodic curved-channel mesh + body force ----
 add_executable(test_periodic_channel cpp/test_periodic_channel.cpp)
@@ -61,6 +89,15 @@ add_test(NAME compressible_smoke COMMAND test_compressible_smoke)
 add_executable(test_two_pressure_contract cpp/test_two_pressure_contract.cpp)
 target_link_libraries(test_two_pressure_contract PRIVATE btm_compressible)
 add_test(NAME two_pressure_contract COMMAND test_two_pressure_contract)
+
+add_executable(test_compressible_observation_contract
+               cpp/test_compressible_observation_contract.cpp)
+target_link_libraries(test_compressible_observation_contract PRIVATE btm_compressible)
+add_test(NAME compressible_observation_contract
+         COMMAND test_compressible_observation_contract)
+set_tests_properties(compressible_observation_contract PROPERTIES
+    TIMEOUT 30
+    LABELS "unit;observation;compressible")
 set_tests_properties(compressible_smoke PROPERTIES
     TIMEOUT 180
     LABELS "smoke;compressible")

@@ -55,16 +55,18 @@ void ParameterSensitivity::recompute(const std::vector<double>& theta11, FlowFie
     work = state_;
     sst.computeFields(mesh_, work.k, work.omega, work.U, nu_,
                       work.nuT, work.F1, work.F2, work.Pk, work.CDkw);
-    const double floor = 0.1 * nu_;
+    // startup-only nuT floor has released at the converged states this path
+    // evaluates, so the mirror applies only the non-negativity clamp and the
+    // sensitivity carries no floor dead-zone
     for (int ci = 0; ci < mesh_.nCells(); ++ci)
-        work.nuT[ci] = std::max(work.nuT[ci], floor);
+        work.nuT[ci] = std::max(work.nuT[ci], 0.0);
     if (cs) {
         ScalarField Smag = strainRateMagnitude(computeVelocityGradients(work.U));
         const auto& wd = mesh_.wallDistance();
         cs->resize(mesh_.nCells());
         for (int ci = 0; ci < mesh_.nCells(); ++ci)
             (*cs)[ci] = sst.closureSensitivity(work.k[ci], work.omega[ci], Smag[ci],
-                                               wd[ci], nu_, work.CDkw[ci], floor);
+                                               wd[ci], nu_, work.CDkw[ci], 0.0);
     }
 }
 

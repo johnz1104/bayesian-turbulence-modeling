@@ -27,8 +27,12 @@ public:
     explicit WarmStartCache(int maxSize = 50, double threshold = 0.5)
         : maxSize_(maxSize), threshold_(threshold) {}
 
-    // searches for the closest cached parameter vector; returns nullptr if none
-    const CacheEntry* findNearest(const std::vector<double>& theta) const {
+    // Copies the closest cached solution into `out` WHILE HOLDING THE LOCK
+    // and reports whether one was found. The previous interface returned a
+    // pointer into the deque after releasing the mutex, so a concurrent
+    // store() could evict the entry before the caller copied it
+    // (use-after-free under concurrent evaluate); value semantics close it.
+    bool findNearest(const std::vector<double>& theta, CacheEntry& out) const {
         std::lock_guard<std::mutex> lock(mtx_);
         const CacheEntry* best = nullptr;
         double bestDist = threshold_;
@@ -36,7 +40,9 @@ public:
             double d = euclidean(theta, e.theta);
             if (d < bestDist) { bestDist = d; best = &e; }
         }
-        return best;
+        if (!best) return false;
+        out = *best;                 // deep copy under the lock
+        return true;
     }
 
     // store a converged solution

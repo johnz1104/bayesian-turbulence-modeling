@@ -171,6 +171,48 @@ void SSTModel::computeFields(
     }
 }
 
+// Per-cell-viscosity overload (see header): same loop with nuLocal[ci] in the
+// blending functions.
+void SSTModel::computeFields(
+        const Mesh& mesh,
+        const ScalarField& k,
+        const ScalarField& omega,
+        const VectorField& U,
+        const ScalarField& nuLocal,
+        ScalarField& nuT,
+        ScalarField& F1field,
+        ScalarField& F2field,
+        ScalarField& Pk,
+        ScalarField& CDkwField
+    ) const {
+
+    VelocityGradients vg = computeVelocityGradients(U);
+    ScalarField Smag = strainRateMagnitude(vg);
+    VectorField gradK     = greenGaussGrad(k);
+    VectorField gradOmega = greenGaussGrad(omega);
+    const auto& wd = mesh.wallDistance();
+
+    for (int ci = 0; ci < mesh.nCells(); ++ci) {
+        double kc  = std::max(k[ci], 0.0);
+        double wc  = std::max(omega[ci], 1e-20);
+        double y   = std::max(wd[ci], 1e-20);
+        double Sc  = Smag[ci];
+        double nuC = nuLocal[ci];
+
+        double CDkw = crossDiffusion(gradK[ci], gradOmega[ci], wc);
+        CDkwField[ci] = CDkw;
+
+        double CDpos = std::max(CDkw, 1e-20);
+        F1field[ci] = (variant == SSTVariant::KOmega)
+                          ? 1.0
+                          : computeF1(kc, wc, y, nuC, CDpos);
+        F2field[ci] = computeF2(kc, wc, y, nuC);
+
+        nuT[ci] = eddyViscosity(kc, wc, Sc, F2field[ci]);
+        Pk[ci] = production(nuT[ci], Sc, kc, wc);
+    }
+}
+
 // ADJOINT GROUNDWORK — pointwise analytic ∂(closure)/∂θ (see header).
 // Mirrors computeF1/computeF2/eddyViscosity/production exactly, then differentiates the
 // ACTIVE branch w.r.t. each coefficient.  No derivative is ever taken w.r.t. the fields
