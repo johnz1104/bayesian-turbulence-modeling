@@ -320,9 +320,10 @@ injection is magnitude-capped by the running k) is unchanged by every item below
    flow does not beat the moderated corner family on reattachment CRPS on either
    geometry (BFS 0.634 fair vs 0.380 exact; hills 1.795 fair vs 1.265 exact). One
    ranking is convention-dependent and is reported as such: on the hills the Gaussian
-   fair score (1.253) and the corner family's exact score (1.265) are practically tied,
-   so "which non-flow method scores best there" has no convention-robust answer; on the
-   BFS the corner family leads under either convention.
+   fair score (1.253) and the corner family's exact score (1.265) are numerically close
+   (no Monte Carlo uncertainty analysis backs a stronger word), so "which non-flow
+   method scores best there" has no convention-robust answer; on the BFS the corner
+   family leads under either convention.
 
 3. Precise naming of the eigenspace baseline. What this study ran is the THREE-CORNER
    EIGENVALUE-ONLY perturbation of Emory, Larsson and Iaccarino (2013): eigenvalues moved
@@ -340,12 +341,23 @@ injection is magnitude-capped by the running k) is unchanged by every item below
    specification form (production-reducing exactly in separated shear layers), the omega
    cross-diffusion source is no longer clipped, and the baseline momentum operator now
    assembles the full Boussinesq deviatoric stress (the variable-viscosity transpose
-   term, identically zero in the attached calibrations, is not zero here). The injection
-   identity itself was verified EXACT (the injected force is -div(2 k db) pointwise, so
-   the zero-correction recovery claimed in the memo holds; the audit's contrary reading
-   is incorrect), so the magnitude-cap diagnosis stands as written. A BFS probe on the
-   corrected solver (baseline + flow/Gaussian injection ensembles + three-corner AND
-   five-state families, fair scoring for the sampled ensembles and exact discrete-
-   forecast scoring for the bounding families, status-gated members) re-tests the verdict:
-   [pending probe results; hills regeneration follows only if the probe moves a
-   conclusion rather than a number].
+   term, identically zero in the attached calibrations, is not zero here). Two distinct
+   exactness statements are kept apart. The DELTA-SOURCE algebra was verified exact and
+   stands: the injected force is -div(2 k db) pointwise, it telescopes against the
+   baseline stress operator whatever that operator contains, and a zero correction
+   recovers the baseline solve bit for bit (the audit's contrary reading of a
+   cancellation defect is incorrect). The TOTAL modeled stress is a different matter:
+   before the operator completion the equation the injected solve satisfied was the
+   baseline's incomplete stress divergence plus the exact delta source, so the total
+   target stress -div(2 nu_t S - 2/3 k I + 2 k db) is represented exactly only on the
+   corrected solver. The magnitude-cap diagnosis rests on the delta-source algebra and
+   the running-k scale, not on total-stress exactness, so it stands as written; the
+   corrected operator is one of the reasons the probe below is run at all. A BFS probe
+   on the corrected solver (baseline + flow/Gaussian injection ensembles + three-corner
+   AND five-state families, fair scoring for the sampled ensembles and exact discrete-
+   forecast scoring for the bounding families, status-gated members) re-tests the
+   verdict. As of this revision (2026-07-13) THE PROBE HAS NOT BEEN RUN: this section
+   records the protocol before its outcome is observed, the probe result will be
+   reported in a separate follow-up pull request, and the hills regeneration decision
+   (regenerate only if the probe moves a conclusion rather than a number) is likewise
+   pre-committed here.
