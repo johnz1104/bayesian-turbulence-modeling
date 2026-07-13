@@ -662,8 +662,12 @@ baseline's name, one added baseline, and one representation declaration.
    assembled the omega-equation production as alpha*rho*S^2, the documented
    misprint of the 2003 SST paper; the specification form
    alpha*rho*min(S^2, 10 betaStar rho k omega / mu_t) is now implemented
-   (bounded above by the misprint, active exactly at the shock foot and in
-   separated shear layers). Every quantity this study derives from a baseline
+   (bounded above by the misprint pointwise; where the limiter actually
+   activates on this data is MEASURED, not assumed: every corrected baseline
+   reports its limiter activation fraction and a spatial activation map,
+   committed with the gate A/B evidence, so the localization to shock feet
+   and separated shear layers is a reported result rather than a premise).
+   Every quantity this study derives from a baseline
    solve (gates A and B, db and dq targets, injection references, wall QoIs)
    is regenerated on the corrected solver. All interaction baselines, a-priori
    targets, trained models, and a-posteriori ensembles computed before this
