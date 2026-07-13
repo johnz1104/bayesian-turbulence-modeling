@@ -671,22 +671,29 @@ baseline's name, one added baseline, and one representation declaration.
    Gates A and B are re-adjudicated on the corrected solver before any
    downstream stage runs.
 
-2. Fair score estimators. UQ.evaluation.crps_ensemble and energy_score now
-   implement the fair (unbiased, M(M-1) off-diagonal) finite-ensemble
-   estimators; the previous M^2 forms remain available only as *_biased.
-   Every score in this study's clauses is computed with the fair estimators.
-   The family conjunctions (clause 2 of the a-priori leg; the baseline
-   comparisons of the a-posteriori leg) compare equal-size ensembles, where
-   the estimator change does not reorder methods in expectation; the
-   uniform-ensemble reading of the deterministic envelope is now computed
-   fairly at its small member count rather than being penalized by it.
+2. Score estimator conventions pinned. UQ.evaluation.crps_ensemble and
+   energy_score now implement the fair (unbiased, M(M-1) off-diagonal)
+   finite-ensemble estimators; the previous M^2 forms remain available as
+   *_biased. The convention split is pinned by what the members are: every
+   sampled predictive in this study (flow draws, Gaussian draws, posterior
+   ensembles) is scored with the fair estimators, and every deterministic
+   bounding family (the eigenspace variants) is scored by the M^2 plug-in,
+   which for a finite discrete forecast is its EXACT CRPS/energy score, not
+   a biased estimate; the fair reading of a bounding family is reported as
+   sensitivity only, never in a clause. No claim is made that estimator
+   choice preserves method orderings (at equal ensemble size the fair and
+   plug-in scores differ by a dispersion-dependent term, so reordering is
+   possible in principle); instead the convention above is fixed here,
+   before any corrected-target score is computed, and every clause uses it.
 
 3. Eigenspace baseline named precisely, and one baseline added. The
    pre-registered "eigenspace-perturbation corner family" is the three-corner
    EIGENVALUE-ONLY method (Emory, Larsson and Iaccarino 2013), and is scored
    exactly as pre-registered. The five-state extension (Iaccarino, Mishra and
-   Ghili 2017: the three corners plus two production-extremal eigenvector
-   permutations, UQ.eigenspace.five_state_set) is ADDED as a reported
+   Ghili 2017: the 1C and 2C eigenvalue corners each paired with both
+   production-extremal eigenvector alignments, plus the isotropic 3C corner,
+   the set {(1C, vmax), (1C, vmin), (2C, vmax), (2C, vmin), 3C},
+   UQ.eigenspace.five_state_set) is ADDED as a reported
    baseline on the same folds with the same injection and scoring; it does
    not replace the pre-registered corner family in any clause, and its
    envelope is reported alongside. The structural fact stands unchanged:
@@ -711,7 +718,19 @@ baseline's name, one added baseline, and one representation declaration.
    integrity-basis coefficients (UQ.discrepancy.basis_coefficients /
    basis_reconstruct) with the same invariant conditioning; scoring clauses
    evaluate the reconstructed tensor components exactly as pre-registered, so
-   thresholds are untouched. The dq legs are vectors under the wall-frame
+   thresholds are untouched. The representation carries pre-registered
+   FEASIBILITY GATES, checked on the corrected a-priori targets BEFORE any
+   training and reported in the memo either way
+   (UQ.discrepancy.basis_diagnostics): (i) the per-station basis rank and
+   condition number over the interaction-region samples are reported (2-D
+   mean flows admit at most three independent tensors, so a rank collapse is
+   expected structure, not failure); (ii) the DNS db targets must be
+   ACHIEVABLE in the basis, gated as median relative reconstruction residual
+   at most 0.20 over interaction-region samples, with the 90th percentile
+   reported as a diagnostic. If the gate fails, the db leg REVERTS to the
+   raw-component parameterization for flow and Gaussian identically, the
+   reversion is stated in the memo, and the residual numbers are published;
+   the basis is then a documented negative on this data, not a silent swap. The dq legs are vectors under the wall-frame
    convention already fixed by the loaders and are unchanged. The coupling
    masks of the flow are the corrected complementary-alternation masks (the
    shift-and-shrink defect at five components is fixed); the two-component dq
