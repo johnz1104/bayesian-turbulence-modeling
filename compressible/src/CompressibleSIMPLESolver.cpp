@@ -727,7 +727,12 @@ CompressibleConvergenceHistory CompressibleSIMPLESolver::solve(CompressibleFlowF
             resOm = tSolver_->solve(omSys, omVec, settings_.innerIterations, settings_.innerTolerance);
             for (int ci = 0; ci < mesh_.nCells(); ++ci) f.omega[ci] = omVec[ci];
             f.omega.clamp(settings_.omegaMin, 1e15);
-            applyOmegaBC(f.omega, mesh_, fbc_tmp, nu0, sst_.coeffs.beta1);
+            // boundary-face omega with the LOCAL owner-cell viscosity, not
+            // the inlet value (review fix; matches the wall-anchor treatment)
+            ScalarField nuLocalBC(mesh_, "nuLocalBC");
+            for (int ci = 0; ci < mesh_.nCells(); ++ci)
+                nuLocalBC[ci] = mu_[ci] / std::max(f.rho[ci], 1e-30);
+            applyOmegaBC(f.omega, mesh_, fbc_tmp, nuLocalBC, sst_.coeffs.beta1);
 
             // Re-pin near-wall omega.  PHASE 7 — when settings_.useWallFunctions
             // is on, blend the resolved-LES form with the log-law form so the

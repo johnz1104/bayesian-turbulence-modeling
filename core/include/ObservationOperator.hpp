@@ -49,7 +49,8 @@ public:
 
     // add observable types
     void addDrag(const std::string& wallPatch, double Cd_obs, double sigma, 
-                 double refArea, double refVel, double sigma_model = 0.0);
+                 double refArea, double refVel, double sigma_model = 0.0,
+                 double refPressure = 0.0, double refDensity = 1.0);
     void addPressureTap(const Vec3& loc, double Cp_obs, double sigma, double refVel, double sigma_model = 0.0,
                         double refPressure = 0.0, double refDensity = 1.0);
     void addVelocityProfile(const Vec3& loc, int comp, double Uobs, double sigma, double sigma_model = 0.0);
@@ -89,13 +90,16 @@ private:
 
 inline void ObservationOperator::addDrag(
         const std::string& wallPatch, double Cd_obs, double sigma,
-        double refArea, double refVel, double sigma_model) {
+        double refArea, double refVel, double sigma_model,
+        double refPressure, double refDensity) {
     Observable obs;
     obs.type = ObsType::Drag;
     obs.meas = {Cd_obs, sigma, sigma_model};
     obs.patchName = wallPatch;
     obs.referenceArea = refArea;
     obs.refVelocity = refVel;
+    obs.refPressure = refPressure;
+    obs.refDensity  = refDensity;
     observables_.push_back(obs);
 }
 
@@ -195,8 +199,12 @@ inline double ObservationOperator::computeDrag(
         int ow = face.owner;
         double Sf = face.area;
 
-        // pressure contribution (x-component by convention)
-        double pf = fields.p[ow];   // zero-gradient at wall
+        // pressure contribution (x-component by convention); the reference
+        // pressure is subtracted because a WALL PATCH is not a closed
+        // surface: on an absolute-pressure (compressible) field the ~1e5 Pa
+        // offset would otherwise dominate the drag integral (legacy
+        // incompressible taps default refPressure 0 and are unchanged)
+        double pf = fields.p[ow] - obs.refPressure;
         force += pf * face.normal.x * Sf;
 
         // viscous contribution: MOLECULAR wall shear tau_w = nu * dU/dn.
@@ -212,7 +220,7 @@ inline double ObservationOperator::computeDrag(
         force += tau_x * Sf;
     }
 
-    double dynPressure = 0.5 * obs.refVelocity * obs.refVelocity;
+    double dynPressure = 0.5 * obs.refDensity * obs.refVelocity * obs.refVelocity;
     return force / (dynPressure * obs.referenceArea);
 }
 

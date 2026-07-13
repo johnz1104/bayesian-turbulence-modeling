@@ -299,6 +299,37 @@ inline void applyOmegaBC(ScalarField& omega,
     }
 }
 
+// Per-cell-viscosity overload of applyOmegaBC: wall faces use the OWNER-cell
+// kinematic viscosity (compressible mu(T)/rho), matching the local wall
+// anchor treatment; the other BC types are viscosity-independent.
+inline void applyOmegaBC(ScalarField& omega,
+                        const Mesh& mesh,
+                        const FlowBoundaryConditions& bcs,
+                        const ScalarField& nuLocal,
+                        double beta1 = 0.075) {
+    for (int p = 0; p < mesh.nPatches(); ++p) {
+        const Patch& pat = mesh.patch(p);
+        const PatchBC& bc = bcs.omegaBC[p];
+        for (size_t j = 0; j < pat.faces.size(); ++j) {
+            FaceID fi = pat.faces[j];
+            switch (bc.type) {
+                case BCType::WallKOmega: {
+                    double y1 = std::max(mesh.face(fi).delta, 1e-20);
+                    double nuO = nuLocal[mesh.face(fi).owner];
+                    omega.bface(fi) = 60.0 * nuO / (beta1 * y1 * y1);
+                    break;
+                }
+                case BCType::Dirichlet:
+                    omega.bface(fi) = bc.scalarProfile.empty() ? bc.value
+                                                               : bc.scalarProfile[j];
+                    break;
+                default:
+                    omega.bface(fi) = omega[mesh.face(fi).owner]; break;
+            }
+        }
+    }
+}
+
 // Applies all boundary conditions
 inline void applyAllBCs(VectorField& U, ScalarField& p,
                          ScalarField& k, ScalarField& omega,
