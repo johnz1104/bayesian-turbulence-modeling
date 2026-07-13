@@ -78,10 +78,14 @@ def stage_baselines(regen):
     if os.path.exists(path) and not regen:
         d = dict(np.load(path))
         status, reason = cfp.check(d, ident)
-        if status == "match" or status == "legacy":
-            if status == "legacy":
-                print("[baselines] WARNING reusing pre-fingerprint cache; "
-                      "regenerate with --regen-baselines to stamp it")
+        if status == "legacy" and cfp.legacy_reuse_allowed():
+            print("[baselines] WARNING reusing pre-fingerprint cache "
+                  "(QBTM_ALLOW_LEGACY_CACHE=1); regenerate with "
+                  "--regen-baselines to stamp it")
+            return d
+        if status == "match":
+            if reason:
+                print(f"[baselines] cache reused; {reason}")
             return d
         print(f"[baselines] cache REFUSED ({reason}); regenerating")
     print("[baselines] generating matched-Re_tau SST baseline fields ...")
@@ -142,12 +146,16 @@ def stage_ensembles(regen, quick):
         if os.path.exists(path) and not regen:
             d = dict(np.load(path))
             status, reason = cfp.check(d, ident)
-            if status == "mismatch":
+            if status == "mismatch" or (status == "legacy"
+                                        and not cfp.legacy_reuse_allowed()):
                 print(f"  Re_tau {n:>4}: cache REFUSED ({reason}); regenerating")
             else:
                 if status == "legacy":
                     print(f"  Re_tau {n:>4}: WARNING reusing pre-fingerprint "
-                          f"cache; regenerate with --regen-ensembles to stamp it")
+                          f"cache (QBTM_ALLOW_LEGACY_CACHE=1); regenerate "
+                          f"with --regen-ensembles to stamp it")
+                elif reason:
+                    print(f"  Re_tau {n:>4}: {reason}")
                 loaded = c.load_cache(d)
                 if loaded:
                     print(f"  Re_tau {n:>4}: loaded {c.n_valid} ensemble points")

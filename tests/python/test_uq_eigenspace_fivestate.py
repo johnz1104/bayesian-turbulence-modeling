@@ -34,8 +34,11 @@ def test_five_state_family_keys_and_realizability():
     b = _random_realizable_b(rng, 20)
     S = _random_strain(rng, 20)
     fam = EigenspacePerturbation.five_state_set(b, S, delta_b=1.0)
-    assert set(fam) == {"1C", "2C", "3C", "1C_vmax", "1C_vmin"}
+    assert set(fam) == {"1C_vmax", "1C_vmin", "2C_vmax", "2C_vmin", "3C"}
     assert EigenspacePerturbation.is_realizable_family(fam)
+    # the isotropic member is exactly b = 0 at full projection, so the
+    # eigenvector pairing question does not arise for it
+    assert np.allclose(fam["3C"], 0.0, atol=1e-12)
 
 
 def test_eigenvector_states_preserve_corner_eigenvalues():
@@ -43,14 +46,15 @@ def test_eigenvector_states_preserve_corner_eigenvalues():
     b = _random_realizable_b(rng, 15)
     S = _random_strain(rng, 15)
     for delta in (0.5, 1.0):
-        corner = EigenspacePerturbation.perturb(b, "1C", delta)
-        states = EigenspacePerturbation.production_extremal_states(
-            b, S, delta_b=delta)
-        lc = np.sort(np.linalg.eigvalsh(corner), axis=-1)
-        for bp in states.values():
-            lp = np.sort(np.linalg.eigvalsh(bp), axis=-1)
-            assert np.allclose(lp, lc, atol=1e-10), \
-                "eigenvector perturbation must not move the eigenvalues"
+        for base in ("1C", "2C"):
+            corner = EigenspacePerturbation.perturb(b, base, delta)
+            states = EigenspacePerturbation.production_extremal_states(
+                b, S, delta_b=delta, base_corner=base)
+            lc = np.sort(np.linalg.eigvalsh(corner), axis=-1)
+            for bp in states.values():
+                lp = np.sort(np.linalg.eigvalsh(bp), axis=-1)
+                assert np.allclose(lp, lc, atol=1e-10), \
+                    "eigenvector perturbation must not move the eigenvalues"
 
 
 def test_production_extremality_over_all_pairings():
@@ -79,11 +83,12 @@ def test_production_extremality_over_all_pairings():
 
 
 def test_three_corner_set_unchanged():
-    # the 2013 three-corner family is untouched by the extension
+    # the 2013 three-corner family is untouched by the extension, and the one
+    # member the two families share (the isotropic 3C corner, where the
+    # eigenvector pairing is immaterial) is identical between them
     rng = np.random.default_rng(3)
     b = _random_realizable_b(rng, 8)
     fam3 = EigenspacePerturbation.corner_set(b, delta_b=1.0)
     assert set(fam3) == {"1C", "2C", "3C"}
     fam5 = EigenspacePerturbation.five_state_set(b, _random_strain(rng, 8), 1.0)
-    for c in ("1C", "2C", "3C"):
-        assert np.allclose(fam3[c], fam5[c], atol=0.0)
+    assert np.allclose(fam3["3C"], fam5["3C"], atol=0.0)

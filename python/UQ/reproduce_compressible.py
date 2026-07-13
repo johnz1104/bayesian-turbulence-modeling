@@ -88,12 +88,21 @@ def build_calibrations(results_dir, n_ensemble, rel, regen, quick):
         if os.path.isfile(cache) and not regen:
             d = {k: v for k, v in np.load(cache).items()}
             status, reason = cfp.check(d, ident)
-            if status == "mismatch":
+            # these ensembles are evaluations of the python 1-D profile
+            # baseline, independent of the C++ solvers, so a code-revision
+            # drift in the solver tree does not invalidate them; the config
+            # fingerprint (and the legacy opt-in for unstamped files) is the
+            # operative gate
+            if status == "mismatch" or (status == "legacy"
+                                        and not cfp.legacy_reuse_allowed()):
                 print(f"  {tag}: cache REFUSED ({reason}); regenerating")
             else:
                 if status == "legacy":
-                    print(f"  {tag}: WARNING reusing pre-fingerprint cache; "
-                          f"regenerate with --regen-ensembles to stamp it")
+                    print(f"  {tag}: WARNING reusing pre-fingerprint cache "
+                          f"(QBTM_ALLOW_LEGACY_CACHE=1); regenerate with "
+                          f"--regen-ensembles to stamp it")
+                elif reason:
+                    print(f"  {tag}: {reason}")
                 loaded = cal.load_cache(d)
         if not loaded:
             cal.run_ensemble(n=n_ensemble, seed=SEED + j)

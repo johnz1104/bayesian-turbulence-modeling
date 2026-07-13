@@ -14,12 +14,28 @@ stages key on them); identity lives INSIDE the file:
   - check(loaded, config): classify a loaded cache against the expected
     configuration: "match" (safe to reuse), "mismatch" (REFUSE and
     regenerate; the reason names both configs), or "legacy" (pre-fingerprint
-    cache: reusable only because its provenance is known, and the caller must
-    say so loudly). No exceptions; callers branch on the classification,
-    matching the house failure-handling convention.
+    cache). No exceptions; callers branch on the classification, matching the
+    house failure-handling convention.
+
+Legacy policy: a legacy cache is reused ONLY under the explicit opt-in
+environment variable QBTM_ALLOW_LEGACY_CACHE=1 (legacy_reuse_allowed());
+the default is refuse-and-regenerate. Blind reuse of unstamped caches is
+exactly the failure mode fingerprinting exists to close, so acceptance has
+to be a deliberate, per-run decision by whoever knows the cache's provenance.
+
+Code provenance: attach() also records the git revision that wrote the cache
+(code_rev()). The revision is PROVENANCE, not identity: it is surfaced in
+messages so a reader can decide whether intervening code changes invalidate
+the physics, but it does not enter the fingerprint hash, because any commit
+(including one that never touches the solver) would otherwise invalidate
+every ensemble. Regeneration decisions stay config-driven plus the explicit
+--regen flags of the reproduce scripts.
 """
 import hashlib
 import json
+import os
+import shutil
+import subprocess
 
 import numpy as np
 
@@ -27,6 +43,28 @@ SCHEMA_VERSION = 1
 
 FINGERPRINT_KEY = "cache_fingerprint"
 CONFIG_KEY = "cache_config_json"
+CODE_REV_KEY = "cache_code_rev"
+
+
+def code_rev():
+    """Short git revision of the working tree that writes a cache.
+
+    Provenance metadata only (see module docstring); "unknown" when git or a
+    repository is unavailable, never an error.
+    """
+    if shutil.which("git") is None:
+        return "unknown"
+    r = subprocess.run(["git", "rev-parse", "--short", "HEAD"],
+                       capture_output=True, text=True,
+                       cwd=os.path.dirname(os.path.abspath(__file__)))
+    if r.returncode != 0:
+        return "unknown"
+    return r.stdout.strip()
+
+
+def legacy_reuse_allowed():
+    """The explicit opt-in for reusing pre-fingerprint caches."""
+    return os.environ.get("QBTM_ALLOW_LEGACY_CACHE", "") == "1"
 
 
 def _canonical(obj):
@@ -63,6 +101,7 @@ def attach(arrays, config):
     out = dict(arrays)
     out[FINGERPRINT_KEY] = np.array(fingerprint(config))
     out[CONFIG_KEY] = np.array(config_json(config))
+    out[CODE_REV_KEY] = np.array(code_rev())
     return out
 
 
@@ -70,15 +109,26 @@ def check(loaded, config):
     """Classify a loaded cache dict against the expected configuration.
 
     Returns (status, reason): status is "match", "mismatch", or "legacy".
-    "legacy" means the cache predates fingerprinting; reuse is the caller's
-    explicit, printed decision, never a silent default for new caches.
+    "legacy" means the cache predates fingerprinting; it is reused only under
+    the QBTM_ALLOW_LEGACY_CACHE=1 opt-in (legacy_reuse_allowed()), refused
+    otherwise. A "match" whose stored code revision differs from the current
+    one is still a match (provenance, not identity), with the drift named in
+    the reason so the caller can print it.
     """
     if FINGERPRINT_KEY not in loaded:
-        return "legacy", "cache carries no fingerprint (built before cache identity)"
+        return ("legacy", "cache carries no fingerprint (built before cache "
+                "identity); set QBTM_ALLOW_LEGACY_CACHE=1 to reuse it")
     stored = str(np.asarray(loaded[FINGERPRINT_KEY])[()])
     expected = fingerprint(config)
     if stored == expected:
-        return "match", ""
+        reason = ""
+        if CODE_REV_KEY in loaded:
+            rev_stored = str(np.asarray(loaded[CODE_REV_KEY])[()])
+            rev_now = code_rev()
+            if rev_stored != rev_now:
+                reason = (f"built at code revision {rev_stored}, current "
+                          f"{rev_now} (config identical)")
+        return "match", reason
     stored_cfg = "<missing>"
     if CONFIG_KEY in loaded:
         stored_cfg = str(np.asarray(loaded[CONFIG_KEY])[()])

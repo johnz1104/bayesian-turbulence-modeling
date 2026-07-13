@@ -84,9 +84,11 @@ class BFSAPosteriori:
         """The eigenspace family through the same injection (the envelope).
 
         five_state=False runs the pre-registered three-corner eigenvalue-only
-        family (Emory et al. 2013); five_state=True adds the two production-
-        extremal eigenvector states (Iaccarino, Mishra and Ghili 2017) built
-        from the baseline strain, as an additional reported baseline.
+        family (Emory et al. 2013); five_state=True runs the documented
+        five-state family instead: the 1C and 2C corners each with both
+        production-extremal eigenvector alignments built from the baseline
+        strain, plus the isotropic 3C corner (Iaccarino, Mishra and Ghili
+        2017), as an additional reported baseline.
         """
         family = (EigenspacePerturbation.five_state_set(self.inj.b_baseline,
                                                         self.inj.S_baseline,
@@ -247,9 +249,11 @@ class HillsAPosteriori:
         """The eigenspace family through the same injection (the envelope).
 
         five_state=False runs the pre-registered three-corner eigenvalue-only
-        family (Emory et al. 2013); five_state=True adds the two production-
-        extremal eigenvector states (Iaccarino, Mishra and Ghili 2017) built
-        from the baseline strain, as an additional reported baseline.
+        family (Emory et al. 2013); five_state=True runs the documented
+        five-state family instead: the 1C and 2C corners each with both
+        production-extremal eigenvector alignments built from the baseline
+        strain, plus the isotropic 3C corner (Iaccarino, Mishra and Ghili
+        2017), as an additional reported baseline.
         """
         family = (EigenspacePerturbation.five_state_set(self.inj.b_baseline,
                                                         self.inj.S_baseline,

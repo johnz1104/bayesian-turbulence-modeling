@@ -89,12 +89,16 @@ def stage_channel(regen):
         if os.path.exists(path) and not regen:
             d = dict(np.load(path))
             status, reason = cfp.check(d, ident)
-            if status == "mismatch":
+            if status == "mismatch" or (status == "legacy"
+                                        and not cfp.legacy_reuse_allowed()):
                 print(f"  channel Re_tau {n:>4}: cache REFUSED ({reason}); regenerating")
             else:
                 if status == "legacy":
                     print(f"  channel Re_tau {n:>4}: WARNING reusing "
-                          f"pre-fingerprint cache; regenerate to stamp it")
+                          f"pre-fingerprint cache (QBTM_ALLOW_LEGACY_CACHE=1); "
+                          f"regenerate to stamp it")
+                elif reason:
+                    print(f"  channel Re_tau {n:>4}: {reason}")
                 loaded = c.load_cache(d)
                 if loaded:
                     print(f"  channel Re_tau {n:>4}: loaded {c.n_valid} ensemble points")
@@ -115,8 +119,19 @@ def stage_couette(regen):
     cals = {}
     nus = {}
     nu_path = os.path.join(OUT, "couette_matched_nu.json")
+    nu_ident = {"kind": "couette_matched_nu",
+                "cases": CONFIG["couette_cases"], "cfg": CONFIG["couette_cfg"]}
     if os.path.exists(nu_path) and not regen:
-        nus = {int(k): v for k, v in json.load(open(nu_path)).items()}
+        raw = json.load(open(nu_path))
+        if "values" in raw and raw.get("fingerprint") == cfp.fingerprint(nu_ident):
+            nus = {int(k): v for k, v in raw["values"].items()}
+        elif "values" not in raw and cfp.legacy_reuse_allowed():
+            print("  couette matched-nu: WARNING reusing pre-fingerprint store "
+                  "(QBTM_ALLOW_LEGACY_CACHE=1)")
+            nus = {int(k): v for k, v in raw.items()}
+        else:
+            print("  couette matched-nu: store REFUSED (fingerprint absent or "
+                  "stale); re-matching")
     for n in CONFIG["couette_cases"]:
         dns = CouetteDNS.load(n)
         if n not in nus:
@@ -138,12 +153,16 @@ def stage_couette(regen):
         if os.path.exists(path) and not regen:
             d = dict(np.load(path))
             status, reason = cfp.check(d, ident)
-            if status == "mismatch":
+            if status == "mismatch" or (status == "legacy"
+                                        and not cfp.legacy_reuse_allowed()):
                 print(f"  couette Re_tau {n:>4}: cache REFUSED ({reason}); regenerating")
             else:
                 if status == "legacy":
                     print(f"  couette Re_tau {n:>4}: WARNING reusing "
-                          f"pre-fingerprint cache; regenerate to stamp it")
+                          f"pre-fingerprint cache (QBTM_ALLOW_LEGACY_CACHE=1); "
+                          f"regenerate to stamp it")
+                elif reason:
+                    print(f"  couette Re_tau {n:>4}: {reason}")
                 loaded = c.load_cache(d)
                 if loaded:
                     print(f"  couette Re_tau {n:>4}: loaded {c.n_valid} ensemble points")
@@ -155,7 +174,11 @@ def stage_couette(regen):
             c.fit_surrogates()
             print(f"           {c.n_valid}/{CONFIG['n_ensemble']} valid")
         cals[n] = c
-    json.dump({str(k): v for k, v in nus.items()}, open(nu_path, "w"))
+    json.dump({"fingerprint": cfp.fingerprint(nu_ident),
+               "config": cfp.config_json(nu_ident),
+               "code_rev": cfp.code_rev(),
+               "values": {str(k): v for k, v in nus.items()}},
+              open(nu_path, "w"), indent=1)
     return cals
 
 
