@@ -3,7 +3,7 @@
  "case": "ma_0_1",
  "description": "Compressible Ma=0.1 channel baseline. 40x30 mesh, Re~2.21e6.",
  "captured_from": "examples/compressible_validation_ladder.py",
- "captured_on_commit": "baseline",
+ "captured_on_commit": "cde93eec506247ea30a7577658e440a0be43614b",
  "expected": {
   "mesh_cells": 1200,
   "Ma": 0.1,
@@ -11,19 +11,19 @@
   "converged": true,
   "diverged": false,
   "positivity_ok": true,
-  "simple_iters": 2069,
-  "Ma_max": 0.10294631032022733,
-  "T_min": 299.95038051951843,
-  "T_max": 300.06099383736773,
-  "rho_min": 1.176788992176573,
-  "rho_max": 1.1775098142974798,
-  "U_max": 35.74177534537607,
+  "simple_iters": 1598,
+  "Ma_max": 0.10278408043688776,
+  "T_min": 299.95879125064897,
+  "T_max": 300.0334529730954,
+  "rho_min": 1.1767859050621252,
+  "rho_max": 1.1774685930130884,
+  "U_max": 35.685458060475284,
   "Cf_at_stations": [
-   0.0026570217238938657,
-   0.002409082296156431,
-   0.002296226851030112
+   0.0023585825650596095,
+   0.002134743399403759,
+   0.0020356622352331226
   ],
-  "mass_flux_rel_imbalance": 3.75746610489607e-05
+  "mass_flux_rel_imbalance": 4.1827866901563356e-05
  },
  "tolerances": {
   "simple_iters_abs": 50,
@@ -35,5 +35,5 @@
   "mass_flux_rel_imbalance_max": 0.001
  },
  "rationale": "Tolerances are loose enough to absorb 64-bit FP non-determinism between runs and between minor SST/EOS code changes, but tight enough to flag a real regression (e.g. solver instability, mass-conservation drift, or wall-clustering changes that shift Cf or T).",
- "note": "Temporary merge resolution from the two-pressure branch; regenerated once below on the authoritative integrated solver head."
+ "note": "Authoritatively regenerated on the integrated #52/#54/#56/#57/#58/#55 solver head after the two-pressure, wall-diffusion, convergence-accounting, and startup-floor changes were combined."
 }
