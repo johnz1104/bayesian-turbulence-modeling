@@ -376,18 +376,39 @@ class CrossReStudy:
             progress=False, rng_seed=seed)
         return samples
 
-    def predict_heldout(self, train, test, eta=None, level=0.9, seed=0):
+    def predict_heldout(self, train, test, eta=None, level=0.9, seed=0,
+                        cal_case=None):
         """Calibrate on train Reynolds numbers, predict the held-out one.
 
         Returns a dict with the predictive coverage and sharpness at the held-out
         Re for standard Bayes (eta = 1) and the tempered posterior, plus the
-        conformal coverage and gap (calibration set = a training Re's stations).
-        Two pooled posteriors are drawn (eta = 1 and the tempered eta) and reused
-        across the standard / tempered / conformal scores. If eta is None it is
-        moment-matched on the training Reynolds numbers from the eta = 1 posterior.
+        conformal coverage and gap. If eta is None it is moment-matched on the
+        training Reynolds numbers from the eta = 1 posterior.
+
+        Case roles are three-way disjoint for the conformal leg: the posterior
+        it uses is refit on train MINUS cal_case, cal_case supplies ONLY the
+        calibration residuals (its likelihood never enters that fit), and the
+        test case is untouched, so split-conformal's untouched-calibration-set
+        requirement holds at the case level. cal_case defaults to the training
+        Re nearest the held-out one (deterministic, and the most favorable
+        residual transfer, so the remaining gap is a clean lower bound on the
+        cross-Re shift cost; exchangeability across Reynolds numbers is still
+        an assumption, and the gap reports its violation, not hidden). The
+        standard and tempered rows keep the full-train posterior: Bayes has no
+        untouched-set requirement, and those rows measure exactly the pooled
+        Bayes prediction.
         """
         test_cal = self.cals[test]
-        out = {"test": test, "train": list(train)}
+        if cal_case is None:
+            cal_case = min(train, key=lambda r: abs(float(r) - float(test)))
+        fit_cases = tuple(r for r in train if r != cal_case)
+        # a single training case cannot be split into disjoint fit and
+        # calibration roles; fall back to the shared-case design and say so
+        if not fit_cases:
+            fit_cases = tuple(train)
+        out = {"test": test, "train": list(train), "cal_case": cal_case,
+               "fit_cases": list(fit_cases),
+               "conformal_roles_disjoint": cal_case not in fit_cases}
 
         # standard (eta = 1) pooled posterior, reused for the learning-rate match
         post1 = self.pooled_posterior_samples(train, 1.0, seed=seed)
@@ -403,13 +424,19 @@ class CrossReStudy:
             out[f"{tag}_sharpness"] = sharp
         out["eta"] = eta
 
-        # conformal: calibration residuals from a training Re, applied at held-out Re
-        cal = self.cals[train[0]]
+        # conformal leg on its own disjoint pipeline: posterior refit WITHOUT
+        # the calibration case, its own moment-matched learning rate
+        post1_fit = self.pooled_posterior_samples(fit_cases, 1.0, seed=seed)
+        eta_fit = float(np.mean([self.cals[r].calibrate_eta(
+            post1_fit, np.arange(self.cals[r].n_qoi)) for r in fit_cases]))
+        post_fit = self.pooled_posterior_samples(fit_cases, eta_fit, seed=seed)
+        cal = self.cals[cal_case]
         idx_all = np.arange(test_cal.n_qoi)
-        pred_cal = cal.point_prediction(post_t, idx_all)
-        pred_test = test_cal.point_prediction(post_t, idx_all)
+        pred_cal = cal.point_prediction(post_fit, idx_all)
+        pred_test = test_cal.point_prediction(post_fit, idx_all)
         lo, hi = cf.split_conformal_intervals(pred_cal, cal.qoi_truth, pred_test,
                                               alpha=1.0 - level)
         out["conformal_coverage"] = ev.empirical_coverage(test_cal.qoi_truth, lo, hi)
         out["conformal_gap"] = level - out["conformal_coverage"]
+        out["eta_fit"] = eta_fit
         return out

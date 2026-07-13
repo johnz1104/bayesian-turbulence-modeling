@@ -107,3 +107,31 @@ def test_conformal_coverage_runs_and_bounds(calib):
     assert 0.0 <= cov <= 1.0
     assert half > 0.0
     assert abs(gap - (0.9 - cov)) < 1e-9
+
+
+def test_cross_re_conformal_roles_are_disjoint(rs):
+    """The conformal leg's case roles never overlap when train allows it.
+
+    Three synthetic calibrations: fit cases, the calibration case, and the
+    test case must be pairwise disjoint (the untouched-calibration-set
+    requirement at the case level), and the calibration case defaults to the
+    training Re nearest the held-out one. A single-case train falls back to
+    the shared-case design and says so.
+    """
+    from UQ.datasets.channel_calibration import ChannelCalibration, CrossReStudy
+    dns = ChannelDNS.load(180)
+    cals = {}
+    for i, re_label in enumerate((180, 550, 1000)):
+        c = ChannelCalibration(dns, n_stations=8)
+        _inject_synthetic_ensemble(c, n=40, seed=i)
+        cals[re_label] = c
+    study = CrossReStudy(cals)
+    out = study.predict_heldout((180, 550), 1000, level=0.9, seed=0)
+    assert out["conformal_roles_disjoint"]
+    assert out["cal_case"] == 550, "default calibration case is nearest in Re"
+    assert out["cal_case"] not in out["fit_cases"]
+    assert 1000 not in out["fit_cases"] and 1000 != out["cal_case"]
+    assert 0.0 <= out["conformal_coverage"] <= 1.0
+    out1 = study.predict_heldout((550,), 1000, level=0.9, seed=0)
+    assert not out1["conformal_roles_disjoint"]
+    assert out1["fit_cases"] == [550]

@@ -140,6 +140,9 @@ def test_crossmach_study_blocks(cal):
                 "conformal_lik_coverage", "conformal_thermal_coverage",
                 "conformal_thermal_gap", "eta", "prt_posterior"):
         assert key in out
+    # single-case train cannot split fit and calibration roles; the record
+    # must say so instead of silently sharing the case
+    assert out["conformal_roles_disjoint"] is False
     assert 0.0 < out["eta"] <= 1.0
     for key in out:
         if key.endswith("_coverage"):

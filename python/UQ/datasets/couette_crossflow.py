@@ -47,19 +47,36 @@ class CrossFlowStudy:
     def channel_posteriors(self, seed=0):
         """Pooled channel posterior over the SST coefficients: standard and tempered.
 
-        Returns (post1, post_t, eta). eta is the generalized-Bayes learning rate
-        moment-matched on the channel QoIs (the in-distribution calibration data),
-        the same channel-calibrated correction Step 1 used, applied unchanged to the
-        cross-flow prediction.
+        Returns (post1, post_t, eta, post_conf, conf_cal_case). eta is the
+        generalized-Bayes learning rate moment-matched on the channel QoIs (the
+        in-distribution calibration data), the same channel-calibrated
+        correction Step 1 used, applied unchanged to the cross-flow prediction.
+
+        post_conf is the conformal leg's OWN posterior, refit on the channel
+        cases MINUS conf_cal_case (the lowest channel Re, reserved to supply
+        only the conformal calibration residuals) with its own moment-matched
+        learning rate, so the conformal case roles are three-way disjoint:
+        fit cases, calibration case, and the Couette test flow never overlap.
         """
         train = tuple(self.channel_cals)
         post1 = self.channel.pooled_posterior_samples(train, 1.0, seed=seed)
         eta = float(np.mean([self.channel_cals[r].calibrate_eta(
             post1, np.arange(self.channel_cals[r].n_qoi)) for r in train]))
         post_t = self.channel.pooled_posterior_samples(train, eta, seed=seed)
-        return post1, post_t, eta
 
-    def predict_couette(self, re, rel, post1, post_t, eta, level=0.9, seed=0):
+        conf_cal_case = min(self.channel_cals)
+        fit_cases = tuple(r for r in train if r != conf_cal_case)
+        post1_fit = self.channel.pooled_posterior_samples(fit_cases, 1.0,
+                                                          seed=seed)
+        eta_fit = float(np.mean([self.channel_cals[r].calibrate_eta(
+            post1_fit, np.arange(self.channel_cals[r].n_qoi))
+            for r in fit_cases]))
+        post_conf = self.channel.pooled_posterior_samples(fit_cases, eta_fit,
+                                                          seed=seed)
+        return post1, post_t, eta, post_conf, conf_cal_case
+
+    def predict_couette(self, re, rel, post1, post_t, eta, post_conf,
+                        conf_cal_case, level=0.9, seed=0):
         """Coverage of the Couette DNS QoIs from the channel posterior, one band.
 
         Standard Bayes (channel posterior, eta = 1), generalized Bayes (channel
@@ -80,12 +97,14 @@ class CrossFlowStudy:
         out["tempered_coverage"], out["tempered_sharpness"] = \
             cou.coverage_vs_truth(pp_t, level=level)
 
-        # conformal: a channel case supplies the exchangeable calibration residuals,
-        # whose (1 - level) quantile is the interval half-width applied to the Couette
-        # point predictions; the gap to nominal is the cross-flow exchangeability cost
-        cal = self.channel_cals[min(self.channel_cals)]
-        pred_cal = cal.point_prediction(post_t, np.arange(cal.n_qoi))
-        pred_test = cou.point_prediction(post_t, np.arange(cou.n_qoi))
+        # conformal: the reserved channel case supplies the calibration
+        # residuals against the conformal leg's own posterior (fit WITHOUT that
+        # case, three-way-disjoint roles); the gap to nominal is then the
+        # cross-flow exchangeability cost, uninflated by residual reuse
+        cal = self.channel_cals[conf_cal_case]
+        out["conformal_cal_case"] = conf_cal_case
+        pred_cal = cal.point_prediction(post_conf, np.arange(cal.n_qoi))
+        pred_test = cou.point_prediction(post_conf, np.arange(cou.n_qoi))
         lo, hi = cf.split_conformal_intervals(pred_cal, cal.qoi_truth, pred_test,
                                               alpha=1.0 - level)
         out["conformal_coverage"] = ev.empirical_coverage(cou.qoi_truth, lo, hi)
@@ -99,12 +118,13 @@ class CrossFlowStudy:
         learning rate. One channel posterior is drawn and reused across all Couette
         cases and bands (the observation band rescales the predictive noise only).
         """
-        post1, post_t, eta = self.channel_posteriors(seed=seed)
-        result = {"eta": eta, "bands": {}}
+        post1, post_t, eta, post_conf, conf_cal = self.channel_posteriors(seed=seed)
+        result = {"eta": eta, "conformal_cal_case": conf_cal, "bands": {}}
         for rel in rels:
             rows = []
             for re in self.couette_cals:
                 rows.append(self.predict_couette(re, rel, post1, post_t, eta,
+                                                 post_conf, conf_cal,
                                                  level=level, seed=seed))
             result["bands"][rel] = rows
         return result
