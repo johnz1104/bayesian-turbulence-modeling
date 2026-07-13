@@ -66,6 +66,7 @@ class BFSInjection:
         # the same limiter-consistent baseline anisotropy the training db is
         # formed against, and the same invariant features it is conditioned on
         S, _ = dq.strain_rotation(grad_u, timescale)
+        self.S_baseline = S   # kept for the five-state eigenvector perturbations
         self.b_baseline = dq.boussinesq_anisotropy_actual(S, nu_t, k_rans, timescale)
         self.features = dq.feature_set(grad_u, timescale)
 

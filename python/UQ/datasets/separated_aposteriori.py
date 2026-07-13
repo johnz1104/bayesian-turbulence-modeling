@@ -80,10 +80,20 @@ class BFSAPosteriori:
             })
         return members
 
-    def run_eigenspace(self, delta_b=1.0):
-        """The corner family through the same injection (the envelope)."""
-        family = EigenspacePerturbation.corner_set(self.inj.b_baseline,
-                                                   delta_b=delta_b)
+    def run_eigenspace(self, delta_b=1.0, five_state=False):
+        """The eigenspace family through the same injection (the envelope).
+
+        five_state=False runs the pre-registered three-corner eigenvalue-only
+        family (Emory et al. 2013); five_state=True adds the two production-
+        extremal eigenvector states (Iaccarino, Mishra and Ghili 2017) built
+        from the baseline strain, as an additional reported baseline.
+        """
+        family = (EigenspacePerturbation.five_state_set(self.inj.b_baseline,
+                                                        self.inj.S_baseline,
+                                                        delta_b=delta_b)
+                  if five_state else
+                  EigenspacePerturbation.corner_set(self.inj.b_baseline,
+                                                    delta_b=delta_b))
         members = {}
         for name, b_pert in family.items():
             bt, _ = self.inj.target_from_db(b_pert - self.inj.b_baseline)
@@ -233,10 +243,20 @@ class HillsAPosteriori:
             members.append(self._member_record(r))
         return members
 
-    def run_eigenspace(self, delta_b=1.0):
-        """The corner family through the same injection (the envelope)."""
-        family = EigenspacePerturbation.corner_set(self.inj.b_baseline,
-                                                   delta_b=delta_b)
+    def run_eigenspace(self, delta_b=1.0, five_state=False):
+        """The eigenspace family through the same injection (the envelope).
+
+        five_state=False runs the pre-registered three-corner eigenvalue-only
+        family (Emory et al. 2013); five_state=True adds the two production-
+        extremal eigenvector states (Iaccarino, Mishra and Ghili 2017) built
+        from the baseline strain, as an additional reported baseline.
+        """
+        family = (EigenspacePerturbation.five_state_set(self.inj.b_baseline,
+                                                        self.inj.S_baseline,
+                                                        delta_b=delta_b)
+                  if five_state else
+                  EigenspacePerturbation.corner_set(self.inj.b_baseline,
+                                                    delta_b=delta_b))
         members = {}
         for name, b_pert in family.items():
             bt, _ = self.inj.target_from_db(b_pert - self.inj.b_baseline)
