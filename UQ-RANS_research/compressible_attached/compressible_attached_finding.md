@@ -283,9 +283,13 @@ them.
    thermal information directly, and the phrase "held-out thermal" overstates the
    independence of the held-out block. Every "held-out thermal" in this memo should be
    read as "held-out heat-flux (B_q + q profile)". This RENAMING STRENGTHENS the
-   identifiability finding: Pr_t is edge-piled and case-dependent EVEN WITH the
-   temperature profile in the likelihood, so mean attached observables fail to identify
-   Pr_t not for lack of thermal data but structurally.
+   identifiability finding within its scope: Pr_t is edge-piled and case-dependent EVEN
+   WITH the temperature profile in the likelihood, so the failure to identify Pr_t is
+   structural to THIS conditional one-dimensional model class (prescribed wall scale,
+   fixed grid, uniform-Pr_t closure) with THIS observable set (U and T profiles plus the
+   consistency cf), not a lack of thermal data. Whether a coupled two-dimensional model
+   or a richer observable set (the heat-flux profile itself in the likelihood, or
+   station-resolved wall fluxes) identifies Pr_t is untested here and is not claimed.
 
 2. The baseline's friction coefficient is not an independent wall-stress prediction. The
    one-dimensional model takes the DNS friction Reynolds and Mach numbers as inputs, so
@@ -306,7 +310,10 @@ them.
    PIT (exactly uniform under calibration) for any formal test; no committed conclusion
    rested on a PIT p-value.
 
-5. Scores: the library's CRPS/energy estimators are now the fair M(M-1) forms. Every
-   flow-versus-Gaussian comparison in this study is equal-ensemble-size, where the
-   estimator change is a common shift that does not reorder methods; the committed
-   conclusions stand as written.
+5. Scores: the library's CRPS/energy estimators are now the fair M(M-1) forms. The
+   change from the plug-in is NOT a common shift (it subtracts each method's own
+   internal-dispersion term divided by M(M-1), so orderings are not automatically
+   preserved); this study's predictive ensembles are the full posterior chains
+   (thousands of members per case), where that term is below a tenth of a percent of
+   each score and far below every committed margin, so the committed conclusions
+   stand, and any regenerated leg is scored with the fair forms.
