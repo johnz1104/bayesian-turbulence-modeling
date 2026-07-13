@@ -44,10 +44,11 @@ from UQ.datasets import crossflow_companions as companions
 from UQ import cache_fingerprint as cfp
 
 # Physics schema tokens (cache identity; bump exactly when the producing
-# model changes, see UQ.cache_fingerprint): v2 marks the post-audit corrected
-# incompressible solver for both flow types.
-PHYSICS_CHANNEL = "channel-rans-v2"
-PHYSICS_COUETTE = "couette-rans-v2"
+# model changes, see UQ.cache_fingerprint): v3 marks the final integrated
+# post-audit incompressible solver for both flow types. v2 predates integration
+# of the wall-molecular diffusion and completed-stress branches.
+PHYSICS_CHANNEL = "channel-rans-v3"
+PHYSICS_COUETTE = "couette-rans-v3"
 
 CONFIG = {
     "channel_cases": [550, 1000, 2000],
