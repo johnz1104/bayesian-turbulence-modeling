@@ -299,10 +299,14 @@ Read this memo with the audit-driven precision fixes recorded in the
 compressible-attached revision: "held-out thermal" names the heat-flux block
 (B_q and the wall-normal flux profile; the temperature profile is fitted), the
 evaluation library's CRPS/energy estimators are now the fair M(M-1) forms
-(every comparison in this study is equal-ensemble-size at 128 draws per case,
-where the dispersion-dependent fair correction is below one percent of each
-score; the committed verdicts rested on far larger margins, the scalar CRPS
-tally being 16 of 16, so the verdicts stand, and regenerated legs score fair), the discrete-PIT KS p-values were heuristic and no conclusion rested
+(every comparison in this study is equal-ensemble-size at 128 draws per case;
+by the estimator identity the fair correction equals half the mean
+intra-ensemble absolute pair difference divided by M - 1 = 127, i.e. below one
+percent of any score at least as large as the ensemble spread, which every
+committed row satisfies because the committed cross-Mach failure mode was
+under-dispersion, flow bands at 0.72x the residual scale; the committed
+verdicts rested on far larger margins, the scalar CRPS tally being 16 of 16,
+so the verdicts stand, and regenerated legs score fair), the discrete-PIT KS p-values were heuristic and no conclusion rested
 on one, and the eigenspace-perturbation framework named in the structural-
 exclusion argument is the three-corner eigenvalue-only method of Emory et al.
 2013 (the exclusion is representational, anisotropy-only, and applies equally

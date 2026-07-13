@@ -313,7 +313,11 @@ them.
 5. Scores: the library's CRPS/energy estimators are now the fair M(M-1) forms. The
    change from the plug-in is NOT a common shift (it subtracts each method's own
    internal-dispersion term divided by M(M-1), so orderings are not automatically
-   preserved); this study's predictive ensembles are the full posterior chains
-   (thousands of members per case), where that term is below a tenth of a percent of
-   each score and far below every committed margin, so the committed conclusions
-   stand, and any regenerated leg is scored with the fair forms.
+   preserved). The magnitude is recorded by the estimator identity: fair minus plug-in
+   equals half the mean intra-ensemble absolute pair difference divided by (M - 1), so
+   the relative correction is bounded by (spread/score)/(M - 1). This study's
+   predictive ensembles are the full posterior chains (thousands of members per case),
+   and every committed failure mode is UNDER-dispersion (spread at or below the score
+   scale), so the correction is below a tenth of a percent of each score and far below
+   every committed margin; the committed conclusions stand, and any regenerated leg is
+   scored with the fair forms.
