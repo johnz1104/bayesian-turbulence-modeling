@@ -46,6 +46,15 @@ public:
 
     CompressibleConvergenceHistory solve(CompressibleFlowFields& fields);
 
+    // Direct per-cell state validation: every component of every solved field
+    // (U including the spanwise component, p, T, rho, k, omega) is checked
+    // with std::isfinite, plus positivity of T, rho and p. Aggregate max/min
+    // reductions can never prove this: std::max(a, NaN) evaluates the
+    // comparison as false and KEEPS a, so a NaN entering a chained reduction
+    // is silently dropped. Public so the divergence detection is unit-testable
+    // against exactly that masking defect.
+    bool stateIsValid(const CompressibleFlowFields& f) const;
+
     void initUniform(CompressibleFlowFields& f,
                      const Vec3& Uinit,
                      double p_init,

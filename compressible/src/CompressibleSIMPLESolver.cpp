@@ -72,6 +72,25 @@ void CompressibleSIMPLESolver::updateViscosity(const CompressibleFlowFields& f) 
         mu_[ci] = eos_.viscosity(f.T[ci]);
 }
 
+bool CompressibleSIMPLESolver::stateIsValid(const CompressibleFlowFields& f) const {
+    // explicit per-cell sweep; see the header note on why max/min reductions
+    // cannot substitute (they drop NaN operands)
+    for (int ci = 0; ci < mesh_.nCells(); ++ci) {
+        const bool finite = std::isfinite(f.U[ci].x) && std::isfinite(f.U[ci].y)
+                         && std::isfinite(f.U[ci].z)
+                         && std::isfinite(f.p[ci]) && std::isfinite(f.T[ci])
+                         && std::isfinite(f.rho[ci])
+                         && std::isfinite(f.k[ci]) && std::isfinite(f.omega[ci]);
+        // positivity: temperature, density, and the working pressure (the
+        // working pressure bounds the thermodynamic one from above while the
+        // trace absorption holds, so this check stays valid after the
+        // two-pressure integration and is tightened there if needed)
+        if (!finite || f.T[ci] <= 0.0 || f.rho[ci] <= 0.0 || f.p[ci] <= 0.0)
+            return false;
+    }
+    return true;
+}
+
 void CompressibleSIMPLESolver::updateDensity(CompressibleFlowFields& f) {
     for (int ci = 0; ci < mesh_.nCells(); ++ci)
         f.rho[ci] = eos_.density(f.p[ci], f.T[ci]);
@@ -678,6 +697,7 @@ CompressibleConvergenceHistory CompressibleSIMPLESolver::solve(CompressibleFlowF
         // dimensional equation residual decays too slowly for a reduction
         // criterion while the field itself stopped changing long before.
         double tChange = 0.0;
+        SolverResult resT = {};
         {
             ScalarField T_old(mesh_, "T_old");
             for (int ci = 0; ci < mesh_.nCells(); ++ci) T_old[ci] = f.T[ci];
@@ -685,11 +705,16 @@ CompressibleConvergenceHistory CompressibleSIMPLESolver::solve(CompressibleFlowF
             assembleEnergy(eSys, f);
             std::vector<double> Tvec(mesh_.nCells());
             for (int ci = 0; ci < mesh_.nCells(); ++ci) Tvec[ci] = f.T[ci];
-            eSolver_->solve(eSys, Tvec,
+            resT = eSolver_->solve(eSys, Tvec,
                             settings_.innerIterations,
                             settings_.innerTolerance);
             for (int ci = 0; ci < mesh_.nCells(); ++ci) {
-                f.T[ci] = std::max(Tvec[ci], 1.0);  // prevent non-physical T ≤ 0
+                // prevent non-physical T <= 0; note std::max(NaN, 1.0)
+                // evaluates the comparison false and returns 1.0, so this
+                // clamp SILENTLY absorbs a NaN solution: the resT residual
+                // finite-check in the divergence block is the detector for
+                // that path, which is why the energy solver result is kept
+                f.T[ci] = std::max(Tvec[ci], 1.0);
             }
             applyTemperatureBC(f.T, mesh_, bcs_);
 
@@ -793,22 +818,26 @@ CompressibleConvergenceHistory CompressibleSIMPLESolver::solve(CompressibleFlowF
 
 
 
-        // Check for divergence: EVERY recorded residual/norm must be finite
-        // (a NaN reaching a chained std::max can otherwise be masked by
-        // operand ordering), and the thermodynamic state must stay physical
+        // Check for divergence. The recorded residuals/norms must be finite,
+        // the linear-solve residuals of the energy and spanwise-momentum
+        // equations must be finite (their fields are otherwise only reachable
+        // through max-based change norms, which mask NaN), and the state
+        // itself is validated DIRECTLY per cell (stateIsValid): aggregate
+        // max/min reductions drop a NaN operand (the comparison is false), so
+        // only an explicit isfinite sweep can prove field integrity. The
+        // amplitude limit then runs on a state known finite.
         bool diverged = !std::isfinite(entry.Ux) || !std::isfinite(entry.Uy)
                      || !std::isfinite(entry.p)  || !std::isfinite(entry.T)
                      || !std::isfinite(entry.k)  || !std::isfinite(entry.omega)
-                     || !std::isfinite(uChange)  || !std::isfinite(tChange);
+                     || !std::isfinite(uChange)  || !std::isfinite(tChange)
+                     || !std::isfinite(resT.initialRes)
+                     || !std::isfinite(resUz.initialRes)
+                     || !stateIsValid(f);
         if (!diverged) {
-            double pMax = 0.0, rhoMin = 1e300, pMin = 1e300;
-            for (int ci = 0; ci < mesh_.nCells(); ++ci) {
-                pMax   = std::max(pMax, std::abs(f.p[ci]));
-                pMin   = std::min(pMin, f.p[ci]);
-                rhoMin = std::min(rhoMin, f.rho[ci]);
-            }
-            diverged = (pMax > settings_.divergenceLimit)
-                    || (pMin <= 0.0) || (rhoMin <= 0.0);
+            double pMax = 0.0;
+            for (int ci = 0; ci < mesh_.nCells(); ++ci)
+                pMax = std::max(pMax, std::abs(f.p[ci]));
+            diverged = (pMax > settings_.divergenceLimit);
         }
         if (diverged) {
             hist.diverged  = true;
