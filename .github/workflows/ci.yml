@@ -1,15 +1,15 @@
 # QBTM CI: one gate, the canonical entrypoint.
 #
 # Runs scripts/run_tests.sh (configure + build the pybind11 binding against the
-# pinned 3.11 interpreter, then ctest + pytest) on every pull request to main and
-# on pushes to main. This is the SAME entrypoint local dev and every later agent
-# use; CI adds no bespoke test logic. Pinned stack: requirements.txt.
+# pinned 3.11 interpreter, then ctest + pytest) on every pull request (including
+# stacked PRs whose temporary base is another feature branch) and on pushes to
+# main. This is the SAME entrypoint local dev and every later agent use; CI adds
+# no bespoke test logic. Pinned stack: requirements.txt.
 
 name: ci
 
 on:
   pull_request:
-    branches: [main]
   push:
     branches: [main]
 
