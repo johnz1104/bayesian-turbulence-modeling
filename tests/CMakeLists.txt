@@ -35,6 +35,12 @@ target_link_libraries(test_injection_source PRIVATE btm_incompressible)
 add_test(NAME injection_source COMMAND test_injection_source)
 set_tests_properties(injection_source PROPERTIES TIMEOUT 30 LABELS "unit;injection")
 
+# ---- nut_floor_release: startup-only floor + molecular wall-stress observable ----
+add_executable(test_nut_floor_release cpp/test_nut_floor_release.cpp)
+target_link_libraries(test_nut_floor_release PRIVATE btm_incompressible)
+add_test(NAME nut_floor_release COMMAND test_nut_floor_release)
+set_tests_properties(nut_floor_release PROPERTIES TIMEOUT 240 LABELS "unit;solver;sst")
+
 # ---- periodic_channel: streamwise-periodic curved-channel mesh + body force ----
 add_executable(test_periodic_channel cpp/test_periodic_channel.cpp)
 target_link_libraries(test_periodic_channel PRIVATE btm_incompressible)
