@@ -804,4 +804,15 @@ PYBIND11_MODULE(rans_sst_py, m) {
           py::arg("xx"), py::arg("yy"), py::arg("zz"),
           py::arg("xy"), py::arg("xz") = 0.0, py::arg("yz") = 0.0,
           "Project a Reynolds-stress tensor into the realizable (barycentric) set.");
+
+    m.def("odd_even_energy_ratio",
+          [](const Mesh& mesh, const std::vector<double>& values) {
+              ScalarField phi(mesh, "probe");
+              int n = std::min<int>(mesh.nCells(), (int)values.size());
+              for (int ci = 0; ci < n; ++ci) phi[ci] = values[ci];
+              return oddEvenEnergyRatio(mesh, phi);
+          },
+          py::arg("mesh"), py::arg("values"),
+          "Checkerboard energy ratio of a cell field (companion diagnostic to "
+          "SolverSettings.rhie_chow_all_meshes).");
 }
