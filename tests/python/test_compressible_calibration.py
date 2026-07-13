@@ -143,6 +143,30 @@ def test_crossmach_study_blocks(cal):
     # single-case train cannot split fit and calibration roles; the record
     # must say so instead of silently sharing the case
     assert out["conformal_roles_disjoint"] is False
+
+
+def test_crossmach_multicase_conformal_roles_are_disjoint(cal):
+    """With two or more training cases the conformal leg's fit cases exclude
+    the calibration case, and the record says the roles are disjoint. The
+    third calibration reuses case A's data under a distinct tag (the role
+    logic is what is under test, not the physics)."""
+    if not GVChannelDNS.is_available(_CASE_B):
+        pytest.skip("companion case not present")
+    cal_b = CompressibleCalibration(GVChannelDNS.load(_CASE_B))
+    cal_b.run_ensemble(n=12, seed=1)
+    cal_b.fit_surrogates()
+    cal_a2 = CompressibleCalibration(GVChannelDNS.load(_CASE_A))
+    cal_a2.run_ensemble(n=12, seed=2)
+    cal_a2.fit_surrogates()
+    study = CrossMachStudy({_CASE_A: cal, "A2": cal_a2, _CASE_B: cal_b})
+    out = study.predict_heldout(train=[_CASE_A, "A2"], test=_CASE_B, seed=0)
+    assert out["conformal_roles_disjoint"] is True
+    assert out["cal_case"] == _CASE_A
+    assert out["cal_case"] not in out["fit_cases"]
+    assert _CASE_B not in out["fit_cases"] and _CASE_B != out["cal_case"]
+    for key in out:
+        if key.endswith("_coverage"):
+            assert 0.0 <= out[key] <= 1.0
     assert 0.0 < out["eta"] <= 1.0
     for key in out:
         if key.endswith("_coverage"):

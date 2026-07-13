@@ -390,10 +390,12 @@ class CrossReStudy:
         calibration residuals (its likelihood never enters that fit), and the
         test case is untouched, so split-conformal's untouched-calibration-set
         requirement holds at the case level. cal_case defaults to the training
-        Re nearest the held-out one (deterministic, and the most favorable
-        residual transfer, so the remaining gap is a clean lower bound on the
-        cross-Re shift cost; exchangeability across Reynolds numbers is still
-        an assumption, and the gap reports its violation, not hidden). The
+        Re nearest the held-out one, a deterministic covariate-based choice,
+        making the reported gap a NEAREST-CASE TRANSFER DIAGNOSTIC (nearest is
+        a heuristic, not provably the most favorable transfer, so the gap is
+        not claimed as a bound of either sign; exchangeability across Reynolds
+        numbers is still an assumption, and the gap reports its violation, not
+        hidden). The
         standard and tempered rows keep the full-train posterior: Bayes has no
         untouched-set requirement, and those rows measure exactly the pooled
         Bayes prediction.
