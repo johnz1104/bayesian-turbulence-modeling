@@ -709,11 +709,12 @@ CompressibleConvergenceHistory CompressibleSIMPLESolver::solve(CompressibleFlowF
                             settings_.innerIterations,
                             settings_.innerTolerance);
             for (int ci = 0; ci < mesh_.nCells(); ++ci) {
-                // prevent non-physical T <= 0; note std::max(NaN, 1.0)
-                // evaluates the comparison false and returns 1.0, so this
-                // clamp SILENTLY absorbs a NaN solution: the resT residual
-                // finite-check in the divergence block is the detector for
-                // that path, which is why the energy solver result is kept
+                // Prevent non-physical T <= 0. With NaN as the FIRST
+                // argument, std::max(NaN, 1.0) returns that first argument,
+                // so this clamp preserves a NaN for stateIsValid to detect.
+                // We also retain the linear-solver result below so a
+                // non-finite residual is diagnosed directly rather than only
+                // through its eventual effect on the field.
                 f.T[ci] = std::max(Tvec[ci], 1.0);
             }
             applyTemperatureBC(f.T, mesh_, bcs_);
@@ -817,20 +818,26 @@ CompressibleConvergenceHistory CompressibleSIMPLESolver::solve(CompressibleFlowF
 
 
 
-        // Check for divergence. The recorded residuals/norms must be finite,
-        // the linear-solve residuals of the energy and spanwise-momentum
-        // equations must be finite (their fields are otherwise only reachable
-        // through max-based change norms, which mask NaN), and the state
-        // itself is validated DIRECTLY per cell (stateIsValid): aggregate
-        // max/min reductions drop a NaN operand (the comparison is false), so
-        // only an explicit isfinite sweep can prove field integrity. The
-        // amplitude limit then runs on a state known finite.
+        // Check for divergence. Every recorded residual/norm and both
+        // residuals returned by every linear solve must be finite. The state
+        // itself is also validated DIRECTLY per cell (stateIsValid): a
+        // reduction such as std::max(finite, NaN) keeps its finite first
+        // argument, so aggregate norms alone cannot prove field integrity.
+        // The amplitude limit then runs on a state known finite.
+        auto solverResultFinite = [](const SolverResult& r) {
+            return std::isfinite(r.initialRes) && std::isfinite(r.finalRes);
+        };
         bool diverged = !std::isfinite(entry.Ux) || !std::isfinite(entry.Uy)
                      || !std::isfinite(entry.p)  || !std::isfinite(entry.T)
                      || !std::isfinite(entry.k)  || !std::isfinite(entry.omega)
                      || !std::isfinite(uChange)  || !std::isfinite(tChange)
-                     || !std::isfinite(resT.initialRes)
-                     || !std::isfinite(resUz.initialRes)
+                     || !solverResultFinite(resUx)
+                     || !solverResultFinite(resUy)
+                     || !solverResultFinite(resUz)
+                     || !solverResultFinite(resP)
+                     || !solverResultFinite(resT)
+                     || (turbUpdate && (!solverResultFinite(resK)
+                                     || !solverResultFinite(resOm)))
                      || !stateIsValid(f);
         if (!diverged) {
             double pMax = 0.0;
