@@ -59,6 +59,7 @@ private:
     // Cell-centred dynamic viscosity (from Sutherland at current T)
     std::vector<double> mu_;
 
+
     double normUx0_ = 1, normUy0_ = 1, normP0_ = 1, normT0_ = 1;
 
     void updateViscosity(const CompressibleFlowFields& f);

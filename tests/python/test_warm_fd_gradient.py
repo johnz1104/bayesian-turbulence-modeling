@@ -137,7 +137,12 @@ def test_warm_fd_loglik_gradient_consistent(channel_case):
 # --------------------------------------------------------------------------- #
 def test_frozen_pressure_tangent_direction(channel_case):
     rs, sens, _mesh, th = channel_case
-    rt = sens.eta_jacobian_tangent(th, krylov_tol=1e-9, max_iter=5000, fd_step=1e-6)
+    # max_iter: the corrected SST-2003 omega production adds a betaStar RHS
+    # contribution at limiter-active near-wall cells (10 betaStar k omega / nuT),
+    # the stiffest part of the preconditioned spectrum; that direction needs
+    # roughly five times the pre-correction Krylov budget and then converges
+    # cleanly to 1e-9 (verified; no stall).
+    rt = sens.eta_jacobian_tangent(th, krylov_tol=1e-9, max_iter=30000, fd_step=1e-6)
     assert all(rt.krylov_converged), f"frozen-P tangent did not converge: {list(rt.krylov_rel_res)}"
     Jt = np.asarray(rt.d_obs_d_theta)
 

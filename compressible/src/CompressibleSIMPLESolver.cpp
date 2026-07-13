@@ -73,8 +73,14 @@ void CompressibleSIMPLESolver::updateViscosity(const CompressibleFlowFields& f) 
 }
 
 void CompressibleSIMPLESolver::updateDensity(CompressibleFlowFields& f) {
+    // f.p is the MECHANICAL pressure (thermodynamic + (2/3) rho k, the
+    // absorbed turbulent normal stress); the thermodynamic density follows
+    // from rho R T = p_mech - (2/3) rho k exactly:
+    //   rho = p_mech / (R T + (2/3) k)
     for (int ci = 0; ci < mesh_.nCells(); ++ci)
-        f.rho[ci] = eos_.density(f.p[ci], f.T[ci]);
+        f.rho[ci] = f.p[ci]
+            / (eos_.R * std::max(f.T[ci], 1.0)
+               + (2.0 / 3.0) * std::max(f.k[ci], 0.0));
 }
 
 // ─── Momentum equation ────────────────────────────────────────────────────────
@@ -163,19 +169,27 @@ void CompressibleSIMPLESolver::assembleMomentum(LinearSystem& sys,
     // diffusion above is the componentwise Laplacian div(muEff grad U_i); the
     // full modeled stress (TMR Favre-averaged form) additionally carries
     //   div(muEff (grad U)^T) - (2/3) d/dx_i(muEff div U) - (2/3) d/dx_i(rho k)
-    // with muEff = mu + rho nuT covering the viscous and turbulent parts. The
-    // isotropic -(2/3) rho k part is ABSORBED into the working pressure (the
-    // convention of pressure-based schemes, matching the incompressible
-    // solver): the solved p is p + (2/3) rho k, which cancels identically in
-    // the pressure-gradient force and never enters a committed observable
-    // (this solver's observables are U, T, Cf). The transpose and dilatation
-    // trace terms are applied explicitly below.
+    // with muEff = mu + rho nuT covering the viscous and turbulent parts.
+    // TWO-PRESSURE CONVENTION for the isotropic -(2/3) rho k part: the near-
+    // wall balance p + (2/3) rho k ~ const makes that term and the pressure
+    // gradient a stiff cancelling pair, and applying it as an explicit source
+    // diverges the startup even blended and ramped, so the MOMENTUM equation
+    // solves in the MECHANICAL pressure p_mech = p_thermo + (2/3) rho k (the
+    // pair absorbed, stable), while the EOS and the observation path use the
+    // THERMODYNAMIC pressure: updateDensity evaluates the exact closed form
+    // rho = p_mech / (R T + (2/3) k), which is identically
+    // rho = p_thermo / (R T), and the forward-model observation shim maps
+    // p_thermo = p_mech - (2/3) rho k. Density is therefore never mispriced
+    // by the turbulence bookkeeping term (review fix). At wall faces the
+    // transpose coefficient keeps only the MOLECULAR viscosity (the
+    // turbulent part vanishes at a no-slip wall; owner extrapolation of
+    // muEff would overweight the wall flux).
     {
         ScalarField muEff(mesh_, "muEff");
         for (int ci = 0; ci < mesh_.nCells(); ++ci)
             muEff[ci] = mu_[ci] + f.rho[ci] * f.nuT[ci];
         std::vector<double> tsrc =
-            transposeStressSource(mesh_, muEff, f.U, component);
+            transposeStressSource(mesh_, muEff, f.U, component, &mu_);
 
         VelocityGradients vg = computeVelocityGradients(f.U);
         ScalarField muDivU(mesh_, "muDivU");

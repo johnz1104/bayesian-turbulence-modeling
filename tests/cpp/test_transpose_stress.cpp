@@ -93,8 +93,19 @@ int main() {
         fill(U, coeff,
              [&](double x, double y) { return Vec3(g * y, d * x, 0.0); },
              [&](double, double y) { return b * y; });
-        std::vector<double> sx = transposeStressSource(mesh, coeff, U, 0);
-        std::vector<double> sy = transposeStressSource(mesh, coeff, U, 1);
+        std::vector<double> zeroWall(nc, 0.0);
+        std::vector<double> sx = transposeStressSource(mesh, coeff, U, 0, &zeroWall);
+        std::vector<double> sy = transposeStressSource(mesh, coeff, U, 1, &zeroWall);
+        // wall-adjacent rows (j = 0): the analytic coefficient b*y vanishes
+        // AT the wall, so the wall-zero boundary treatment makes these rows
+        // EXACT too, which owner extrapolation (coefficient b*y1 != 0) would
+        // violate; this pins the review's boundary-treatment fix
+        for (int i = 2; i < nx - 2; ++i) {
+            int ci = 0 * nx + i;
+            double vx = sx[ci] / mesh.cell(ci).volume;
+            REQUIRE(std::fabs(vx - b * d) < 1e-11,
+                    "wall-adjacent transpose source must be exact under wall-zero");
+        }
         for (int ci = 0; ci < nc; ++ci) {
             if (!isInterior(ci)) continue;
             double vx = sx[ci] / mesh.cell(ci).volume;

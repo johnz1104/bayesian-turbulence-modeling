@@ -21,10 +21,19 @@
 // identically zero in parallel shear flows (fully-developed channel/Couette)
 // and for constant coefficient with solenoidal U; it acts wherever the
 // coefficient varies along the flow (separated shear layers).
+// wallCoeffOwner (optional, indexed by owner cell): coefficient to use at
+// WALL faces instead of the owner-extrapolated interior coefficient. The
+// physically correct wall value differs from the owner cell's: an eddy
+// viscosity vanishes AT the wall even though the owner-cell value does not
+// (incompressible passes zeros), and a compressible muEff keeps only its
+// molecular part there (turbulent part zero). Non-wall boundary faces keep
+// owner extrapolation.
 inline std::vector<double> transposeStressSource(const Mesh& mesh,
                                                  const ScalarField& coeff,
                                                  const VectorField& U,
-                                                 int component) {
+                                                 int component,
+                                                 const std::vector<double>*
+                                                     wallCoeffOwner = nullptr) {
     VelocityGradients vg = computeVelocityGradients(U);
     // column `component` of grad U at a cell:
     //   (dU_x/dx_i, dU_y/dx_i, dU_z/dx_i) for i = component
@@ -48,11 +57,28 @@ inline std::vector<double> transposeStressSource(const Mesh& mesh,
         src[o] += flux;      // face normal is outward for the owner
         src[n] -= flux;      // and inward for the neighbor
     }
-    for (int fi = nIF; fi < mesh.nFaces(); ++fi) {
-        const Face& face = mesh.face(fi);
-        int o = face.owner;
-        double flux = coeff[o] * gcol(o).dot(face.normal) * face.area;
-        src[o] += flux;
+    if (wallCoeffOwner == nullptr) {
+        for (int fi = nIF; fi < mesh.nFaces(); ++fi) {
+            const Face& face = mesh.face(fi);
+            int o = face.owner;
+            double flux = coeff[o] * gcol(o).dot(face.normal) * face.area;
+            src[o] += flux;
+        }
+        return src;
+    }
+    // wall-aware boundary treatment: iterate patches so wall faces get the
+    // supplied wall coefficient and every other boundary keeps owner
+    // extrapolation
+    for (int pi = 0; pi < mesh.nPatches(); ++pi) {
+        const Patch& pat = mesh.patch(pi);
+        const bool isWall = (pat.type == "wall");
+        for (FaceID fi : pat.faces) {
+            const Face& face = mesh.face(fi);
+            int o = face.owner;
+            double cf = isWall ? (*wallCoeffOwner)[o] : coeff[o];
+            double flux = cf * gcol(o).dot(face.normal) * face.area;
+            src[o] += flux;
+        }
     }
     return src;
 }

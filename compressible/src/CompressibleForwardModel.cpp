@@ -57,7 +57,14 @@ EvaluationResult CompressibleForwardModel::evaluate(const std::vector<double>& t
     // (reuses existing incompressible observation machinery)
     FlowFields ff(mesh_);
     ff.U     = fields.U;
-    ff.p     = fields.p;
+    // observables see the THERMODYNAMIC pressure: the solver's p is the
+    // mechanical pressure with the (2/3) rho k turbulent normal stress
+    // absorbed (see the assembly note), and a pressure tap or drag integral
+    // must not report the bookkeeping term
+    ff.p = fields.p;
+    for (int ci = 0; ci < mesh_.nCells(); ++ci)
+        ff.p[ci] = fields.p[ci]
+            - (2.0 / 3.0) * fields.rho[ci] * std::max(fields.k[ci], 0.0);
     ff.k     = fields.k;
     ff.omega = fields.omega;
     ff.nuT   = fields.nuT;

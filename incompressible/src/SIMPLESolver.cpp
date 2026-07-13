@@ -154,8 +154,13 @@ void SIMPLESolver::assembleMomentum(LinearSystem& sys, const FlowFields& f, int 
     // freeze switch is the frozen-pressure tangent's reduced operator (the
     // source is lagged there, matching the solver's own Picard operator).
     if (!freezeTransposeStress_) {
+        // wall faces carry ZERO transpose coefficient: the eddy viscosity
+        // vanishes AT a no-slip wall even though the owner-cell value does
+        // not, so owner extrapolation would overweight the wall flux
+        // (review fix, pinned by the wall-adjacent manufactured test)
+        std::vector<double> zeroWall(mesh_.nCells(), 0.0);
         std::vector<double> tsrc =
-            transposeStressSource(mesh_, f.nuT, f.U, component);
+            transposeStressSource(mesh_, f.nuT, f.U, component, &zeroWall);
         for (int ci = 0; ci < mesh_.nCells(); ++ci)
             sys.source[ci] += tsrc[ci];
     }
@@ -1131,16 +1136,25 @@ std::vector<std::vector<double>> SIMPLESolver::assembleResidualSensitivity(
                 dR[j][BUY + o] += dnuTf * fy;  dR[j][BUY + n2] -= dnuTf * fy;
             }
         }
-        for (int fi = nIF; fi < mesh_.nFaces(); ++fi) {
-            const Face& face = mesh_.face(fi);
-            const int o = face.owner;
-            const double fx = gcol(o, 0).dot(face.normal) * face.area;
-            const double fy = gcol(o, 1).dot(face.normal) * face.area;
-            for (int j = 0; j < 11; ++j) {
-                const double dnuTo = cs[o].dnuT[j];
-                if (dnuTo == 0.0) continue;
-                dR[j][BUX + o] += dnuTo * fx;
-                dR[j][BUY + o] += dnuTo * fy;
+        // boundary faces, patch-aware: WALL faces carry a zero transpose
+        // coefficient in the assembly (the eddy viscosity vanishes at the
+        // wall), so their theta-derivative is identically zero and they are
+        // skipped here to keep the analytic dR matched to an FD of the
+        // assembled residual
+        for (int pi = 0; pi < mesh_.nPatches(); ++pi) {
+            const Patch& pat = mesh_.patch(pi);
+            if (pat.type == "wall") continue;
+            for (FaceID fi : pat.faces) {
+                const Face& face = mesh_.face(fi);
+                const int o = face.owner;
+                const double fx = gcol(o, 0).dot(face.normal) * face.area;
+                const double fy = gcol(o, 1).dot(face.normal) * face.area;
+                for (int j = 0; j < 11; ++j) {
+                    const double dnuTo = cs[o].dnuT[j];
+                    if (dnuTo == 0.0) continue;
+                    dR[j][BUX + o] += dnuTo * fx;
+                    dR[j][BUY + o] += dnuTo * fy;
+                }
             }
         }
     }
