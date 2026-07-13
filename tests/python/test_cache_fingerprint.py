@@ -52,3 +52,25 @@ def test_pre_fingerprint_cache_classifies_legacy(tmp_path):
     d = dict(np.load(path))
     status, _ = cfp.check(d, _cfg())
     assert status == "legacy"
+
+
+def test_legacy_reuse_is_env_gated(monkeypatch):
+    # default: refuse; explicit opt-in: allow
+    monkeypatch.delenv("QBTM_ALLOW_LEGACY_CACHE", raising=False)
+    assert not cfp.legacy_reuse_allowed()
+    monkeypatch.setenv("QBTM_ALLOW_LEGACY_CACHE", "1")
+    assert cfp.legacy_reuse_allowed()
+    monkeypatch.setenv("QBTM_ALLOW_LEGACY_CACHE", "0")
+    assert not cfp.legacy_reuse_allowed()
+
+
+def test_attach_records_code_revision():
+    stamped = cfp.attach({"x": np.arange(3)}, {"kind": "t"})
+    assert cfp.CODE_REV_KEY in stamped
+    rev = str(np.asarray(stamped[cfp.CODE_REV_KEY])[()])
+    assert rev  # short hash in a repo, "unknown" outside one
+    # a code-revision drift on a config match stays a match (provenance only)
+    stamped[cfp.CODE_REV_KEY] = np.array("0000000")
+    status, reason = cfp.check(stamped, {"kind": "t"})
+    assert status == "match"
+    assert "0000000" in reason

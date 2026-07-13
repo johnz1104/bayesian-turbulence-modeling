@@ -8,12 +8,13 @@ Two variants, named precisely because they differ in strength:
   limiting states of the barycentric triangle while keeping the eigenvectors.
   Three perturbed closures.
 - FIVE-STATE (Iaccarino, Mishra and Ghili 2017, Phys. Rev. Fluids 2, 024605),
-  five_state_set: the three eigenvalue corners PLUS two eigenvector
-  perturbations that realign the perturbed stress with the mean strain-rate
-  eigenframe to maximise or minimise turbulence production (taken at the 1C
-  amplitude, where anisotropy magnitude and hence the production bound is
-  widest). Five perturbed closures; the established practice reported to
-  improve bounds over eigenvalue-only perturbation.
+  five_state_set: the 1C and 2C eigenvalue corners EACH paired with BOTH
+  production-extremal eigenvector alignments (the perturbed stress realigned
+  with the mean strain-rate eigenframe to maximise or minimise turbulence
+  production), plus the isotropic 3C corner, where the eigenvalues are equal
+  and the alignment is immaterial: {(1C, vmax), (1C, vmin), (2C, vmax),
+  (2C, vmin), 3C}. Five perturbed closures; the established practice reported
+  to improve bounds over eigenvalue-only perturbation.
 
 Both are deterministic bounding envelopes, not probability distributions; how
 they are scored against probabilistic methods is pre-registered in
@@ -125,13 +126,17 @@ class EigenspacePerturbation:
     def five_state_set(b, strain, delta_b=1.0):
         """The FIVE-STATE family (Iaccarino, Mishra and Ghili 2017).
 
-        The three eigenvalue corners of corner_set plus the two production-
-        extremal eigenvector states of production_extremal_states, all at the
-        same delta_b. Propagated exactly like corner_set members.
+        The documented construction: the 1C and 2C eigenvalue corners each
+        paired with both production-extremal eigenvector alignments, plus the
+        isotropic 3C corner (equal eigenvalues, so the eigenvector pairing is
+        immaterial there; at delta_b = 1 the 3C member is exactly b = 0), all
+        at the same delta_b. Propagated exactly like corner_set members.
         """
-        family = EigenspacePerturbation.corner_set(b, delta_b)
-        family.update(
-            EigenspacePerturbation.production_extremal_states(b, strain, delta_b))
+        family = {}
+        for corner in ("1C", "2C"):
+            family.update(EigenspacePerturbation.production_extremal_states(
+                b, strain, delta_b, base_corner=corner))
+        family["3C"] = EigenspacePerturbation.perturb(b, "3C", delta_b)
         return family
 
     @staticmethod

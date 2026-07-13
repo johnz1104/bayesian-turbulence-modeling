@@ -92,3 +92,35 @@ def test_raw_component_representation_is_not_equivariant():
     db_rot = np.einsum("ij,njk,lk->nil", R, db, R)
     assert np.allclose(dc.invariants(S, W), dc.invariants(S_r, W_r), atol=1e-9)
     assert not np.allclose(db, db_rot, atol=1e-3)
+
+
+def test_basis_diagnostics_rank_and_residual():
+    rng = np.random.default_rng(7)
+    n = 12
+    # 2-D mean flow: gradients confined to the x-y block
+    grad = np.zeros((n, 3, 3))
+    grad[:, :2, :2] = rng.normal(size=(n, 2, 2))
+    S, W = dc.strain_rotation(grad, np.ones(n))
+    T = dc.integrity_basis(S, W)
+    diag = dc.basis_diagnostics(T)
+    assert np.all(diag["rank"] <= 3), "2-D mean flow admits at most 3 independent tensors"
+    assert np.all(np.isfinite(diag["cond"]))
+    # a target formed IN the basis reconstructs to machine precision
+    g_true = rng.normal(size=(n, T.shape[1]))
+    db_in = dc.basis_reconstruct(T, g_true)
+    diag_in = dc.basis_diagnostics(T, db_in)
+    assert np.all(diag_in["rel_residual"] < 1e-8)
+    # a symmetric-traceless target with 3-D structure is NOT achievable on a
+    # 2-D basis and the residual quantifies the miss
+    db_out = np.zeros((n, 3, 3))
+    db_out[:, 0, 2] = db_out[:, 2, 0] = 1.0
+    diag_out = dc.basis_diagnostics(T, db_out)
+    assert np.all(diag_out["rel_residual"] > 0.5)
+
+
+def test_basis_diagnostics_rank_zero_conditioning_is_infinite():
+    # a zero basis has no achievable subspace; conditioning must report inf
+    T = np.zeros((4, 10, 3, 3))
+    diag = dc.basis_diagnostics(T)
+    assert np.all(diag["rank"] == 0)
+    assert np.all(np.isinf(diag["cond"]))

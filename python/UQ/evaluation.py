@@ -49,6 +49,13 @@ def crps_ensemble(y_true, samples):
     M^2 denominator (crps_ensemble_biased) systematically penalises small M.
     samples: (N, M); y_true: (N,). For M = 1 the pair term has no off-diagonal
     pairs and the score reduces to E|X - y|.
+
+    Convention: use the fair estimator when the M members are an iid SAMPLE of
+    an underlying predictive distribution (posterior ensembles, flow draws);
+    use the M^2 plug-in when the M members ARE the forecast itself, a finite
+    discrete distribution (e.g. a deterministic bounding family read as a
+    uniform discrete forecast), for which the plug-in is the exact CRPS, not
+    a biased estimate of anything.
     """
     y_true = np.asarray(y_true, dtype=float)
     samples = np.asarray(samples, dtype=float)
@@ -65,10 +72,14 @@ def crps_ensemble(y_true, samples):
 def crps_ensemble_biased(y_true, samples):
     """Ensemble CRPS with the M^2 pair denominator (diagonal included).
 
-    The empirical-CDF plug-in estimator. Proper for the ensemble itself but
-    biased against small ensembles as an estimate of the underlying-forecast
-    CRPS; kept only to reproduce previously committed score tables. Use
-    crps_ensemble (fair) for any cross-ensemble-size comparison.
+    The empirical-CDF plug-in. Two distinct legitimate uses: (1) it is the
+    EXACT CRPS of the finite discrete forecast that places mass 1/M on each
+    member, so it is the correct (not merely charitable) score when the
+    members are themselves the forecast, as with a deterministic bounding
+    family; (2) it reproduces previously committed score tables. As an
+    estimate of an underlying continuous predictive it is biased against
+    small ensembles; use crps_ensemble (fair) for that reading and for any
+    cross-ensemble-size comparison of sampled predictives.
     """
     y_true = np.asarray(y_true, dtype=float)
     samples = np.asarray(samples, dtype=float)
@@ -105,9 +116,11 @@ def energy_score(y_true, samples):
 def energy_score_biased(y_true, samples):
     """Energy score with the M^2 pair denominator (diagonal zeros included).
 
-    Kept only to reproduce previously committed score tables; biased against
-    small ensembles. Use energy_score (fair) for cross-ensemble-size
-    comparisons.
+    Exactly as crps_ensemble_biased: the exact energy score of the finite
+    discrete forecast on the M members (the right convention for a
+    deterministic bounding family), and the reproduction path for committed
+    tables; biased as an estimate of an underlying continuous predictive,
+    where energy_score (fair) is the comparable choice across ensemble sizes.
     """
     y_true = np.asarray(y_true, dtype=float)
     samples = np.asarray(samples, dtype=float)

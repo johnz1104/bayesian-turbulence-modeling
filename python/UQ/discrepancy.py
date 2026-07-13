@@ -118,6 +118,45 @@ def basis_coefficients(T_basis, db, ridge=1e-12):
     return np.linalg.solve(G, rhs)
 
 
+def basis_diagnostics(T_basis, db=None, ridge=1e-12, rank_tol=1e-10):
+    """Feasibility diagnostics for the integrity-basis representation.
+
+    Per sample: the numerical rank and condition number of the basis Gram
+    matrix G = A A^T (A the (nb, 9) flattened basis), and, when a target db is
+    given, the relative Frobenius residual of its ridge least-squares
+    reconstruction, ||reconstruct(g) - db||_F / ||db||_F. On 2-D mean flows
+    the ten-tensor basis has rank <= 3, so a near-machine residual says db is
+    ACHIEVABLE in the basis while a large one quantifies exactly what the
+    objective parameterisation cannot represent; these are the feasibility
+    numbers a study reports before adopting the basis as its target space.
+
+    Returns {"rank": (N,), "cond": (N,), "rel_residual": (N,) or None}.
+    """
+    T_basis = np.asarray(T_basis, float)
+    N, nb = T_basis.shape[0], T_basis.shape[1]
+    A = T_basis.reshape(N, nb, 9)
+    G = np.einsum("nip,njp->nij", A, A)
+    ev = np.linalg.eigvalsh(G)                          # ascending, >= 0
+    lead = np.maximum(ev[:, -1], 1e-300)
+    rank = np.sum(ev > rank_tol * lead[:, None], axis=1)
+    # condition over the numerically nonzero spectrum (the achievable
+    # subspace); a rank-zero basis has no spectrum to condition, reported as
+    # infinite, never as the misleading 1.0 the naive 0/0 would give
+    ev_floor = np.where(ev > rank_tol * lead[:, None], ev, np.inf)
+    cond = np.where(rank > 0,
+                    lead / np.minimum(np.min(ev_floor, axis=1), lead),
+                    np.inf)
+    out = {"rank": rank, "cond": cond, "rel_residual": None}
+    if db is not None:
+        db = np.asarray(db, float)
+        g = basis_coefficients(T_basis, db, ridge=ridge)
+        resid = basis_reconstruct(T_basis, g) - db
+        num = np.linalg.norm(resid.reshape(N, 9), axis=1)
+        den = np.maximum(np.linalg.norm(db.reshape(N, 9), axis=1), 1e-300)
+        out["rel_residual"] = num / den
+    return out
+
+
 def basis_reconstruct(T_basis, g):
     """Reconstruct the tensor discrepancy from integrity-basis coefficients.
 

@@ -42,6 +42,13 @@ from UQ.datasets import channel_discrepancy as cdisc
 from UQ.datasets.channel_calibration import ChannelCalibration, CrossReStudy, PARAM_SETS
 from UQ import cache_fingerprint as cfp
 from UQ import conformal as cf
+
+# Physics schema token: part of every cache identity in this script. Bump it
+# exactly when the producing model changes (solver physics, closure form,
+# observation definition), never for refactors; v2 marks the post-audit
+# corrected solver (SST-2003 limited production, startup-only floor,
+# completed Boussinesq stress, honest convergence accounting).
+PHYSICS = "channel-rans-v2"
 from UQ import evaluation as ev
 
 PARAM_SETS_AVAILABLE = tuple(PARAM_SETS)
@@ -74,15 +81,19 @@ def ensemble_path(n, param_set):
 
 def stage_baselines(regen):
     path = os.path.join(OUT, "baselines.npz")
-    ident = {"kind": "channel_baselines", "cases": CONFIG["cases"],
-             "baseline_cfg": CONFIG["baseline_cfg"]}
+    ident = {"kind": "channel_baselines", "physics": PHYSICS,
+             "cases": CONFIG["cases"], "baseline_cfg": CONFIG["baseline_cfg"]}
     if os.path.exists(path) and not regen:
         d = dict(np.load(path))
         status, reason = cfp.check(d, ident)
-        if status == "match" or status == "legacy":
-            if status == "legacy":
-                print("[baselines] WARNING reusing pre-fingerprint cache; "
-                      "regenerate with --regen-baselines to stamp it")
+        if status == "legacy" and cfp.legacy_reuse_allowed():
+            print("[baselines] WARNING reusing pre-fingerprint cache "
+                  "(QBTM_ALLOW_LEGACY_CACHE=1); regenerate with "
+                  "--regen-baselines to stamp it")
+            return d
+        if status == "match":
+            if reason:
+                print(f"[baselines] cache reused; {reason}")
             return d
         print(f"[baselines] cache REFUSED ({reason}); regenerating")
     print("[baselines] generating matched-Re_tau SST baseline fields ...")
@@ -135,7 +146,8 @@ def stage_ensembles(regen, quick):
         # the scientifically relevant cache identity: a quick run (smaller
         # ensemble) or any config change fingerprints differently, so a full
         # run can never silently reuse a quick cache under the shared filename
-        ident = {"kind": "channel_ensemble", "case": n, "n_ensemble": n_ens,
+        ident = {"kind": "channel_ensemble", "physics": PHYSICS, "case": n,
+                 "n_ensemble": n_ens,
                  "seed": CONFIG["seed"], "param_set": CONFIG["param_set"],
                  "n_stations": CONFIG["n_stations"], "cfg": CONFIG["cfg"],
                  "sigma_floor": CONFIG["sigma_floor"]}
@@ -143,12 +155,16 @@ def stage_ensembles(regen, quick):
         if os.path.exists(path) and not regen:
             d = dict(np.load(path))
             status, reason = cfp.check(d, ident)
-            if status == "mismatch":
+            if status == "mismatch" or (status == "legacy"
+                                        and not cfp.legacy_reuse_allowed()):
                 print(f"  Re_tau {n:>4}: cache REFUSED ({reason}); regenerating")
             else:
                 if status == "legacy":
                     print(f"  Re_tau {n:>4}: WARNING reusing pre-fingerprint "
-                          f"cache; regenerate with --regen-ensembles to stamp it")
+                          f"cache (QBTM_ALLOW_LEGACY_CACHE=1); regenerate "
+                          f"with --regen-ensembles to stamp it")
+                elif reason:
+                    print(f"  Re_tau {n:>4}: {reason}")
                 loaded = c.load_cache(d)
                 if loaded:
                     print(f"  Re_tau {n:>4}: loaded {c.n_valid} ensemble points")
