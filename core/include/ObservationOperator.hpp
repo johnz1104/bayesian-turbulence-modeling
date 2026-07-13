@@ -199,11 +199,18 @@ inline double ObservationOperator::computeDrag(
         int ow = face.owner;
         double Sf = face.area;
 
-        // pressure contribution (x-component by convention); the reference
-        // pressure is subtracted because a WALL PATCH is not a closed
-        // surface: on an absolute-pressure (compressible) field the ~1e5 Pa
-        // offset would otherwise dominate the drag integral (legacy
-        // incompressible taps default refPressure 0 and are unchanged)
+        // UNITS CONTRACT: this generic adapter is valid on KINEMATIC-pressure
+        // fields only (the incompressible convention, p stored as p/rho), where
+        // the p*n*A term and the nu*dU/dn viscous term are commensurate
+        // (both m^2/s^2 per unit density). A compressible field stores
+        // dimensional pressure while this viscous term stays kinematic, and
+        // the FlowFields view carries no density to form mu*dU/dn, so drag
+        // through this adapter on a compressible field is UNSUPPORTED (not
+        // wired anywhere; the DBNS observation path owns compressible wall
+        // observables). The reference pressure is subtracted because a WALL
+        // PATCH is not a closed surface: a constant offset would otherwise
+        // dominate the drag integral (legacy incompressible taps default
+        // refPressure 0 and are unchanged).
         double pf = fields.p[ow] - obs.refPressure;
         force += pf * face.normal.x * Sf;
 
@@ -235,7 +242,12 @@ inline double ObservationOperator::computeSkinFrictionAt(
     double delta = std::max(face.delta, 1e-20);
 
     // MOLECULAR wall shear (see computeDrag): the DNS-comparable Cf, free of
-    // any numerical nuT bound at the wall-adjacent cell
+    // any numerical nuT bound at the wall-adjacent cell. On a compressible
+    // field this normalization is a LOW-MACH NEARLY-CONSTANT-DENSITY
+    // convention: the kinematic stress over 0.5 U^2 equals the dimensional
+    // Cf only up to the wall-to-reference density ratio, which is ~1 for the
+    // committed Ma 0.1 validation; cooled walls or strong density ratios are
+    // NOT supported here (that regime belongs to the DBNS observation path).
     Vec3 Uc = fields.U[ow];
     Vec3 Un = face.normal * Uc.dot(face.normal);   // normal component
     Vec3 Ut = Uc - Un;                              // tangential
