@@ -35,6 +35,12 @@ target_link_libraries(test_cp_normalization PRIVATE btm_core)
 add_test(NAME cp_normalization COMMAND test_cp_normalization)
 set_tests_properties(cp_normalization PROPERTIES TIMEOUT 30 LABELS "unit;observation")
 
+# ---- infra_fixes: Gauss-Seidel sweep, inBounds guard, cache copy, RC probe ----
+add_executable(test_infra_fixes cpp/test_infra_fixes.cpp)
+target_link_libraries(test_infra_fixes PRIVATE btm_incompressible)
+add_test(NAME infra_fixes COMMAND test_infra_fixes)
+set_tests_properties(infra_fixes PROPERTIES TIMEOUT 240 LABELS "unit;infra")
+
 # ---- injection_source: Reynolds-stress injection manufactured-field test ----
 add_executable(test_injection_source cpp/test_injection_source.cpp)
 target_link_libraries(test_injection_source PRIVATE btm_incompressible)

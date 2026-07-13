@@ -246,7 +246,14 @@ public:
 };
 
 
-// Gauss-Seidel iterative solver 
+// Gauss-Seidel iterative solver: a TRUE in-place sweep. Each unknown is
+// updated with the LATEST values of its neighbours within the same sweep;
+// the audit found the previous implementation recomputed every RHS from the
+// prior iterate wholesale, which is the Jacobi iteration under a
+// Gauss-Seidel name (unused in production, where BiCGSTAB/AMG are the
+// defaults, but the name must mean what it says). The face-based LDU
+// storage is converted to per-cell adjacency once per solve so the sweep
+// can read updated neighbours.
 class GaussSeidelSolver : public ILinearSolver {
 public:
     SolverResult solve(const LinearSystem& A, std::vector<double>& x,
@@ -258,15 +265,28 @@ public:
         res.initialRes = b0;
         if (b0 < 1e-30) b0 = 1.0;
 
-        for (int it = 0; it < maxIter; ++it) {
-            std::vector<double> rhs = A.source;
-            for (int f = 0; f < A.nIF; ++f) {
-                rhs[A.own[f]] -= A.upper[f] * x[A.nbr[f]];
-                rhs[A.nbr[f]] -= A.lower[f] * x[A.own[f]];
-            }
-            for (int i = 0; i < n; ++i)
-                if (std::abs(A.diag[i]) > 1e-30) x[i] = rhs[i] / A.diag[i];
+        // per-cell adjacency (neighbour index, off-diagonal coefficient)
+        std::vector<int> deg(n, 0);
+        for (int f = 0; f < A.nIF; ++f) { ++deg[A.own[f]]; ++deg[A.nbr[f]]; }
+        std::vector<int> off(n + 1, 0);
+        for (int i = 0; i < n; ++i) off[i + 1] = off[i] + deg[i];
+        std::vector<int> adjIdx(off[n]);
+        std::vector<double> adjCoef(off[n]);
+        std::vector<int> cursor(off.begin(), off.end() - 1);
+        for (int f = 0; f < A.nIF; ++f) {
+            int o = A.own[f], nb = A.nbr[f];
+            adjIdx[cursor[o]] = nb;  adjCoef[cursor[o]++] = A.upper[f];
+            adjIdx[cursor[nb]] = o;  adjCoef[cursor[nb]++] = A.lower[f];
+        }
 
+        for (int it = 0; it < maxIter; ++it) {
+            for (int i = 0; i < n; ++i) {
+                if (std::abs(A.diag[i]) <= 1e-30) continue;
+                double s = A.source[i];
+                for (int a = off[i]; a < off[i + 1]; ++a)
+                    s -= adjCoef[a] * x[adjIdx[a]];   // latest in-sweep values
+                x[i] = s / A.diag[i];
+            }
             A.residual(x, r);
             res.iterations = it + 1;
             res.finalRes   = linalg::norm(r) / b0;

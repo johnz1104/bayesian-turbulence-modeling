@@ -304,9 +304,20 @@ void SIMPLESolver::assemblePressureCorrection(LinearSystem& sys,
         if (mesh_.patch(pi).type == "outlet" && !mesh_.patch(pi).faces.empty())
             hasOutlet = true;
 
+    // Audit adjudication of this gate: the outlet test is not a heuristic,
+    // it is exactly the all-Neumann condition under which the p' system
+    // carries an unbroken odd-even null mode (an outlet's Dirichlet row
+    // breaks both the singularity and the mode). Bounded cases are
+    // DNS-validated without the dissipation and the coupled tangent
+    // linearises their legacy operator bit-for-bit, so the term stays gated
+    // by default; settings_.rhieChowAllMeshes turns it on everywhere as an
+    // explicit probe (the pressure PIN below remains outlet-free-only, where
+    // the singular system needs it).
+    const bool rcActive = !hasOutlet || settings_.rhieChowAllMeshes;
+
     // cell pressure gradient for the Rhie-Chow face-flux dissipation below
     VectorField gradP(mesh_, "gradP");
-    if (!hasOutlet) gradP = greenGaussGrad(f.p);
+    if (rcActive) gradP = greenGaussGrad(f.p);
 
     // internal faces
     for (int fi = 0; fi < nIF; ++fi) {
@@ -345,7 +356,7 @@ void SIMPLESolver::assemblePressureCorrection(LinearSystem& sys,
         Vec3 Uf = f.U[o] * face.weight + f.U[n] * (1.0 - face.weight);
         double massFlux = (Uf.x * face.normal.x + Uf.y * face.normal.y
                          + Uf.z * face.normal.z) * Sf;
-        if (!hasOutlet) {
+        if (rcActive) {
             Vec3 ehat = face.d / std::max(face.delta, 1e-30);
             Vec3 gbar = gradP[o] * face.weight + gradP[n] * (1.0 - face.weight);
             massFlux += -dP_f * Sf * ((f.p[n] - f.p[o]) / delta - gbar.dot(ehat));

@@ -53,11 +53,11 @@ EvaluationResult ForwardModel::evaluate(const std::vector<double>& theta) {
         // nearby state makes the iter-0 residual normalisation, and with it
         // the convergence classification, depend on what ran before, and an
         // ensemble study needs every member reproducible in isolation.
-        const WarmStartCache::CacheEntry* cached =
-            bTarget6_.empty() ? cache_.findNearest(theta) : nullptr;
-        if (cached) {
-            // copy cached fields as initial condition
-            fields = cached->fields;
+        WarmStartCache::CacheEntry cached;
+        bool haveWarm = bTarget6_.empty() && cache_.findNearest(theta, cached);
+        if (haveWarm) {
+            // cached fields (copied under the cache lock) as initial condition
+            fields = cached.fields;
         } else {
             solver.initUniform(fields, Uinit_, pInit_, kInit_, omegaInit_);
         }

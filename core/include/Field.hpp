@@ -156,6 +156,39 @@ struct VelocityGradients {
     VectorField dwdx;   // (dw/dx, dw/dy, dw/dz)
 };
 
+// Odd-even (checkerboard) energy ratio of a cell field: the RMS of the
+// deviation of each cell from its face-neighbour average, over the RMS of
+// the field about its mean. A smooth field scores near the discretisation
+// level; a checkerboarded field scores order one. Diagnostic companion to
+// SolverSettings::rhieChowAllMeshes, so collocated-grid susceptibility is
+// measured rather than assumed.
+inline double oddEvenEnergyRatio(const Mesh& mesh, const ScalarField& phi) {
+    int n = mesh.nCells();
+    if (n == 0) return 0.0;
+    std::vector<double> nbrSum(n, 0.0);
+    std::vector<int> nbrCnt(n, 0);
+    for (int fi = 0; fi < mesh.nInternalFaces(); ++fi) {
+        const Face& face = mesh.face(fi);
+        nbrSum[face.owner]    += phi[face.neighbor];
+        nbrSum[face.neighbor] += phi[face.owner];
+        ++nbrCnt[face.owner];
+        ++nbrCnt[face.neighbor];
+    }
+    double mean = 0.0;
+    for (int ci = 0; ci < n; ++ci) mean += phi[ci];
+    mean /= n;
+    double chk2 = 0.0, var2 = 0.0;
+    for (int ci = 0; ci < n; ++ci) {
+        if (nbrCnt[ci] > 0) {
+            double d = phi[ci] - nbrSum[ci] / nbrCnt[ci];
+            chk2 += d * d;
+        }
+        double v = phi[ci] - mean;
+        var2 += v * v;
+    }
+    return std::sqrt(chk2 / std::max(var2, 1e-300));
+}
+
 inline VelocityGradients computeVelocityGradients(const VectorField& U){
     const Mesh& m = U.mesh();
     ScalarField Ux(m, "Ux"), Uy(m, "Uy"), Uz(m, "Uz");

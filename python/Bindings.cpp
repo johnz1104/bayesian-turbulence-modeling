@@ -308,6 +308,7 @@ PYBIND11_MODULE(rans_sst_py, m) {
         .def_static("inlet_turb", &InferenceParameterSet::inletTurb)
         .def_static("near_wall4", &InferenceParameterSet::nearWall4)
         .def_static("all11", &InferenceParameterSet::all11)
+        .def_static("live10", &InferenceParameterSet::live10)
         .def_static("from_indices", &InferenceParameterSet::fromIndices,
                     py::arg("name"), py::arg("indices"));
 
@@ -415,6 +416,7 @@ PYBIND11_MODULE(rans_sst_py, m) {
         .def_readwrite("turb_start_iter",   &SolverSettings::turbStartIter)
         .def_readwrite("turb_update_interval", &SolverSettings::turbUpdateInterval)
         .def_readwrite("nut_floor_iters",   &SolverSettings::nuTFloorIters)
+        .def_readwrite("rhie_chow_all_meshes", &SolverSettings::rhieChowAllMeshes)
         .def_readwrite("alpha_injection",   &SolverSettings::alphaInjection)
         .def_readwrite("body_force",        &SolverSettings::bodyForce)
         .def_readwrite("k_min",             &SolverSettings::kMin)
