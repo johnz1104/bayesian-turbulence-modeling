@@ -12,6 +12,7 @@ Pins the audit fixes to UQ.evaluation:
      the KS test is calibrated on it.
 """
 import numpy as np
+import pytest
 from scipy import stats
 
 from UQ import evaluation as ev
@@ -44,6 +45,34 @@ def test_single_member_reduces_to_absolute_error():
     want = np.mean([0.5, 3.0])
     assert abs(ev.crps_ensemble(y, samples) - want) < 1e-14
     assert abs(ev.energy_score(y[:, None], samples[:, :, None]) - want) < 1e-12
+
+
+def test_plugin_minus_fair_identity():
+    """Pin the sign and normalization used by the research memos.
+
+    With dbar_all the M^2 mean pair distance (zero diagonal included),
+    plug-in minus fair is dbar_all / (2(M - 1)). The same identity holds
+    for CRPS (absolute distance) and the energy score (Euclidean distance).
+    """
+    rng = np.random.default_rng(7)
+    n, m, d = 5, 8, 3
+
+    scalar = rng.normal(size=(n, m))
+    y_scalar = rng.normal(size=n)
+    pair_abs = np.abs(scalar[:, :, None] - scalar[:, None, :])
+    dbar_abs = pair_abs.mean(axis=(1, 2)).mean()
+    assert ev.crps_ensemble_biased(y_scalar, scalar) - \
+        ev.crps_ensemble(y_scalar, scalar) == \
+        pytest.approx(dbar_abs / (2.0 * (m - 1)))
+
+    vector = rng.normal(size=(n, m, d))
+    y_vector = rng.normal(size=(n, d))
+    pair_l2 = np.linalg.norm(
+        vector[:, :, None, :] - vector[:, None, :, :], axis=3)
+    dbar_l2 = pair_l2.mean(axis=(1, 2)).mean()
+    assert ev.energy_score_biased(y_vector, vector) - \
+        ev.energy_score(y_vector, vector) == \
+        pytest.approx(dbar_l2 / (2.0 * (m - 1)))
 
 
 def test_fair_crps_is_unbiased_biased_is_not():
