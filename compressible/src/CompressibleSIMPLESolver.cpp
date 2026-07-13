@@ -1,6 +1,7 @@
 #include "CompressibleSIMPLESolver.hpp"
 #include "LinearSolver.hpp"
 #include "BoundaryCondition.hpp"
+#include "StressOperators.hpp"
 #include <iostream>
 #include <cmath>
 #include <algorithm>
@@ -156,6 +157,40 @@ void CompressibleSIMPLESolver::assembleMomentum(LinearSystem& sys,
                     : (component == 1) ? gradP[ci].y
                                        : gradP[ci].z;
         sys.source[ci] -= dpdx * vol;
+    }
+
+    // Favre-stress completion (explicit deferred correction): the implicit
+    // diffusion above is the componentwise Laplacian div(muEff grad U_i); the
+    // full modeled stress (TMR Favre-averaged form) additionally carries
+    //   div(muEff (grad U)^T) - (2/3) d/dx_i(muEff div U) - (2/3) d/dx_i(rho k)
+    // with muEff = mu + rho nuT covering the viscous and turbulent parts. The
+    // isotropic -(2/3) rho k part is ABSORBED into the working pressure (the
+    // convention of pressure-based schemes, matching the incompressible
+    // solver): the solved p is p + (2/3) rho k, which cancels identically in
+    // the pressure-gradient force and never enters a committed observable
+    // (this solver's observables are U, T, Cf). The transpose and dilatation
+    // trace terms are applied explicitly below.
+    {
+        ScalarField muEff(mesh_, "muEff");
+        for (int ci = 0; ci < mesh_.nCells(); ++ci)
+            muEff[ci] = mu_[ci] + f.rho[ci] * f.nuT[ci];
+        std::vector<double> tsrc =
+            transposeStressSource(mesh_, muEff, f.U, component);
+
+        VelocityGradients vg = computeVelocityGradients(f.U);
+        ScalarField muDivU(mesh_, "muDivU");
+        for (int ci = 0; ci < mesh_.nCells(); ++ci) {
+            double divU = vg.dudx[ci].x + vg.dvdx[ci].y + vg.dwdx[ci].z;
+            muDivU[ci] = muEff[ci] * divU;
+        }
+        VectorField gTr = greenGaussGrad(muDivU);
+        for (int ci = 0; ci < mesh_.nCells(); ++ci) {
+            double vol = mesh_.cell(ci).volume;
+            double gi = (component == 0) ? gTr[ci].x
+                      : (component == 1) ? gTr[ci].y
+                                         : gTr[ci].z;
+            sys.source[ci] += tsrc[ci] - (2.0 / 3.0) * gi * vol;
+        }
     }
 
     // Under-relaxation

@@ -40,8 +40,15 @@ public:
     // residual-shaped vectors (one per coefficient, same [Rux|Ruy|Rk|Rω] layout).  Built
     // from the pointwise SSTModel::closureSensitivity blocks; differentiates ONLY w.r.t.
     // the 11 coefficients and NEVER forms ∂R/∂U (the held adjoint core).
+    // includeTransposeTheta = false is the FROZEN-PRESSURE tangent's fully
+    // frozen reduction: the transpose-stress deferred correction is lagged in
+    // BOTH U (setFreezeTransposeStress) and theta there, so the reduced rung
+    // differentiates exactly the Picard-reduced model. Every other consumer
+    // (residual-sensitivity FD checks, the coupled tangent) keeps the full
+    // theta-derivative.
     std::vector<std::vector<double>> assembleResidualSensitivity(const FlowFields& state,
-                                                                 const SSTCoefficients& theta);
+                                                                 const SSTCoefficients& theta,
+                                                                 bool includeTransposeTheta = true);
 
     // Assemble the (Picard) segregated block operators at a FIXED state with the closure from
     // `theta`: the momentum-x system A_mom (its relaxed diagonal returned in aP), the k system
@@ -100,6 +107,21 @@ private:
     // Adds the explicit deferred-correction source for `component` to sys and,
     // on the x-component pass, re-checks realizability of b_target.
     void addInjectionSource(LinearSystem& sys, const FlowFields& f, int component);
+
+public:
+    // Reduced-operator switch for the FROZEN-PRESSURE tangent: when set, the
+    // momentum assembly omits the transpose-stress deferred correction, so the
+    // matrix-free (dR/dU) application matches the Picard operator the solver
+    // actually inverts per outer iteration (deferred corrections are lagged,
+    // i.e. frozen in U, exactly like the pressure this rung already freezes;
+    // a frozen source is constant in U and drops out of the FD difference).
+    // Without this the reduced 4-block operator carries the full-stress
+    // rigid-rotation near-null mode that only pressure coupling removes, and
+    // BiCGSTAB stagnates on it. The coupled tangent keeps the full operator.
+    void setFreezeTransposeStress(bool v) { freezeTransposeStress_ = v; }
+
+private:
+    bool freezeTransposeStress_ = false;
 
     const Mesh& mesh_;
     SSTModel sst_;

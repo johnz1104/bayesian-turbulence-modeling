@@ -29,6 +29,12 @@ target_link_libraries(test_bfs_lemoin_bc PRIVATE btm_core)
 add_test(NAME bfs_lemoin_bc COMMAND test_bfs_lemoin_bc)
 set_tests_properties(bfs_lemoin_bc PROPERTIES TIMEOUT 30 LABELS "unit;bc")
 
+# ---- transpose_stress: Boussinesq transpose-stress deferred correction ----
+add_executable(test_transpose_stress cpp/test_transpose_stress.cpp)
+target_link_libraries(test_transpose_stress PRIVATE btm_core)
+add_test(NAME transpose_stress COMMAND test_transpose_stress)
+set_tests_properties(transpose_stress PROPERTIES TIMEOUT 30 LABELS "unit;solver")
+
 # ---- injection_source: Reynolds-stress injection manufactured-field test ----
 add_executable(test_injection_source cpp/test_injection_source.cpp)
 target_link_libraries(test_injection_source PRIVATE btm_incompressible)
