@@ -41,6 +41,12 @@ target_link_libraries(test_nut_floor_release PRIVATE btm_incompressible)
 add_test(NAME nut_floor_release COMMAND test_nut_floor_release)
 set_tests_properties(nut_floor_release PROPERTIES TIMEOUT 240 LABELS "unit;solver;sst")
 
+# ---- convergence_accounting: carried turbulence norms under update intervals ----
+add_executable(test_convergence_accounting cpp/test_convergence_accounting.cpp)
+target_link_libraries(test_convergence_accounting PRIVATE btm_incompressible)
+add_test(NAME convergence_accounting COMMAND test_convergence_accounting)
+set_tests_properties(convergence_accounting PROPERTIES TIMEOUT 240 LABELS "unit;solver")
+
 # ---- periodic_channel: streamwise-periodic curved-channel mesh + body force ----
 add_executable(test_periodic_channel cpp/test_periodic_channel.cpp)
 target_link_libraries(test_periodic_channel PRIVATE btm_incompressible)

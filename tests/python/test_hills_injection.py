@@ -128,3 +128,74 @@ def test_scalar_scoring_handles_missing_crossings():
     assert rec["n_no_crossing"] == 1
     assert rec["contains_truth"]
     assert abs(rec["mean"] - 4.5) < 1e-12
+
+
+# ---- status-gated QoI extraction (audit regression) -------------------------
+# Two committed hills member records were bit-identical to their predecessors
+# because a diverged solve left the previous run's fields visible and the
+# wrapper extracted bubble geometry status-blind. The gate must (a) never read
+# held fields for a non-converged member (NaN QoIs), and (b) read them for a
+# converged one. Driven through stubs so the contract is pinned without a
+# solve; the C++ side additionally invalidates held fields on divergence.
+
+class _StubResult:
+    def __init__(self, status):
+        self.status = status
+        self.simple_iters = 7
+
+
+class _StubFM:
+    def __init__(self, status):
+        self._status = status
+        self.last_fields_calls = 0
+
+    def set_target_anisotropy(self, b6):
+        pass
+
+    def clear_target_anisotropy(self):
+        pass
+
+    def evaluate(self, theta):
+        return _StubResult(self._status)
+
+    def has_last_fields(self):
+        return True   # fields LOOK available either way; the gate must decide
+
+    def last_fields(self):
+        self.last_fields_calls += 1
+        return "FIELDS"
+
+    def injection_diagnostics(self):
+        return {}
+
+
+def _stub_wrapper(status):
+    from UQ.datasets.hills_injection import HillsInjection
+    w = object.__new__(HillsInjection)
+    w._fwd = {"fm": _StubFM(status)}
+    w._theta = [0.31, 0.09]
+    w.bubble_geometry = lambda fields: (1.25, 4.75)
+    return w
+
+
+def test_nonconverged_member_records_nan_and_never_reads_fields():
+    from UQ.datasets.hills_injection import HillsInjection
+    for status in ("DivergenceDetected", "Unconverged", "InvalidParameters"):
+        w = _stub_wrapper(status)
+        rec = HillsInjection.run(w, np.zeros((4, 3, 3)))
+        assert rec["status"] == status
+        assert np.isnan(rec["separation"]) and np.isnan(rec["reattachment"])
+        assert np.isnan(rec["bubble_length"])
+        assert rec["fields"] is None
+        assert w._fwd["fm"].last_fields_calls == 0, \
+            "non-converged member must never read held fields"
+
+
+def test_converged_member_extracts_qois():
+    from UQ.datasets.hills_injection import HillsInjection
+    w = _stub_wrapper("Converged")
+    rec = HillsInjection.run(w, np.zeros((4, 3, 3)))
+    assert rec["status"] == "Converged"
+    assert rec["separation"] == 1.25 and rec["reattachment"] == 4.75
+    assert abs(rec["bubble_length"] - 3.5) < 1e-15
+    assert w._fwd["fm"].last_fields_calls == 1

@@ -539,7 +539,13 @@ CompressibleConvergenceHistory CompressibleSIMPLESolver::solve(CompressibleFlowF
     // Reference nu for BCs (at inlet temperature; updated each iteration)
     double nu_ref = eos_.mu_ref / eos_.density(f.p[0], f.T[0]);
 
+    // carried turbulence change norms (initialised to 1 so nothing can claim
+    // turbulence convergence before the first update)
+    double lastKChange = 1.0, lastOmChange = 1.0;
+
+    VectorField Uprev(mesh_, "Uprev");
     for (int iter = 0; iter < settings_.maxIterations; ++iter) {
+        for (int ci = 0; ci < mesh_.nCells(); ++ci) Uprev[ci] = f.U[ci];
 
         // 1. Update thermodynamic state: ρ, μ from current p, T
         updateDensity(f);
@@ -639,7 +645,33 @@ CompressibleConvergenceHistory CompressibleSIMPLESolver::solve(CompressibleFlowF
         correctVelocity(f, pPrime, aPstore);
         correctPressure(f, pPrime);
 
-        // 5. Energy equation for T
+        // velocity field-change norm over the full iteration (momentum solve
+        // plus correction): the dimensionless signal that covers BOTH
+        // components, in particular the wall-normal one whose raw equation
+        // imbalance is not commensurate with the absolute Ux/p thresholds
+        double uChange = 0.0;
+        {
+            double uMaxVal = 1e-30, uMaxDiff = 0.0;
+            for (int ci = 0; ci < mesh_.nCells(); ++ci) {
+                double mag = std::sqrt(f.U[ci].x * f.U[ci].x
+                                       + f.U[ci].y * f.U[ci].y
+                                       + f.U[ci].z * f.U[ci].z);
+                double dx = f.U[ci].x - Uprev[ci].x;
+                double dy = f.U[ci].y - Uprev[ci].y;
+                double dz = f.U[ci].z - Uprev[ci].z;
+                uMaxVal  = std::max(uMaxVal, mag);
+                uMaxDiff = std::max(uMaxDiff,
+                                    std::sqrt(dx * dx + dy * dy + dz * dz));
+            }
+            uChange = uMaxDiff / uMaxVal;
+        }
+
+        // 5. Energy equation for T. The convergence signal is the FIELD-CHANGE
+        // norm ||T_new - T_old||_inf / ||T||_inf (the same convention as k and
+        // omega): at low Mach the temperature is nearly unforced, so its
+        // dimensional equation residual decays too slowly for a reduction
+        // criterion while the field itself stopped changing long before.
+        double tChange = 0.0;
         {
             ScalarField T_old(mesh_, "T_old");
             for (int ci = 0; ci < mesh_.nCells(); ++ci) T_old[ci] = f.T[ci];
@@ -647,13 +679,20 @@ CompressibleConvergenceHistory CompressibleSIMPLESolver::solve(CompressibleFlowF
             assembleEnergy(eSys, f);
             std::vector<double> Tvec(mesh_.nCells());
             for (int ci = 0; ci < mesh_.nCells(); ++ci) Tvec[ci] = f.T[ci];
-            SolverResult resT = eSolver_->solve(eSys, Tvec,
-                                                 settings_.innerIterations,
-                                                 settings_.innerTolerance);
+            eSolver_->solve(eSys, Tvec,
+                            settings_.innerIterations,
+                            settings_.innerTolerance);
             for (int ci = 0; ci < mesh_.nCells(); ++ci) {
                 f.T[ci] = std::max(Tvec[ci], 1.0);  // prevent non-physical T ≤ 0
             }
             applyTemperatureBC(f.T, mesh_, bcs_);
+
+            double tMaxVal = 1e-30, tMaxDiff = 0.0;
+            for (int ci = 0; ci < mesh_.nCells(); ++ci) {
+                tMaxVal  = std::max(tMaxVal,  std::abs(f.T[ci]));
+                tMaxDiff = std::max(tMaxDiff, std::abs(f.T[ci] - T_old[ci]));
+            }
+            tChange = tMaxDiff / tMaxVal;
 
             // Update density from updated p, T
             updateDensity(f);
@@ -663,6 +702,12 @@ CompressibleConvergenceHistory CompressibleSIMPLESolver::solve(CompressibleFlowF
         SolverResult resK = {}, resOm = {};
         if (turbUpdate) {
             double nu0 = mu_[0] / std::max(f.rho[0], 1e-30);
+            // pre-solve fields for the change-norm convergence metric (the
+            // wall re-pinning below keeps the omega EQUATION imbalance
+            // permanently nonzero, so field change is the honest signal,
+            // exactly as the incompressible solver tracks it)
+            std::vector<double> kOld = f.k.data();
+            std::vector<double> omOld = f.omega.data();
 
             assembleKEquation(kSys, f);
             std::vector<double> kVec = f.k.data();
@@ -701,17 +746,39 @@ CompressibleConvergenceHistory CompressibleSIMPLESolver::solve(CompressibleFlowF
                     }
                 }
             }
+
+            // field-change norms ||new - old||_inf / ||new||_inf, CARRIED
+            // between updates (never fresh zeros)
+            double kMaxVal = 1e-30, omMaxVal = 1e-30;
+            double kMaxDiff = 0.0, omMaxDiff = 0.0;
+            for (int ci = 0; ci < mesh_.nCells(); ++ci) {
+                kMaxVal  = std::max(kMaxVal,  std::abs(f.k[ci]));
+                omMaxVal = std::max(omMaxVal, std::abs(f.omega[ci]));
+                kMaxDiff  = std::max(kMaxDiff,  std::abs(f.k[ci] - kOld[ci]));
+                omMaxDiff = std::max(omMaxDiff, std::abs(f.omega[ci] - omOld[ci]));
+            }
+            lastKChange  = kMaxDiff / kMaxVal;
+            lastOmChange = omMaxDiff / omMaxVal;
         }
 
-        // 7. Convergence and divergence check
+        // 7. Convergence and divergence check. Turbulence change norms are
+        // CARRIED between updates (never fresh zeros), the temperature
+        // residual is recorded (it was previously computed and discarded),
+        // and convergence judges EVERY solved equation, not only Ux and p.
+        // resP is the pressure-correction (continuity) imbalance, so mass
+        // conservation is inside the criterion through nP.
         CompressibleResidualEntry entry;
         entry.iteration = iter + 1;
         entry.Ux    = resUx.initialRes;
         entry.Uy    = resUy.initialRes;
         entry.p     = resP.initialRes;
-        entry.k     = turbUpdate ? resK.initialRes  : 0.0;
-        entry.omega = turbUpdate ? resOm.initialRes : 0.0;
+        entry.T     = tChange;
+        entry.k     = turbActive ? lastKChange  : 0.0;
+        entry.omega = turbActive ? lastOmChange : 0.0;
         hist.entries.push_back(entry);
+
+
+
 
         // Check for divergence
         bool diverged = !std::isfinite(entry.Ux) || !std::isfinite(entry.p)
@@ -732,15 +799,26 @@ CompressibleConvergenceHistory CompressibleSIMPLESolver::solve(CompressibleFlowF
 
         if (settings_.verbose && ((iter + 1) % settings_.reportInterval == 0)) {
             std::cout << "  iter " << iter + 1
-                      << "  Ux=" << entry.Ux << "  p=" << entry.p
+                      << "  Ux=" << entry.Ux << "  Uy=" << entry.Uy
+                      << "  p=" << entry.p << "  T=" << entry.T
                       << "  k="  << entry.k  << "  om=" << entry.omega << "\n";
         }
 
-        // Check convergence; withheld until the startup nuT floor has released
-        // (turbActive implies the floor window is in play) so no run freezes a
-        // floored near-wall state as its converged solution
+        // Check convergence over EVERY solved quantity. Ux and p keep this
+        // solver's established ABSOLUTE-threshold semantics for
+        // convergenceTol (the committed regression baselines define it); the
+        // velocity FIELD (both components, in particular the wall-normal one
+        // whose raw equation imbalance is not commensurate with those
+        // thresholds), the temperature, and the carried k/omega all enter as
+        // dimensionless field-change norms. No solved quantity is ignored,
+        // skipped turbulence updates can never inject a false zero, and
+        // convergence is withheld until the startup nuT floor has released
+        // so no run freezes a floored near-wall state.
         double tol = settings_.convergenceTol;
-        bool converged = (entry.Ux < tol) && (entry.p < tol)
+        double maxRes = std::max({entry.Ux, entry.p, uChange, tChange});
+        if (turbActive)
+            maxRes = std::max({maxRes, lastKChange, lastOmChange});
+        bool converged = (maxRes < tol) && (iter > 0)
                          && (!turbActive || f.turbEstablished);
         if (converged) {
             hist.converged = true;

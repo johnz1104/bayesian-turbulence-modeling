@@ -12,18 +12,18 @@
   "diverged": false,
   "positivity_ok": true,
   "simple_iters": 726,
-  "Ma_max": 0.10272103075179662,
-  "T_min": 299.9670511423079,
-  "T_max": 300.0303977453983,
-  "rho_min": 1.1768123211101396,
-  "rho_max": 1.1773409904674048,
-  "U_max": 35.66361196359243,
+  "Ma_max": 0.10272103070349739,
+  "T_min": 299.96705107115923,
+  "T_max": 300.0303975445138,
+  "rho_min": 1.176812319080011,
+  "rho_max": 1.1773409906072378,
+  "U_max": 35.66361194656993,
   "Cf_at_stations": [
-   0.0023622621896372737,
-   0.002141457373426313,
-   0.0020420695113154497
+   0.002362262189045517,
+   0.0021414573686277224,
+   0.002042069460963564
   ],
-  "mass_flux_rel_imbalance": 6.397526844865051e-05
+  "mass_flux_rel_imbalance": 6.397503097859623e-05
  },
  "tolerances": {
   "simple_iters_abs": 50,
@@ -34,5 +34,6 @@
   "Cf_rel": 0.05,
   "mass_flux_rel_imbalance_max": 0.001
  },
- "rationale": "Tolerances are loose enough to absorb 64-bit FP non-determinism between runs and between minor SST/EOS code changes, but tight enough to flag a real regression (e.g. solver instability, mass-conservation drift, or wall-clustering changes that shift Cf or T)."
+ "rationale": "Tolerances are loose enough to absorb 64-bit FP non-determinism between runs and between minor SST/EOS code changes, but tight enough to flag a real regression (e.g. solver instability, mass-conservation drift, or wall-clustering changes that shift Cf or T).",
+ "note": "Regenerated 2026-07-12 on the audit-corrected solver: startup-only nuT floor, molecular wall-stress observable, and the complete convergence criterion (absolute Ux/p plus field-change gates on U, T and the carried k/omega norms, withheld until the floor releases)."
 }

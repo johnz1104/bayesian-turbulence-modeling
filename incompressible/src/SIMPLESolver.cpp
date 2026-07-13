@@ -643,6 +643,14 @@ ConvergenceHistory SIMPLESolver::solve(FlowFields& f) { // input: FlowField obje
     // Passed to assembleOmegaEquation so both k and omega production see the same velocity gradients, preventing omega blow-up.
     ScalarField SmagFrozen(mesh_, "Smag");
 
+    // Last-computed turbulence field-change norms, CARRIED ACROSS iterations:
+    // on non-update iterations (turb_update_interval > 1) the convergence
+    // check must see the most recent turbulence state, never a fresh zero
+    // (a zero would let the solve declare convergence between turbulence
+    // updates while k/omega are still moving). Initialised to 1 so nothing
+    // can claim turbulence convergence before the first update.
+    double lastKChange = 1.0, lastOmChange = 1.0;
+
     // SIMPLE Iteration loop
     for (int iter = 0; iter < settings_.maxIterations; ++iter) {
         // 1. Update SST fields (at turbUpdateInterval cadence after turbStartIter)
@@ -823,6 +831,8 @@ ConvergenceHistory SIMPLESolver::solve(FlowFields& f) { // input: FlowField obje
             }
             kChangeNorm  = kMaxDiff / kMaxVal;
             omChangeNorm = omMaxDiff / omMaxVal;
+            lastKChange  = kChangeNorm;
+            lastOmChange = omChangeNorm;
         }
 
         // 6. Track residuals
@@ -836,8 +846,11 @@ ConvergenceHistory SIMPLESolver::solve(FlowFields& f) { // input: FlowField obje
         entry.Uy    = resUy.initialRes;
         entry.Uz    = resUz.initialRes;
         entry.p     = resP.initialRes;
-        entry.k     = kChangeNorm;
-        entry.omega = omChangeNorm;
+        // the CARRIED norms: on non-update iterations these hold the most
+        // recent turbulence change, so the recorded history and the
+        // convergence check below never see a false zero
+        entry.k     = turbActive ? lastKChange  : 0.0;
+        entry.omega = turbActive ? lastOmChange : 0.0;
 
         // store iter-0 norms for normalisation. The pressure norm keeps a
         // running max over a short warmup: on a fully periodic domain a
@@ -872,9 +885,10 @@ ConvergenceHistory SIMPLESolver::solve(FlowFields& f) { // input: FlowField obje
         double nUx = safeNorm(entry.Ux, normMom0);
         double nUy = safeNorm(entry.Uy, normMom0);
         double nP  = safeNorm(entry.p,  normP0_);
-        // k and omega: field-change norms are already normalised (no iter-0 reference needed)
-        double nK  = kChangeNorm;
-        double nOm = omChangeNorm;
+        // k and omega: carried field-change norms (already normalised; the
+        // most recent update's change, never a fresh zero between updates)
+        double nK  = lastKChange;
+        double nOm = lastOmChange;
         hist.entries.push_back(entry);
 
         // computes maximum normalised residual
