@@ -77,11 +77,16 @@ double SSTModel::production(double nuT, double S, double k, double omega) const 
 // P_omega/alpha = Pk_limited/nuT = min(nuT*S^2, 10*betaStar*k*omega)/nuT
 //               = min(S^2, 10*betaStar*k*omega/nuT)
 // The 2003 paper prints alpha*S^2; the specification (NASA TMR SST page) corrects it to
-// the limited form. The min form is singular-safe: as nuT -> 0 the limiter branch blows
-// up and the min selects S^2, which is the correct limit of Pk/nuT there. Because
-// min(S^2, lim) <= S^2 pointwise, this term is bounded above by the S^2 misprint, so it
-// can only REDUCE omega production (no positive feedback is possible); the two coincide
-// wherever the k-production limiter is inactive (equilibrium attached flows).
+// the limited form. The min form is singular-safe: as nuT -> 0 with k > 0 the limiter
+// branch blows up and the min selects S^2, which is the correct limit of Pk/nuT there.
+// At k = 0 exactly the specification ratio is 0/0 (Pk_limited = 0 and nuT = 0); this
+// returns 0, the k-equation-consistent choice (no k production means no omega
+// production), erring on the reducing side; solvers seed k > 0 at initialization so the
+// state does not persist. Because min(S^2, lim) <= S^2 pointwise, this term is bounded
+// above by the S^2 misprint, so it can only REDUCE omega production (no positive
+// feedback is possible); the two coincide wherever the k-production limiter is inactive
+// (the equilibrium log layer of attached flows; limiter-ACTIVE states, including
+// near-wall and startup states of attached runs, shift toward less production).
 double SSTModel::productionOmega(double nuT, double S, double k, double omega) const {
     double S2  = S * S;
     double lim = 10.0 * coeffs.betaStar * std::max(k, 0.0) * std::max(omega, 1e-20)
