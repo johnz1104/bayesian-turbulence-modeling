@@ -313,11 +313,13 @@ them.
 5. Scores: the library's CRPS/energy estimators are now the fair M(M-1) forms. The
    change from the plug-in is NOT a common shift (it subtracts each method's own
    internal-dispersion term divided by M(M-1), so orderings are not automatically
-   preserved). The magnitude is recorded by the estimator identity: fair minus plug-in
-   equals half the mean intra-ensemble absolute pair difference divided by (M - 1), so
-   the relative correction is bounded by (spread/score)/(M - 1). This study's
-   predictive ensembles are the full posterior chains (thousands of members per case),
-   and every committed failure mode is UNDER-dispersion (spread at or below the score
-   scale), so the correction is below a tenth of a percent of each score and far below
-   every committed margin; the committed conclusions stand, and any regenerated leg is
-   scored with the fair forms.
+   preserved). Define dbar_all = M^-2 sum_ij d(x_i, x_j), including the zero
+   diagonal, with absolute distance for CRPS and Euclidean distance for the
+   energy score. The exact identity is plug-in minus fair =
+   dbar_all/[2(M - 1)] >= 0, equivalently half the mean off-diagonal pair
+   difference divided by M. This sign and normalization are pinned by
+   test_uq_scores_fair.py. The historical artifacts retain the scores but not
+   dbar_all, so no retrospective percentage-of-score correction is claimed here.
+   The posterior-chain ensembles do make the coefficient 1/[2(M - 1)] small,
+   but method ordering is not declared invariant; every regenerated leg is scored
+   with the fair forms and reports the resulting comparison directly.
