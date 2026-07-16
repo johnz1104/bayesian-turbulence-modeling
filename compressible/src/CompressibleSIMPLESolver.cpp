@@ -453,14 +453,19 @@ void CompressibleSIMPLESolver::assembleOmegaEquation(LinearSystem& sys,
         double rhoC  = f.rho[ci];
         double omC   = std::max(f.omega[ci], 1e-20);
 
+        // production: rho * alpha * Pk_limited/nuT (SST-2003 corrected form, bounded
+        // above by the rho*alpha*S^2 misprint; see incompressible assembly note)
         double alphaB = sst_.coeffs.alpha(F1);
         double S      = Smag[ci];
-        sys.source[ci] += rhoC * alphaB * S * S * vol;
+        sys.source[ci] += rhoC * alphaB
+                          * sst_.productionOmega(f.nuT[ci], S, f.k[ci], f.omega[ci]) * vol;
 
         double betaB = sst_.coeffs.beta(F1);
         sys.diag[ci] += rhoC * betaB * omC * vol;
 
-        sys.source[ci] += (1.0 - F1) * std::max(f.CDkw[ci], 0.0) * vol;
+        // cross-diffusion: rho-weighted like the other omega sources (f.CDkw is the
+        // kinematic 2*sigma_w2/omega gradK.gradOmega), UNCLIPPED per SST-2003
+        sys.source[ci] += rhoC * (1.0 - F1) * f.CDkw[ci] * vol;
     }
 
     const double alphaW = settings_.alphaOmega;
