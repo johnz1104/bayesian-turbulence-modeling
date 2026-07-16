@@ -91,6 +91,81 @@ def integrity_basis(S, W):
     return np.stack(T, axis=1)                             # (N, 10, 3, 3)
 
 
+def basis_coefficients(T_basis, db, ridge=1e-12):
+    """Objective (frame-equivariant) representation of a tensor discrepancy:
+    per-sample least-squares coefficients of db in the integrity basis.
+
+    Solves min_g || sum_n g_n T^(n) - db ||_F^2 (+ ridge ||g||^2) per sample.
+    Because the T^(n) rotate with the frame while g and the conditioning
+    invariants do not, a model that PREDICTS g (instead of raw tensor
+    components) reconstructs a discrepancy that transforms correctly under
+    rotation: the objectivity the raw-component parameterisation lacks. The
+    ridge term regularises the rank deficiency of the basis on 2-D mean flows
+    (where only three tensors are independent) without changing the
+    reconstruction on the achievable subspace.
+
+    T_basis: (N, nb, 3, 3) from integrity_basis (or a truncation of it);
+    db: (N, 3, 3) symmetric traceless. Returns g: (N, nb).
+    """
+    T_basis = np.asarray(T_basis, float)
+    db = np.asarray(db, float)
+    N, nb = T_basis.shape[0], T_basis.shape[1]
+    A = T_basis.reshape(N, nb, 9)                      # rows: basis tensors
+    y = db.reshape(N, 9)
+    # normal equations per sample: (A A^T + ridge I) g = A y
+    G = np.einsum("nip,njp->nij", A, A) + ridge * np.eye(nb)
+    rhs = np.einsum("nip,np->ni", A, y)
+    return np.linalg.solve(G, rhs)
+
+
+def basis_diagnostics(T_basis, db=None, ridge=1e-12, rank_tol=1e-10):
+    """Feasibility diagnostics for the integrity-basis representation.
+
+    Per sample: the numerical rank and condition number of the basis Gram
+    matrix G = A A^T (A the (nb, 9) flattened basis), and, when a target db is
+    given, the relative Frobenius residual of its ridge least-squares
+    reconstruction, ||reconstruct(g) - db||_F / ||db||_F. On 2-D mean flows
+    the ten-tensor basis has rank <= 3, so a near-machine residual says db is
+    ACHIEVABLE in the basis while a large one quantifies exactly what the
+    objective parameterisation cannot represent; these are the feasibility
+    numbers a study reports before adopting the basis as its target space.
+
+    Returns {"rank": (N,), "cond": (N,), "rel_residual": (N,) or None}.
+    """
+    T_basis = np.asarray(T_basis, float)
+    N, nb = T_basis.shape[0], T_basis.shape[1]
+    A = T_basis.reshape(N, nb, 9)
+    G = np.einsum("nip,njp->nij", A, A)
+    ev = np.linalg.eigvalsh(G)                          # ascending, >= 0
+    lead = np.maximum(ev[:, -1], 1e-300)
+    rank = np.sum(ev > rank_tol * lead[:, None], axis=1)
+    # condition over the numerically nonzero spectrum (the achievable
+    # subspace); a rank-zero basis has no spectrum to condition, reported as
+    # infinite, never as the misleading 1.0 the naive 0/0 would give
+    ev_floor = np.where(ev > rank_tol * lead[:, None], ev, np.inf)
+    cond = np.where(rank > 0,
+                    lead / np.minimum(np.min(ev_floor, axis=1), lead),
+                    np.inf)
+    out = {"rank": rank, "cond": cond, "rel_residual": None}
+    if db is not None:
+        db = np.asarray(db, float)
+        g = basis_coefficients(T_basis, db, ridge=ridge)
+        resid = basis_reconstruct(T_basis, g) - db
+        num = np.linalg.norm(resid.reshape(N, 9), axis=1)
+        den = np.maximum(np.linalg.norm(db.reshape(N, 9), axis=1), 1e-300)
+        out["rel_residual"] = num / den
+    return out
+
+
+def basis_reconstruct(T_basis, g):
+    """Reconstruct the tensor discrepancy from integrity-basis coefficients.
+
+    db = sum_n g_n T^(n). T_basis: (N, nb, 3, 3); g: (N, nb) -> (N, 3, 3).
+    """
+    return np.einsum("nb,nbij->nij", np.asarray(g, float),
+                     np.asarray(T_basis, float))
+
+
 def boussinesq_anisotropy(S):
     """Linear eddy-viscosity (Boussinesq) anisotropy in non-dimensional form.
 

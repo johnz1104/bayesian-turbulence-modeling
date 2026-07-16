@@ -41,6 +41,14 @@ from UQ.datasets.channel_calibration import ChannelCalibration, CrossReStudy
 from UQ.datasets.couette_forward import CouetteForwardRANS, CouetteCalibration, COUETTE_CFG
 from UQ.datasets.couette_crossflow import CrossFlowStudy
 from UQ.datasets import crossflow_companions as companions
+from UQ import cache_fingerprint as cfp
+
+# Physics schema tokens (cache identity; bump exactly when the producing
+# model changes, see UQ.cache_fingerprint): v3 marks the final integrated
+# post-audit incompressible solver for both flow types. v2 predates integration
+# of the wall-molecular diffusion and completed-stress branches.
+PHYSICS_CHANNEL = "channel-rans-v3"
+PHYSICS_COUETTE = "couette-rans-v3"
 
 CONFIG = {
     "channel_cases": [550, 1000, 2000],
@@ -79,14 +87,34 @@ def stage_channel(regen):
                                n_stations=CONFIG["n_stations"],
                                cfg=CONFIG["channel_cfg"], sigma_floor=0.005)
         path = os.path.join(OUT, f"channel_ensemble_{n}.npz")
+        ident = {"kind": "couette_study_channel_ensemble",
+                 "physics": PHYSICS_CHANNEL, "case": n,
+                 "n_ensemble": CONFIG["n_ensemble"], "seed": CONFIG["seed"],
+                 "param_set": CONFIG["param_set"],
+                 "n_stations": CONFIG["n_stations"],
+                 "cfg": CONFIG["channel_cfg"], "sigma_floor": 0.005}
+        loaded = False
         if os.path.exists(path) and not regen:
-            c.load_cache(dict(np.load(path)))
-            print(f"  channel Re_tau {n:>4}: loaded {c.n_valid} ensemble points")
-        else:
+            d = dict(np.load(path))
+            status, reason = cfp.check(d, ident)
+            if status == "mismatch" or (status == "legacy"
+                                        and not cfp.legacy_reuse_allowed()):
+                print(f"  channel Re_tau {n:>4}: cache REFUSED ({reason}); regenerating")
+            else:
+                if status == "legacy":
+                    print(f"  channel Re_tau {n:>4}: WARNING reusing "
+                          f"pre-fingerprint cache (QBTM_ALLOW_LEGACY_CACHE=1); "
+                          f"regenerate to stamp it")
+                elif reason:
+                    print(f"  channel Re_tau {n:>4}: {reason}")
+                loaded = c.load_cache(d)
+                if loaded:
+                    print(f"  channel Re_tau {n:>4}: loaded {c.n_valid} ensemble points")
+        if not loaded:
             print(f"  channel Re_tau {n:>4}: running {CONFIG['n_ensemble']} solves ...",
                   flush=True)
             c.run_ensemble(n=CONFIG["n_ensemble"], seed=CONFIG["seed"])
-            np.savez(path, **c.to_cache())
+            np.savez(path, **cfp.attach(c.to_cache(), ident))
             c.fit_surrogates()
             print(f"           {c.n_valid}/{CONFIG['n_ensemble']} valid")
         cals[n] = c
@@ -99,8 +127,19 @@ def stage_couette(regen):
     cals = {}
     nus = {}
     nu_path = os.path.join(OUT, "couette_matched_nu.json")
+    nu_ident = {"kind": "couette_matched_nu", "physics": PHYSICS_COUETTE,
+                "cases": CONFIG["couette_cases"], "cfg": CONFIG["couette_cfg"]}
     if os.path.exists(nu_path) and not regen:
-        nus = {int(k): v for k, v in json.load(open(nu_path)).items()}
+        raw = json.load(open(nu_path))
+        if "values" in raw and raw.get("fingerprint") == cfp.fingerprint(nu_ident):
+            nus = {int(k): v for k, v in raw["values"].items()}
+        elif "values" not in raw and cfp.legacy_reuse_allowed():
+            print("  couette matched-nu: WARNING reusing pre-fingerprint store "
+                  "(QBTM_ALLOW_LEGACY_CACHE=1)")
+            nus = {int(k): v for k, v in raw.items()}
+        else:
+            print("  couette matched-nu: store REFUSED (fingerprint absent or "
+                  "stale); re-matching")
     for n in CONFIG["couette_cases"]:
         dns = CouetteDNS.load(n)
         if n not in nus:
@@ -113,18 +152,42 @@ def stage_couette(regen):
                                n_stations=CONFIG["n_stations"],
                                cfg=CONFIG["couette_cfg"])
         path = os.path.join(OUT, f"couette_ensemble_{n}.npz")
+        ident = {"kind": "couette_ensemble", "physics": PHYSICS_COUETTE,
+                 "case": n,
+                 "n_ensemble": CONFIG["n_ensemble"], "seed": CONFIG["seed"],
+                 "param_set": CONFIG["param_set"],
+                 "n_stations": CONFIG["n_stations"],
+                 "cfg": CONFIG["couette_cfg"], "matched_nu": nus[n]}
+        loaded = False
         if os.path.exists(path) and not regen:
-            c.load_cache(dict(np.load(path)))
-            print(f"  couette Re_tau {n:>4}: loaded {c.n_valid} ensemble points")
-        else:
+            d = dict(np.load(path))
+            status, reason = cfp.check(d, ident)
+            if status == "mismatch" or (status == "legacy"
+                                        and not cfp.legacy_reuse_allowed()):
+                print(f"  couette Re_tau {n:>4}: cache REFUSED ({reason}); regenerating")
+            else:
+                if status == "legacy":
+                    print(f"  couette Re_tau {n:>4}: WARNING reusing "
+                          f"pre-fingerprint cache (QBTM_ALLOW_LEGACY_CACHE=1); "
+                          f"regenerate to stamp it")
+                elif reason:
+                    print(f"  couette Re_tau {n:>4}: {reason}")
+                loaded = c.load_cache(d)
+                if loaded:
+                    print(f"  couette Re_tau {n:>4}: loaded {c.n_valid} ensemble points")
+        if not loaded:
             print(f"  couette Re_tau {n:>4}: running {CONFIG['n_ensemble']} solves ...",
                   flush=True)
             c.run_ensemble(n=CONFIG["n_ensemble"], seed=CONFIG["seed"])
-            np.savez(path, **c.to_cache())
+            np.savez(path, **cfp.attach(c.to_cache(), ident))
             c.fit_surrogates()
             print(f"           {c.n_valid}/{CONFIG['n_ensemble']} valid")
         cals[n] = c
-    json.dump({str(k): v for k, v in nus.items()}, open(nu_path, "w"))
+    json.dump({"fingerprint": cfp.fingerprint(nu_ident),
+               "config": cfp.config_json(nu_ident),
+               "code_rev": cfp.code_rev(),
+               "values": {str(k): v for k, v in nus.items()}},
+              open(nu_path, "w"), indent=1)
     return cals
 
 

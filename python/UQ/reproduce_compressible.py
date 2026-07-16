@@ -46,6 +46,13 @@ from UQ.datasets import (GVChannelDNS, GV_CASES, CKMChannelDNS, CKM_CASES,
 from UQ.datasets.compressible_calibration import CompressibleCalibration
 from UQ.datasets.crossmach_study import CrossMachStudy
 from UQ.datasets.compressible_baseline import FlatPlateFrozenSST
+from UQ import cache_fingerprint as cfp
+
+# Physics schema token (cache identity; bump exactly when the producing model
+# changes): the producing model here is the python 1-D compressible profile
+# baseline, which the 2-D solver audit does not touch, so v1 remains valid
+# for pre-audit ensembles once stamped.
+PHYSICS = "compressible-profile-v1"
 
 SEED = 0
 LEVEL = 0.9
@@ -81,12 +88,33 @@ def build_calibrations(results_dir, n_ensemble, rel, regen, quick):
         cal = CompressibleCalibration(dns, rel_sigma=rel)
         cache = os.path.join(results_dir,
                              f"ensemble_{tag}_rel{rel:g}.npz")
+        ident = {"kind": "compressible_ensemble", "physics": PHYSICS,
+                 "case": tag,
+                 "n_ensemble": n_ensemble, "seed": SEED + j, "rel": rel}
+        loaded = False
         if os.path.isfile(cache) and not regen:
-            cal.load_cache({k: v for k, v in np.load(cache).items()})
-        else:
+            d = {k: v for k, v in np.load(cache).items()}
+            status, reason = cfp.check(d, ident)
+            # these ensembles are evaluations of the python 1-D profile
+            # baseline, independent of the C++ solvers, so a code-revision
+            # drift in the solver tree does not invalidate them; the config
+            # fingerprint (and the legacy opt-in for unstamped files) is the
+            # operative gate
+            if status == "mismatch" or (status == "legacy"
+                                        and not cfp.legacy_reuse_allowed()):
+                print(f"  {tag}: cache REFUSED ({reason}); regenerating")
+            else:
+                if status == "legacy":
+                    print(f"  {tag}: WARNING reusing pre-fingerprint cache "
+                          f"(QBTM_ALLOW_LEGACY_CACHE=1); regenerate with "
+                          f"--regen-ensembles to stamp it")
+                elif reason:
+                    print(f"  {tag}: {reason}")
+                loaded = cal.load_cache(d)
+        if not loaded:
             cal.run_ensemble(n=n_ensemble, seed=SEED + j)
             cal.fit_surrogates()
-            np.savez(cache, **cal.to_cache())
+            np.savez(cache, **cfp.attach(cal.to_cache(), ident))
         cals[tag] = cal
         print(f"  [{j + 1}/{len(tags)}] {tag}: n_valid={cal.n_valid} "
               f"rel_eff={cal.rel_eff:.4f}", flush=True)

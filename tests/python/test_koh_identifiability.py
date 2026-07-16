@@ -27,6 +27,7 @@ Tests
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
@@ -82,8 +83,8 @@ class ToyForward:
         return self.evaluate(theta).log_lik
 
 
-class ToyParamSet:
-    """Minimal stand-in for InferenceParameterSet.
+class ToyParamSet(Mapping):
+    """Supported pure-Python Mapping stand-in for InferenceParameterSet.
 
     Defaults are deliberately non-zero on both axes so the
     ``make_prior_from_param_set`` 15%-of-mean rule produces a sensible prior
@@ -96,6 +97,15 @@ class ToyParamSet:
         self._defaults = np.array([1.0, 1.0])  # both nonzero -> well-posed prior
         self._lower    = np.array([-2.0, -2.0])
         self._upper    = np.array([ 3.0,  3.0])
+
+    def __getitem__(self, key):
+        return {
+            "defaults": self._defaults,
+            "lower": self._lower,
+            "upper": self._upper,
+        }[key]
+    def __iter__(self):       return iter(("defaults", "lower", "upper"))
+    def __len__(self):        return 3
 
     def n_active(self):       return len(self._names)
     def active_names(self):   return list(self._names)
