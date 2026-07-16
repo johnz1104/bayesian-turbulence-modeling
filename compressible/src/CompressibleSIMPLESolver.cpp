@@ -37,6 +37,7 @@ void CompressibleSIMPLESolver::initUniform(CompressibleFlowFields& f,
     f.F2.setUniform(1.0);
     f.Pk.setUniform(0.0);
     f.CDkw.setUniform(0.0);
+    f.turbEstablished = false;   // cold start: the startup nuT floor window applies
 
     // Density from EOS
     const double rho0 = eos_.density(p_init, T_init);
@@ -572,7 +573,19 @@ CompressibleConvergenceHistory CompressibleSIMPLESolver::solve(CompressibleFlowF
 
             SmagFrozen = strainRateMagnitude(computeVelocityGradients(f.U));
 
-            const double nuTMin = 0.1 * nu0;
+            // startup-only floor (see SolverSettings::nuTFloorIters); releases
+            // to a non-negativity clamp afterwards, and warm restarts
+            // (turbEstablished carried in the fields) never re-engage it. The
+            // floor VALUE stays the steady inlet-cell nu0: a per-cell
+            // mu(T)/rho floor jitters with the startup pressure transient
+            // (rho = p/RT locally) and destabilizes marginal developing
+            // channels; a startup-only numerical guard wants a constant, and
+            // the local-viscosity treatment belongs to the blending
+            // functions, not the floor.
+            if (!f.turbEstablished
+                && iter >= settings_.turbStartIter + settings_.nuTFloorIters)
+                f.turbEstablished = true;
+            const double nuTMin = f.turbEstablished ? 0.0 : 0.1 * nu0;
             for (int ci = 0; ci < mesh_.nCells(); ++ci)
                 f.nuT[ci] = std::max(f.nuT[ci], nuTMin);
         }
@@ -728,9 +741,12 @@ CompressibleConvergenceHistory CompressibleSIMPLESolver::solve(CompressibleFlowF
                       << "  k="  << entry.k  << "  om=" << entry.omega << "\n";
         }
 
-        // Check convergence
+        // Check convergence; withheld until the startup nuT floor has released
+        // (turbActive implies the floor window is in play) so no run freezes a
+        // floored near-wall state as its converged solution
         double tol = settings_.convergenceTol;
-        bool converged = (entry.Ux < tol) && (entry.p < tol);
+        bool converged = (entry.Ux < tol) && (entry.p < tol)
+                         && (!turbActive || f.turbEstablished);
         if (converged) {
             hist.converged = true;
             hist.finalIter = iter + 1;

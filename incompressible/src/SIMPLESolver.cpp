@@ -28,6 +28,7 @@ void SIMPLESolver::initUniform(FlowFields& f, const Vec3& Uinit, double pInit, d
     f.F2.setUniform(1.0);
     f.Pk.setUniform(0.0);
     f.CDkw.setUniform(0.0);
+    f.turbEstablished = false;   // cold start: the startup nuT floor window applies
 
     // Initialize omega with the wall-distance profile omega = max(60nu/(beta1*y^2), omegaInit).
     // A uniform omega = omegaInit everywhere creates a cliff-edge gradient when wall cells are
@@ -668,13 +669,18 @@ ConvergenceHistory SIMPLESolver::solve(FlowFields& f) { // input: FlowField obje
             // Using the frozen Smag decouples the turbulence model from these numerical oscillations
             SmagFrozen = strainRateMagnitude(computeVelocityGradients(f.U));
 
-            // nuT floor: prevents nuT from collapsing to zero in early iterations
-            // Set `nuT_min = 0.1 * nu` 
-            // This prevents eddy viscosity from collapsing to zero in cells where the Bradshaw limiter produces 
-            // extremely small values (like near-wall cells where omega is very large and drive nuT -> 0)
-            //    - prevents cases that removes turbulent diffusion from the momentum equation 
-            //      and creates unphysical laminar-like velocity gradients
-            const double nuTMin = 0.1 * nu_;
+            // nuT floor, STARTUP-ONLY: guards against early k-omega collapse
+            // (cells where the Bradshaw limiter drives nuT toward zero before
+            // the turbulence fields establish). SST requires nuT -> 0 at a
+            // resolved no-slip wall, so the floor releases after the startup
+            // window and the converged state is floor-free; a permanent floor
+            // biases the near-wall diffusion and the wall stress (~+10 percent
+            // where it binds at y+ ~ 1). Warm restarts carry
+            // f.turbEstablished = true and never re-engage the floor.
+            if (!f.turbEstablished
+                && iter >= settings_.turbStartIter + settings_.nuTFloorIters)
+                f.turbEstablished = true;
+            const double nuTMin = f.turbEstablished ? 0.0 : 0.1 * nu_;
             for (int ci = 0; ci < mesh_.nCells(); ++ci)
                 f.nuT[ci] = std::max(f.nuT[ci], nuTMin);
         }
@@ -887,8 +893,12 @@ ConvergenceHistory SIMPLESolver::solve(FlowFields& f) { // input: FlowField obje
             std::cout << "\n";
         }
 
-        // convergence check (all normalised residuals below tolerance)
-        if (maxRes < settings_.convergenceTol && iter > 0) {
+        // convergence check (all normalised residuals below tolerance); while
+        // turbulence is active, convergence is additionally withheld until the
+        // startup nuT floor has released (f.turbEstablished), so no run can
+        // freeze a floored near-wall state as its converged solution
+        if (maxRes < settings_.convergenceTol && iter > 0
+            && (!turbActive || f.turbEstablished)) {
             hist.converged = true;
             hist.finalIter = iter;
             if (settings_.verbose)
@@ -927,14 +937,16 @@ ConvergenceHistory SIMPLESolver::solve(FlowFields& f) { // input: FlowField obje
 //  touched.
 // ===================================================================================
 
-// Recompute the SST closure of `work` from sst_.coeffs (computeFields + 0.1ν floor) and
-// the frozen |S|, exactly mirroring the turbulence-update branch of solve().
+// Recompute the SST closure of `work` from sst_.coeffs, exactly mirroring the
+// turbulence-update branch of solve() at a CONVERGED state: the startup-only
+// nuT floor has released by convergence, so the mirror applies only the
+// non-negativity clamp (a floored mirror would make residual/derivative
+// evaluations disagree with the converged assembly).
 void SIMPLESolver::recomputeClosure(FlowFields& work, ScalarField& Smag) {
     sst_.computeFields(mesh_, work.k, work.omega, work.U, nu_,
                        work.nuT, work.F1, work.F2, work.Pk, work.CDkw);
-    const double nuTMin = 0.1 * nu_;
     for (int ci = 0; ci < mesh_.nCells(); ++ci)
-        work.nuT[ci] = std::max(work.nuT[ci], nuTMin);
+        work.nuT[ci] = std::max(work.nuT[ci], 0.0);
     Smag = strainRateMagnitude(computeVelocityGradients(work.U));
 }
 
@@ -1007,13 +1019,14 @@ std::vector<std::vector<double>> SIMPLESolver::assembleResidualSensitivity(
     ScalarField Smag(mesh_, "Smag");
     recomputeClosure(work, Smag);
 
-    // pointwise closure sensitivities per cell (Layer 1)
+    // pointwise closure sensitivities per cell (Layer 1); the startup-only
+    // nuT floor has released at the converged states this is evaluated on,
+    // so the derivative carries no floor dead-zone
     const auto& wd = mesh_.wallDistance();
-    const double nuTMin = 0.1 * nu_;
     std::vector<SSTClosureSensitivity> cs(nc);
     for (int ci = 0; ci < nc; ++ci)
         cs[ci] = sst_.closureSensitivity(work.k[ci], work.omega[ci], Smag[ci],
-                                         wd[ci], nu_, work.CDkw[ci], nuTMin);
+                                         wd[ci], nu_, work.CDkw[ci], 0.0);
 
     std::vector<std::vector<double>> dR(11, std::vector<double>(4 * nc, 0.0));
     const int BUX = 0, BUY = nc, BK = 2 * nc, BOM = 3 * nc;

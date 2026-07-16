@@ -414,6 +414,7 @@ PYBIND11_MODULE(rans_sst_py, m) {
         .def_readwrite("inner_tolerance",   &SolverSettings::innerTolerance)
         .def_readwrite("turb_start_iter",   &SolverSettings::turbStartIter)
         .def_readwrite("turb_update_interval", &SolverSettings::turbUpdateInterval)
+        .def_readwrite("nut_floor_iters",   &SolverSettings::nuTFloorIters)
         .def_readwrite("alpha_injection",   &SolverSettings::alphaInjection)
         .def_readwrite("body_force",        &SolverSettings::bodyForce)
         .def_readwrite("k_min",             &SolverSettings::kMin)

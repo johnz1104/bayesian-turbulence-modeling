@@ -17,6 +17,14 @@ struct FlowFields {
     ScalarField Pk;         // production of k
     ScalarField CDkw;       // cross-diffusion term
 
+    // Turbulence-establishment marker carried WITH the state: false after a
+    // cold (uniform) init, set true once a solve passes the startup floor
+    // window. The startup-only nuT floor consults this so a WARM restart
+    // (fields from a converged cache) never re-engages the floor at iter 0,
+    // which would otherwise contaminate warm-FD gradients and warm-started
+    // ensembles with a floor the base state does not carry.
+    bool turbEstablished = false;
+
     FlowFields() = default;
     explicit FlowFields(const Mesh& mesh)
         : U(mesh, "U"), p(mesh, "p"), k(mesh, "k"), omega(mesh, "omega"),
@@ -58,6 +66,15 @@ struct SolverSettings {
 
     int turbStartIter      = 5;
     int turbUpdateInterval = 1;
+
+    // Startup-only eddy-viscosity floor window: the 0.1*nu floor that guards
+    // against early k-omega collapse stays active only while
+    // iter < turbStartIter + nuTFloorIters, then releases to a plain
+    // non-negativity clamp. SST requires nuT -> 0 at a resolved wall, so a
+    // permanent floor would bias the converged near-wall solution and the
+    // wall stress (about +10 percent where it binds); the converged state
+    // must be floor-free. Widen per-case in config if a startup needs it.
+    int nuTFloorIters = 500;
 
     // Under-relaxation of the explicit Reynolds-stress-injection source (the
     // deferred-correction body force is blended across outer iterations at

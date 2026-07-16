@@ -187,12 +187,16 @@ inline double ObservationOperator::computeDrag(
         double pf = fields.p[ow];   // zero-gradient at wall
         force += pf * face.normal.x * Sf;
 
-        // viscous contribution: tau_wall ≈ (nu + nuT) * dU/dn
-        double nuEff = nu + fields.nuT[ow];
+        // viscous contribution: MOLECULAR wall shear tau_w = nu * dU/dn.
+        // At a no-slip wall the eddy viscosity vanishes (SST asymptotics),
+        // so the molecular stress IS the wall stress and matches the DNS
+        // definition; including the wall-adjacent cell's nuT would import
+        // any numerical nuT bound into the observable (a permanent 0.1*nu
+        // floor biased it by ~+10 percent). Valid for wall-resolved first
+        // cells; wall-function runs must use the log-law stress instead.
         double delta = std::max(face.delta, 1e-20);
-        // wall shear in x-direction: nuEff * (U_cell - U_wall) / delta
         double Uw_x = fields.U.bface(fi).x;
-        double tau_x = nuEff * (fields.U[ow].x - Uw_x) / delta;
+        double tau_x = nu * (fields.U[ow].x - Uw_x) / delta;
         force += tau_x * Sf;
     }
 
@@ -208,14 +212,14 @@ inline double ObservationOperator::computeSkinFrictionAt(
     if (fi < 0) return 0.0;
     const Face& face = mesh.face(fi);
     int ow = face.owner;
-    double nuEff = nu + fields.nuT[ow];
     double delta = std::max(face.delta, 1e-20);
 
-    // wall-tangential velocity magnitude
+    // MOLECULAR wall shear (see computeDrag): the DNS-comparable Cf, free of
+    // any numerical nuT bound at the wall-adjacent cell
     Vec3 Uc = fields.U[ow];
     Vec3 Un = face.normal * Uc.dot(face.normal);   // normal component
     Vec3 Ut = Uc - Un;                              // tangential
-    double tau = nuEff * Ut.norm() / delta;
+    double tau = nu * Ut.norm() / delta;
     double dynP = 0.5 * obs.refVelocity * obs.refVelocity;
     return tau / std::max(dynP, 1e-20);
 }
@@ -255,12 +259,13 @@ inline double ObservationOperator::computeSeparationPoint(
     for (FaceID fi : pat.faces) {
         const Face& face = mesh.face(fi);
         int ow = face.owner;
-        double nuEff = nu + fields.nuT[ow];
         double delta = std::max(face.delta, 1e-20);
         Vec3 Uc = fields.U[ow];
         Vec3 Ut = Uc - face.normal * Uc.dot(face.normal);
-        // signed tangential shear (use x-component as streamwise indicator)
-        double tau = nuEff * Ut.x / delta;
+        // signed MOLECULAR tangential shear (x-component as streamwise
+        // indicator); the zero-crossing is invariant to the positive
+        // viscosity factor, so this is a consistency change only
+        double tau = nu * Ut.x / delta;
         double x   = face.center.x;
 
         // positive -> non-positive crossing: interpolate x where tau = 0
@@ -289,11 +294,11 @@ inline double ObservationOperator::computeReattachmentLength(
     for (FaceID fi : pat.faces) {
         const Face& face = mesh.face(fi);
         int ow = face.owner;
-        double nuEff = nu + fields.nuT[ow];
         double delta  = std::max(face.delta, 1e-20);
         Vec3 Uc = fields.U[ow];
         Vec3 Ut = Uc - face.normal * Uc.dot(face.normal);
-        double tau = nuEff * Ut.x / delta;
+        // molecular shear; zero-crossing invariant (see computeSeparationPoint)
+        double tau = nu * Ut.x / delta;
         double x   = face.center.x;
 
         // negative -> non-negative crossing: interpolate x where tau = 0

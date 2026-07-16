@@ -1,38 +1,38 @@
 {
-  "schema_version": 1,
-  "case": "ma_0_1",
-  "description": "Compressible Ma=0.1 channel baseline. 40x30 mesh, Re~2.21e6.",
-  "captured_from": "examples/compressible_validation_ladder.py",
-  "captured_on_commit": "baseline",
-  "expected": {
-    "mesh_cells":      1200,
-    "Ma":              0.1,
-    "max_iterations":  3000,
-    "converged":       true,
-    "diverged":        false,
-    "positivity_ok":   true,
-    "simple_iters":    494,
-    "Ma_max":          0.10278767921094137,
-    "T_min":           299.9450240685265,
-    "T_max":           300.05109877216574,
-    "rho_min":         1.1767746912935813,
-    "rho_max":         1.1774182898787011,
-    "U_max":           35.68671137958105,
-    "Cf_at_stations":  [
-      0.0024188130446497233,
-      0.00219211595955793,
-      0.0020890550541807396
-    ],
-    "mass_flux_rel_imbalance": 8.770837593006608e-05
-  },
-  "tolerances": {
-    "simple_iters_abs":         50,
-    "Ma_max_rel":               0.05,
-    "T_extrema_abs_K":          0.5,
-    "rho_extrema_rel":          0.005,
-    "U_max_rel":                0.05,
-    "Cf_rel":                   0.05,
-    "mass_flux_rel_imbalance_max": 1.0e-3
-  },
-  "rationale": "Tolerances are loose enough to absorb 64-bit FP non-determinism between runs and between minor SST/EOS code changes, but tight enough to flag a real regression (e.g. solver instability, mass-conservation drift, or wall-clustering changes that shift Cf or T)."
+ "schema_version": 1,
+ "case": "ma_0_1",
+ "description": "Compressible Ma=0.1 channel baseline. 40x30 mesh, Re~2.21e6.",
+ "captured_from": "examples/compressible_validation_ladder.py",
+ "captured_on_commit": "baseline",
+ "expected": {
+  "mesh_cells": 1200,
+  "Ma": 0.1,
+  "max_iterations": 3000,
+  "converged": true,
+  "diverged": false,
+  "positivity_ok": true,
+  "simple_iters": 726,
+  "Ma_max": 0.10272103075179662,
+  "T_min": 299.9670511423079,
+  "T_max": 300.0303977453983,
+  "rho_min": 1.1768123211101396,
+  "rho_max": 1.1773409904674048,
+  "U_max": 35.66361196359243,
+  "Cf_at_stations": [
+   0.0023622621896372737,
+   0.002141457373426313,
+   0.0020420695113154497
+  ],
+  "mass_flux_rel_imbalance": 6.397526844865051e-05
+ },
+ "tolerances": {
+  "simple_iters_abs": 50,
+  "Ma_max_rel": 0.05,
+  "T_extrema_abs_K": 0.5,
+  "rho_extrema_rel": 0.005,
+  "U_max_rel": 0.05,
+  "Cf_rel": 0.05,
+  "mass_flux_rel_imbalance_max": 0.001
+ },
+ "rationale": "Tolerances are loose enough to absorb 64-bit FP non-determinism between runs and between minor SST/EOS code changes, but tight enough to flag a real regression (e.g. solver instability, mass-conservation drift, or wall-clustering changes that shift Cf or T)."
 }
