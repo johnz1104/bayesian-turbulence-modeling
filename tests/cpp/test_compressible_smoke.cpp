@@ -11,8 +11,11 @@
 //     (the 40x30 regression suite carries the quantitative guard),
 //   - the maximum Mach number remains subsonic (< 0.8).
 //
-// Mesh is intentionally small (16x12) so the test runs in a few seconds even
-// in Debug builds.  Tighter quantitative regression tests belong in a dedicated suite.
+// Mesh is intentionally small (20x16) so the test runs in a few seconds even
+// in Debug builds. The former 16x12 grid is below the demonstrated resolution
+// threshold for this Re=2.2e6 wall-resolved case and enters a turbulence
+// fixed-point limit cycle after the startup nuT floor is released. Tighter
+// quantitative regression tests belong in a dedicated suite.
 
 #include "Mesh.hpp"
 #include "SSTModel.hpp"
@@ -38,7 +41,7 @@ namespace {
 
 int main() {
     // Small mesh for fast turnaround; same physics as compressible/Main.cpp.
-    const int nx = 16, ny = 12;
+    const int nx = 20, ny = 16;
     const double Lx = 10.0, H = 1.0;
 
     IdealGasEOS eos;
@@ -67,7 +70,7 @@ int main() {
     // Ux, Uy and p thresholds plus dimensionless field-change gates on the
     // velocity field, T, and the carried k/omega norms; the review added Uy,
     // whose raw residual is the slowest): genuine convergence lands near
-    // iteration 4900 on this coarse case, versus the premature Ux/p-only
+    // iteration 3700 on this coarse case, versus the premature Ux/p-only
     // declaration the old 1500 budget was sized for
     settings.maxIterations      = 7000;
     settings.convergenceTol     = 1e-3;
@@ -152,10 +155,10 @@ int main() {
                 rho_min, T_min, p_min, Ma_max, Cf, Cf_dean);
 
     // audit tightening: the factor-of-ten band was no guard at all. On this
-    // deliberately coarse 16x12 developing channel the dp/dx-integral Cf at
-    // genuine convergence measures 0.45x Dean (12 cells across a Re 2.2e6
-    // layer under-resolve the log region and the integral spans the entry
-    // length), so the smoke band is [0.3x, 3x]: it catches a broken
+    // deliberately coarse 20x16 developing channel the dp/dx-integral Cf at
+    // genuine convergence measures about 1.3x Dean. Sixteen cells across a
+    // Re=2.2e6 layer still under-resolve the log region and the integral spans
+    // the entry length, so the smoke band is [0.3x, 3x]: it catches a broken
     // momentum/pressure path while the 40x30 station-sampled regression
     // suite carries the quantitative few-percent guard.
     REQUIRE(std::isfinite(Cf) && Cf > 0.0, "developed-flow Cf not measurable");
