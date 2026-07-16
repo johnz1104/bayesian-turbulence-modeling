@@ -268,3 +268,58 @@ Mech. 305 (1995) 159-183; Zhang, Duan and Choudhari, AIAA Journal 56(11)
 (2018) 4297-4311, doi:10.2514/1.J057296. The latter two are hosted by the
 migrated NASA Turbulence Modeling Resource (tmbwg.github.io/turbmodels).
 Raw fields stay local and gitignored.
+## Post-audit revision (2026-07-12): labeling precision
+
+An external audit (adjudicated 2026-07-12) reviewed what each experiment in this study
+actually tests. No experiment is withdrawn and no number changes (the calibration matrix
+runs on the one-dimensional profile baseline, which none of the solver-level audit fixes
+touch); the following labels are sharpened, and the original text should be read through
+them.
+
+1. "Held-out thermal" means held-out HEAT FLUX. The likelihood fits the velocity
+   profile, the TEMPERATURE profile, and the friction coefficient; the held-out block is
+   the wall-heat-flux parameter B_q and the turbulent heat-flux profile, exactly as the
+   code's lik_index/heldout_index define. Because temperature is fitted, Pr_t receives
+   thermal information directly, and the phrase "held-out thermal" overstates the
+   independence of the held-out block. Every "held-out thermal" in this memo should be
+   read as "held-out heat-flux (B_q + q profile)". This RENAMING STRENGTHENS the
+   identifiability finding within its scope: Pr_t is edge-piled and case-dependent EVEN
+   WITH the temperature profile in the likelihood, so the failure to identify Pr_t is
+   structural to THIS conditional one-dimensional model class (prescribed wall scale,
+   fixed grid, uniform-Pr_t closure) with THIS observable set (U and T profiles plus the
+   consistency cf), not a lack of thermal data. Whether a coupled two-dimensional model
+   or a richer observable set (the heat-flux profile itself in the likelihood, or
+   station-resolved wall fluxes) identifies Pr_t is untested here and is not claimed.
+
+2. The baseline's friction coefficient is not an independent wall-stress prediction. The
+   one-dimensional model takes the DNS friction Reynolds and Mach numbers as inputs, so
+   the wall-stress SCALE is prescribed; the reported cf is a centreline-dynamic-head
+   consistency quantity derived from the predicted profile shape. Statements about cf in
+   the likelihood should be read as constraining profile shape, not as independent
+   friction prediction.
+
+3. The flat-plate heat-flux reference is a DERIVED quantity (already labeled as such at
+   every use): it inverts the dataset's own turbulent-Prandtl definition using the
+   measured Reynolds shear and temperature gradient. It is not an independent heat-flux
+   measurement; the non-circularity in the comparison is that the truth uses the DNS
+   Pr_t profile while the prediction uses the calibrated Pr_t with the model's nu_t.
+
+4. PIT p-values were heuristic. The committed PIT histograms stand as diagnostics; the
+   KS p-values quoted against them tested DISCRETE ensemble ranks against a continuous
+   uniform and are not calibrated. The evaluation library now provides the randomized
+   PIT (exactly uniform under calibration) for any formal test; no committed conclusion
+   rested on a PIT p-value.
+
+5. Scores: the library's CRPS/energy estimators are now the fair M(M-1) forms. The
+   change from the plug-in is NOT a common shift (it subtracts each method's own
+   internal-dispersion term divided by M(M-1), so orderings are not automatically
+   preserved). Define dbar_all = M^-2 sum_ij d(x_i, x_j), including the zero
+   diagonal, with absolute distance for CRPS and Euclidean distance for the
+   energy score. The exact identity is plug-in minus fair =
+   dbar_all/[2(M - 1)] >= 0, equivalently half the mean off-diagonal pair
+   difference divided by M. This sign and normalization are pinned by
+   test_uq_scores_fair.py. The historical artifacts retain the scores but not
+   dbar_all, so no retrospective percentage-of-score correction is claimed here.
+   The posterior-chain ensembles do make the coefficient 1/[2(M - 1)] small,
+   but method ordering is not declared invariant; every regenerated leg is scored
+   with the fair forms and reports the resulting comparison directly.
