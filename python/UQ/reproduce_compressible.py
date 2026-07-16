@@ -54,6 +54,14 @@ from UQ import cache_fingerprint as cfp
 # for pre-audit ensembles once stamped.
 PHYSICS = "compressible-profile-v1"
 
+
+def _conformal_claim_tag(row):
+    """Visible guard for diagnostics that cannot make a formal split claim."""
+    if row.get("conformal_roles_disjoint", True):
+        return ""
+    return ("  [single-case fallback: roles NOT disjoint; "
+            "excluded from formal conformal claims]")
+
 SEED = 0
 LEVEL = 0.9
 
@@ -167,7 +175,8 @@ def cross_mach(cals, quick):
         print(f"  cross-Mach {test}: std thermal "
               f"{r['standard_thermal_coverage']:.2f} tempered "
               f"{r['tempered_thermal_coverage']:.2f} conformal "
-              f"{r['conformal_thermal_coverage']:.2f}", flush=True)
+              f"{r['conformal_thermal_coverage']:.2f}"
+              f"{_conformal_claim_tag(r)}", flush=True)
     if not quick:
         gv_in = [t for t in cals if t in GV_CASES]
         for fam in sorted(set(family_of(t) for t in gv_in)):

@@ -87,14 +87,33 @@ class CrossMachStudy:
                 out[f"{tag}_{block}_coverage"] = cov
                 out[f"{tag}_{block}_sharpness"] = sharp
 
-        # conformal per block: calibration residuals from the first training
-        # case's stations, applied to the held-out case's point predictions
-        cal = self.cals[train[0]]
+        # conformal per block, three-way-disjoint case roles: the posterior is
+        # refit on the training cases MINUS the calibration case (with its own
+        # moment-matched learning rate), the calibration case supplies only the
+        # residuals, and the held-out case is untouched, so the untouched-
+        # calibration-set requirement of split conformal holds at the case
+        # level; the cross-Mach gap then measures shift, not reuse
+        cal_case = train[0]
+        fit_cases = tuple(t for t in train if t != cal_case)
+        # a single training case cannot be split into disjoint fit and
+        # calibration roles; fall back to the shared-case design and say so
+        if not fit_cases:
+            fit_cases = tuple(train)
+        out["cal_case"] = cal_case
+        out["fit_cases"] = list(fit_cases)
+        out["conformal_roles_disjoint"] = cal_case not in fit_cases
+        post1_fit = self.pooled_posterior_samples(fit_cases, 1.0, seed=seed)
+        eta_fit = float(np.mean([
+            self.cals[t].calibrate_eta(post1_fit, self.cals[t].lik_index)
+            for t in fit_cases]))
+        post_fit = self.pooled_posterior_samples(fit_cases, eta_fit, seed=seed)
+        out["eta_fit"] = eta_fit
+        cal = self.cals[cal_case]
         for block in blocks:
             idx_cal = cal.lik_index if block == "lik" else cal.heldout_index
             idx_test = blocks[block]
-            pred_cal = cal.point_prediction(post_t, idx_cal)
-            pred_test = test_cal.point_prediction(post_t, idx_test)
+            pred_cal = cal.point_prediction(post_fit, idx_cal)
+            pred_test = test_cal.point_prediction(post_fit, idx_test)
             lo, hi = cf.split_conformal_intervals(
                 pred_cal, cal.qoi_truth[idx_cal], pred_test,
                 alpha=1.0 - level)
