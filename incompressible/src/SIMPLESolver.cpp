@@ -588,22 +588,24 @@ void SIMPLESolver::assembleOmegaEquation(LinearSystem& sys, const FlowFields& f,
         double F1  = f.F1[ci];
         double omC = std::max(f.omega[ci], 1e-20);
 
-        // production: alpha * S^2  (standard Menter SST formulation)
-        // This is naturally self-limiting: as omega grows, destruction (beta*omega^2)
-        // increases quadratically while production (alpha*S^2) stays fixed, guaranteeing
-        // omega convergence.  
-        // After fiddling: DO NOT use Pk/nuT: when the Bradshaw limiter reduces nuT,  dividing by the 
-        // reduced nuT amplifies production and creates a positive feedback.
+        // production: alpha * Pk_limited/nuT = alpha * min(S^2, 10*betaStar*k*omega/nuT)
+        // (SST-2003 corrected form; the 2003 paper's alpha*S^2 is a documented misprint,
+        // see the NASA TMR SST page). min(S^2, lim) <= S^2 pointwise, so this term is
+        // bounded above by the S^2 form: reducing nuT cannot amplify it, and destruction
+        // (beta*omega^2, implicit below) still grows quadratically, so the equation stays
+        // self-limiting. The two forms coincide wherever the k-production limiter is
+        // inactive (equilibrium attached flows).
         double alphaB = sst_.coeffs.alpha(F1);
         double S = Smag[ci];
-        sys.source[ci] += alphaB * S * S * vol;
+        sys.source[ci] += alphaB * sst_.productionOmega(f.nuT[ci], S, f.k[ci], f.omega[ci]) * vol;
 
         // destruction term (linearised) beta*omega^2 → diag += beta*omega*V
         double betaB = sst_.coeffs.beta(F1);
         sys.diag[ci] += betaB * omC * vol;
 
-        // cross-diffusion (explicit): (1-F1)*max(CDkw, 0)
-        sys.source[ci] += (1.0 - F1) * std::max(f.CDkw[ci], 0.0) * vol;
+        // cross-diffusion (explicit): (1-F1)*CDkw, UNCLIPPED per SST-2003 (only the CDkw
+        // inside the F1 argument is clipped; the source term itself may be negative)
+        sys.source[ci] += (1.0 - F1) * f.CDkw[ci] * vol;
     }
 
     // under-relaxation
@@ -1130,22 +1132,37 @@ std::vector<std::vector<double>> SIMPLESolver::assembleResidualSensitivity(
         const double omc = std::max(work.omega[ci], 1e-20);
         const double S   = Smag[ci];
         const double ko  = work.k[ci], wo = work.omega[ci];
-        const double maxCD = std::max(work.CDkw[ci], 0.0);
+        // corrected omega production q = min(S², 10 β* k ω / νT): the branch decision
+        // must mirror productionOmega/the assembly exactly (same guards) so this
+        // analytic derivative matches a FD of the assembled residual
+        const double bS   = sst_.coeffs.betaStar;
+        const double alB  = sst_.coeffs.alpha(F1);
+        const double nuTc = std::max(work.nuT[ci], 1e-30);
+        const double lim  = 10.0 * bS * std::max(ko, 0.0) * omc / nuTc;
+        const bool   limActive = lim < S * S;   // std::min(S², lim) picks S² on ties
+        const double q = limActive ? lim : S * S;
         for (int j = 0; j < 11; ++j) {
             // k production +V·∂Pk ;  k destruction −V·∂β*·ω·k (β* = idx 8)
             dR[j][BK + ci] += V * cs[ci].dPk[j];
             if (j == 8) dR[j][BK + ci] -= omc * V * ko;
-            // ω production +V·∂α·S²
+            // ω production +V·∂[α·q]: ∂α·q always; the limiter branch adds
+            // α·∂q with ∂q = lim·(δ_{j,β*}/β* − ∂νT/νT) (k, ω are frozen state;
+            // the S² branch has ∂q = 0, reproducing the pre-correction ∂α·S²)
             double dal = (al1 - al2) * cs[ci].dF1[j];
             if (j == 3) dal += F1; else if (j == 7) dal += (1.0 - F1);
-            dR[j][BOM + ci] += dal * S * S * V;
+            double dq = 0.0;
+            if (limActive)
+                dq = (j == 8 ? lim / bS : 0.0) - lim * cs[ci].dnuT[j] / nuTc;
+            dR[j][BOM + ci] += (dal * q + alB * dq) * V;
             // ω destruction −V·∂β·ω·ω
             double dbe = (be1 - be2) * cs[ci].dF1[j];
             if (j == 2) dbe += F1; else if (j == 6) dbe += (1.0 - F1);
             dR[j][BOM + ci] -= dbe * omc * V * wo;
-            // ω cross-diffusion +V·[ −∂F1·max(CDkw,0) + (1−F1)·(CDkw>0 ? ∂CDkw : 0) ]
-            double dcross = -cs[ci].dF1[j] * maxCD;
-            if (work.CDkw[ci] > 0.0) dcross += (1.0 - F1) * cs[ci].dCDkw[j];
+            // ω cross-diffusion +V·[ −∂F1·CDkw + (1−F1)·∂CDkw ], UNCLIPPED per
+            // SST-2003 (matches the corrected assembly; only F1's internal CDkw
+            // is clipped, and that path is inside cs.dF1 already)
+            double dcross = -cs[ci].dF1[j] * work.CDkw[ci]
+                            + (1.0 - F1) * cs[ci].dCDkw[j];
             dR[j][BOM + ci] += V * dcross;
         }
     }

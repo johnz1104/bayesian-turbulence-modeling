@@ -35,6 +35,12 @@ target_link_libraries(test_cp_normalization PRIVATE btm_core)
 add_test(NAME cp_normalization COMMAND test_cp_normalization)
 set_tests_properties(cp_normalization PROPERTIES TIMEOUT 30 LABELS "unit;observation")
 
+# ---- sst_production_2003: corrected omega production (limiter-discriminating) ----
+add_executable(test_sst_production_2003 cpp/test_sst_production_2003.cpp)
+target_link_libraries(test_sst_production_2003 PRIVATE btm_core)
+add_test(NAME sst_production_2003 COMMAND test_sst_production_2003)
+set_tests_properties(sst_production_2003 PROPERTIES TIMEOUT 30 LABELS "unit;sst")
+
 # ---- injection_source: Reynolds-stress injection manufactured-field test ----
 add_executable(test_injection_source cpp/test_injection_source.cpp)
 target_link_libraries(test_injection_source PRIVATE btm_incompressible)
