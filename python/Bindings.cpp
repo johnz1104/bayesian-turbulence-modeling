@@ -250,7 +250,15 @@ static py::dict extractCompressibleFields(const CompressibleForwardModel& fm) {
     const CompressibleFlowFields& ff = fm.lastCompressibleFields();
     py::dict d;
     d["U"]     = vectorToNumpy(ff.U);
-    d["p"]     = scalarToNumpy(ff.p);
+    // the field stores the MECHANICAL working pressure; consumers get the
+    // thermodynamic static pressure under "p" (the physical quantity every
+    // diagnostic compares against) and the raw working variable separately
+    ScalarField pThermo = ff.p;
+    for (int ci = 0; ci < pThermo.mesh().nCells(); ++ci)
+        pThermo[ci] = ff.p[ci]
+            - (2.0 / 3.0) * ff.rho[ci] * std::max(ff.k[ci], 0.0);
+    d["p"]            = scalarToNumpy(pThermo);
+    d["p_mechanical"] = scalarToNumpy(ff.p);
     d["T"]     = scalarToNumpy(ff.T);
     d["rho"]   = scalarToNumpy(ff.rho);
     d["k"]     = scalarToNumpy(ff.k);

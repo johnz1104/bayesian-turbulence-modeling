@@ -248,9 +248,29 @@ class CompressibleCalibration:
                 "rel_eff": self.rel_eff}
 
     def load_cache(self, d):
+        """Rebuild surrogates from a cache dict; returns True on success.
+
+        Refuses (returns False, loads nothing) when the cached observation
+        identity (truth vector, sigma vector, relative sigma level) disagrees
+        with this calibration's: such a cache describes a different
+        likelihood. File-level configuration identity (ensemble size, seed) is
+        the caller's cache_fingerprint check.
+        """
+        checks = (("qoi_truth", np.asarray(self.qoi_truth, dtype=float)),
+                  ("qoi_sigma", np.asarray(self.qoi_sigma, dtype=float)),
+                  ("rel_eff", np.asarray(self.rel_eff, dtype=float)))
+        for key, mine in checks:
+            if key in d:
+                theirs = np.asarray(d[key], dtype=float)
+                if theirs.shape != mine.shape or not np.allclose(theirs, mine,
+                                                                 rtol=1e-10):
+                    print(f"  cache REFUSED: stored {key} differs from the "
+                          f"current calibration (different observation identity)")
+                    return False
         self.X, self.loglik, self.preds = d["X"], d["loglik"], d["preds"]
         self.n_valid = len(self.X)
         self.fit_surrogates()
+        return True
 
     # ---- posterior, predictive, coverage --------------------------------------
 

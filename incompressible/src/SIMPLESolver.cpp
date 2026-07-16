@@ -1,5 +1,6 @@
 #include "SIMPLESolver.hpp"
 #include "AnisotropyTools.hpp"
+#include "StressOperators.hpp"
 #include <iostream>
 #include <cmath>
 #include <algorithm>
@@ -49,8 +50,8 @@ void SIMPLESolver::initUniform(FlowFields& f, const Vec3& Uinit, double pInit, d
     applyAllBCs(f.U, f.p, f.k, f.omega, mesh_, bcs_, nu_);
 }
 
-// Momentum equation assembly (Ux, Uy, or Uz) 
-// constructs a linear system for finite-volume discretization of momentum equation 
+// Momentum equation assembly (Ux, Uy, or Uz)
+// constructs a linear system for finite-volume discretization of momentum equation
 // builds A_U * U_component = b (where A_U is in LDU and b is source)
 void SIMPLESolver::assembleMomentum(LinearSystem& sys, const FlowFields& f, int component, std::vector<double>& aP) {
     sys.zero();         // resets linear system
@@ -90,7 +91,20 @@ void SIMPLESolver::assembleMomentum(LinearSystem& sys, const FlowFields& f, int 
         sys.lower[fi] = -(Df + cPos);   // off-diag contribution to neighbor from owner
     }
 
-    // boundary faces
+    // boundary faces. At RESOLVED walls the eddy viscosity vanishes on the
+    // face (SST asymptotics), so the implicit wall diffusion uses the
+    // MOLECULAR viscosity only: extrapolating the owner-cell nuT (nonzero at
+    // y+ ~ 1) overestimates the discrete wall shear the momentum equation
+    // carries, inconsistently with the molecular wall-stress observation and
+    // the wall-zero transpose treatment. Under wall functions the owner
+    // value stays (the modeled stress carrier). Non-wall boundaries keep
+    // owner extrapolation.
+    std::vector<char> isWall(mesh_.nFaces(), 0);
+    for (int pi = 0; pi < mesh_.nPatches(); ++pi) {
+        const Patch& pat = mesh_.patch(pi);
+        if (pat.type != "wall") continue;
+        for (FaceID wfi : pat.faces) isWall[wfi] = 1;
+    }
     for (int fi = nIF; fi < mesh_.nFaces(); ++fi) {
 
         // face geometry
@@ -98,7 +112,8 @@ void SIMPLESolver::assembleMomentum(LinearSystem& sys, const FlowFields& f, int 
         int o = face.owner;
         double Sf = face.area;
         double delta = std::max(face.delta, 1e-20);
-        double nuEff = nu_ + f.nuT[o];
+        double nuEff = (isWall[fi] && !settings_.useWallFunctions)
+                       ? nu_ : nu_ + f.nuT[o];
 
         // diffusion term
         double Db = nuEff * Sf / delta;
@@ -144,6 +159,26 @@ void SIMPLESolver::assembleMomentum(LinearSystem& sys, const FlowFields& f, int 
     if (fb != 0.0)
         for (int ci = 0; ci < mesh_.nCells(); ++ci)
             sys.source[ci] += fb * mesh_.cell(ci).volume;
+
+    // variable-viscosity transpose stress div(nuT (grad U)^T), the explicit
+    // half completing the Boussinesq deviatoric stress divergence (the
+    // implicit diffusion above is only the componentwise Laplacian); the
+    // constant-nu molecular transpose is analytically zero for solenoidal U,
+    // so only nuT enters, and the -2/3 k I normal stress stays absorbed in
+    // the working pressure. See core/include/StressOperators.hpp. The
+    // freeze switch is the frozen-pressure tangent's reduced operator (the
+    // source is lagged there, matching the solver's own Picard operator).
+    if (!freezeTransposeStress_) {
+        // wall faces carry ZERO transpose coefficient: the eddy viscosity
+        // vanishes AT a no-slip wall even though the owner-cell value does
+        // not, so owner extrapolation would overweight the wall flux
+        // (review fix, pinned by the wall-adjacent manufactured test)
+        std::vector<double> zeroWall(mesh_.nCells(), 0.0);
+        std::vector<double> tsrc =
+            transposeStressSource(mesh_, f.nuT, f.U, component, &zeroWall);
+        for (int ci = 0; ci < mesh_.nCells(); ++ci)
+            sys.source[ci] += tsrc[ci];
+    }
 
     // a-posteriori Reynolds-stress injection (explicit deferred-correction)
     if (bTarget6_) addInjectionSource(sys, f, component);
@@ -1048,7 +1083,8 @@ std::vector<double> SIMPLESolver::assembleResidual(const FlowFields& state,
 // pointwise closure sensitivities.  Convection (frozen U), the pressure-gradient source
 // and all boundary VALUES are θ-independent and drop out.
 std::vector<std::vector<double>> SIMPLESolver::assembleResidualSensitivity(
-        const FlowFields& state, const SSTCoefficients& theta) {
+        const FlowFields& state, const SSTCoefficients& theta,
+        bool includeTransposeTheta) {
     const int nc  = mesh_.nCells();
     const int nIF = mesh_.nInternalFaces();
     SSTCoefficients saved = sst_.coeffs;
@@ -1115,6 +1151,17 @@ std::vector<std::vector<double>> SIMPLESolver::assembleResidualSensitivity(
     }
 
     // ---- boundary faces: both in/out branches give dDb·(φ_b − φ_o) (mFlux θ-indep) ---
+    // wall faces carry a MOLECULAR momentum diffusion coefficient at resolved
+    // walls (assembleMomentum), so their U-block theta-derivative is zero
+    // there; the k/omega wall diffusion keeps its nuT dependence unchanged
+    std::vector<char> isWallB(mesh_.nFaces(), 0);
+    if (!settings_.useWallFunctions) {
+        for (int pi = 0; pi < mesh_.nPatches(); ++pi) {
+            const Patch& pat = mesh_.patch(pi);
+            if (pat.type != "wall") continue;
+            for (FaceID wfi : pat.faces) isWallB[wfi] = 1;
+        }
+    }
     for (int fi = nIF; fi < mesh_.nFaces(); ++fi) {
         const Face& face = mesh_.face(fi);
         const int o = face.owner;
@@ -1129,7 +1176,7 @@ std::vector<std::vector<double>> SIMPLESolver::assembleResidualSensitivity(
 
         for (int j = 0; j < 11; ++j) {
             const double dnuTo = cs[o].dnuT[j], dF1o = cs[o].dF1[j];
-            const double dDbm = SfD * dnuTo;
+            const double dDbm = isWallB[fi] ? 0.0 : SfD * dnuTo;
             if (dDbm != 0.0) { dR[j][BUX + o] += dDbm * dUx; dR[j][BUY + o] += dDbm * dUy; }
             double dsk = (sk1 - sk2) * dF1o;
             if (j == 0) dsk += F1o; else if (j == 4) dsk += (1.0 - F1o);
@@ -1139,6 +1186,55 @@ std::vector<std::vector<double>> SIMPLESolver::assembleResidualSensitivity(
             if (j == 1) dsw += F1o; else if (j == 5) dsw += (1.0 - F1o);
             const double dDbw = SfD * (dsw * nuTo + swo * dnuTo);
             if (dDbw != 0.0) dR[j][BOM + o] += dDbw * dw;
+        }
+    }
+
+    // ---- transpose-stress theta-derivative ------------------------------------------
+    // the momentum source carries div(nuT (grad U)^T) (StressOperators.hpp), whose
+    // theta-dependence is through nuT alone (U is the frozen state):
+    //   d(flux)/dtheta_j = dnuT_f (dU_./dx_i)_f . n A, mirrored face-by-face
+    if (includeTransposeTheta) {
+        VelocityGradients vgT = computeVelocityGradients(work.U);
+        auto gcol = [&](int ci, int comp) -> Vec3 {
+            if (comp == 0)
+                return Vec3(vgT.dudx[ci].x, vgT.dvdx[ci].x, vgT.dwdx[ci].x);
+            return Vec3(vgT.dudx[ci].y, vgT.dvdx[ci].y, vgT.dwdx[ci].y);
+        };
+        for (int fi = 0; fi < nIF; ++fi) {
+            const Face& face = mesh_.face(fi);
+            const int o = face.owner, n2 = face.neighbor;
+            const double w = face.weight;
+            const Vec3 gx = gcol(o, 0) * w + gcol(n2, 0) * (1.0 - w);
+            const Vec3 gy = gcol(o, 1) * w + gcol(n2, 1) * (1.0 - w);
+            const double fx = gx.dot(face.normal) * face.area;
+            const double fy = gy.dot(face.normal) * face.area;
+            for (int j = 0; j < 11; ++j) {
+                const double dnuTf = w * cs[o].dnuT[j] + (1.0 - w) * cs[n2].dnuT[j];
+                if (dnuTf == 0.0) continue;
+                dR[j][BUX + o] += dnuTf * fx;  dR[j][BUX + n2] -= dnuTf * fx;
+                dR[j][BUY + o] += dnuTf * fy;  dR[j][BUY + n2] -= dnuTf * fy;
+            }
+        }
+        // boundary faces, patch-aware: WALL faces carry a zero transpose
+        // coefficient in the assembly (the eddy viscosity vanishes at the
+        // wall), so their theta-derivative is identically zero and they are
+        // skipped here to keep the analytic dR matched to an FD of the
+        // assembled residual
+        for (int pi = 0; pi < mesh_.nPatches(); ++pi) {
+            const Patch& pat = mesh_.patch(pi);
+            if (pat.type == "wall") continue;
+            for (FaceID fi : pat.faces) {
+                const Face& face = mesh_.face(fi);
+                const int o = face.owner;
+                const double fx = gcol(o, 0).dot(face.normal) * face.area;
+                const double fy = gcol(o, 1).dot(face.normal) * face.area;
+                for (int j = 0; j < 11; ++j) {
+                    const double dnuTo = cs[o].dnuT[j];
+                    if (dnuTo == 0.0) continue;
+                    dR[j][BUX + o] += dnuTo * fx;
+                    dR[j][BUY + o] += dnuTo * fy;
+                }
+            }
         }
     }
 

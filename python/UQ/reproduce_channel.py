@@ -40,6 +40,16 @@ from UQ.datasets import ChannelDNS, CHANNEL_CASES
 from UQ.datasets.channel_baseline import ChannelBaselineRANS
 from UQ.datasets import channel_discrepancy as cdisc
 from UQ.datasets.channel_calibration import ChannelCalibration, CrossReStudy, PARAM_SETS
+from UQ import cache_fingerprint as cfp
+
+# Physics schema token: part of every cache identity in this script. Bump it
+# exactly when the producing model changes (solver physics, closure form,
+# observation definition), never for refactors. v3 marks the INTEGRATED
+# post-audit solver: SST-2003 limited production, startup-only nuT floor,
+# completed Boussinesq stress, molecular resolved-wall diffusion, and complete
+# convergence accounting. v2 was stamped before those branches were combined
+# and must not authorize reuse under the final producer.
+PHYSICS = "channel-rans-v3"
 from UQ import evaluation as ev
 
 PARAM_SETS_AVAILABLE = tuple(PARAM_SETS)
@@ -72,8 +82,21 @@ def ensemble_path(n, param_set):
 
 def stage_baselines(regen):
     path = os.path.join(OUT, "baselines.npz")
+    ident = {"kind": "channel_baselines", "physics": PHYSICS,
+             "cases": CONFIG["cases"], "baseline_cfg": CONFIG["baseline_cfg"]}
     if os.path.exists(path) and not regen:
-        return np.load(path)
+        d = dict(np.load(path))
+        status, reason = cfp.check(d, ident)
+        if status == "legacy" and cfp.legacy_reuse_allowed():
+            print("[baselines] WARNING reusing pre-fingerprint cache "
+                  "(QBTM_ALLOW_LEGACY_CACHE=1); regenerate with "
+                  "--regen-baselines to stamp it")
+            return d
+        if status == "match":
+            if reason:
+                print(f"[baselines] cache reused; {reason}")
+            return d
+        print(f"[baselines] cache REFUSED ({reason}); regenerating")
     print("[baselines] generating matched-Re_tau SST baseline fields ...")
     store = {}
     for n in CONFIG["cases"]:
@@ -87,7 +110,7 @@ def stage_baselines(regen):
         store[f"scalars_{n}"] = np.array([b.nu, b.u_tau, b.re_tau, b.cf, b.cf_dean])
         print(f"  Re_tau {dns.re_tau:.0f} -> {b.re_tau:.0f}  Cf {b.cf:.5f} "
               f"(Dean {b.cf_dean:.5f}, {100*(b.cf-b.cf_dean)/b.cf_dean:+.0f}%)")
-    np.savez(path, **store)
+    np.savez(path, **cfp.attach(store, ident))
     return np.load(path)
 
 
@@ -121,13 +144,35 @@ def stage_ensembles(regen, quick):
                                n_stations=CONFIG["n_stations"], cfg=CONFIG["cfg"],
                                sigma_floor=CONFIG["sigma_floor"])
         path = ensemble_path(n, CONFIG["param_set"])
+        # the scientifically relevant cache identity: a quick run (smaller
+        # ensemble) or any config change fingerprints differently, so a full
+        # run can never silently reuse a quick cache under the shared filename
+        ident = {"kind": "channel_ensemble", "physics": PHYSICS, "case": n,
+                 "n_ensemble": n_ens,
+                 "seed": CONFIG["seed"], "param_set": CONFIG["param_set"],
+                 "n_stations": CONFIG["n_stations"], "cfg": CONFIG["cfg"],
+                 "sigma_floor": CONFIG["sigma_floor"]}
+        loaded = False
         if os.path.exists(path) and not regen:
-            c.load_cache(dict(np.load(path)))
-            print(f"  Re_tau {n:>4}: loaded {c.n_valid} ensemble points")
-        else:
+            d = dict(np.load(path))
+            status, reason = cfp.check(d, ident)
+            if status == "mismatch" or (status == "legacy"
+                                        and not cfp.legacy_reuse_allowed()):
+                print(f"  Re_tau {n:>4}: cache REFUSED ({reason}); regenerating")
+            else:
+                if status == "legacy":
+                    print(f"  Re_tau {n:>4}: WARNING reusing pre-fingerprint "
+                          f"cache (QBTM_ALLOW_LEGACY_CACHE=1); regenerate "
+                          f"with --regen-ensembles to stamp it")
+                elif reason:
+                    print(f"  Re_tau {n:>4}: {reason}")
+                loaded = c.load_cache(d)
+                if loaded:
+                    print(f"  Re_tau {n:>4}: loaded {c.n_valid} ensemble points")
+        if not loaded:
             print(f"  Re_tau {n:>4}: running {n_ens} forward solves ...", flush=True)
             c.run_ensemble(n=n_ens, seed=CONFIG["seed"])
-            np.savez(path, **c.to_cache())
+            np.savez(path, **cfp.attach(c.to_cache(), ident))
             c.fit_surrogates()
             print(f"           {c.n_valid}/{n_ens} valid")
         cals[n] = c

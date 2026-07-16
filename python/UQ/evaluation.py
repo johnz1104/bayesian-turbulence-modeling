@@ -39,10 +39,47 @@ def coverage_from_samples(y_true, samples, level=0.9):
 # ---- proper scoring rules --------------------------------------------------
 
 def crps_ensemble(y_true, samples):
-    """Fair ensemble CRPS, averaged over observations.
+    """Fair ensemble CRPS (Ferro 2014), averaged over observations.
 
-    CRPS = E|X - y| - 0.5 E|X - X'|, computed with the O(M log M) sorted
-    estimator for the second term. samples: (N, M); y_true: (N,).
+    CRPS_fair = E|X - y| - (1/(2 M (M-1))) sum_{i != j} |X_i - X_j|,
+    computed with the O(M log M) sorted estimator for the pair term (the sorted
+    weighted sum sum_i (2i - M - 1) x_(i) equals half the off-diagonal pair sum,
+    so only the denominator distinguishes fair from biased). Unbiased for the
+    infinite-ensemble CRPS, so ensembles of different sizes are comparable; the
+    M^2 denominator (crps_ensemble_biased) systematically penalises small M.
+    samples: (N, M); y_true: (N,). For M = 1 the pair term has no off-diagonal
+    pairs and the score reduces to E|X - y|.
+
+    Convention: use the fair estimator when the M members are an iid SAMPLE of
+    an underlying predictive distribution (posterior ensembles, flow draws);
+    use the M^2 plug-in when the M members ARE the forecast itself, a finite
+    discrete distribution (e.g. a deterministic bounding family read as a
+    uniform discrete forecast), for which the plug-in is the exact CRPS, not
+    a biased estimate of anything.
+    """
+    y_true = np.asarray(y_true, dtype=float)
+    samples = np.asarray(samples, dtype=float)
+    N, M = samples.shape
+    term1 = np.mean(np.abs(samples - y_true[:, None]), axis=1)
+    if M < 2:
+        return float(np.mean(term1))
+    xs = np.sort(samples, axis=1)
+    weights = (2.0 * np.arange(1, M + 1) - M - 1)
+    term2 = (xs * weights).sum(axis=1) / (M * (M - 1))
+    return float(np.mean(term1 - term2))
+
+
+def crps_ensemble_biased(y_true, samples):
+    """Ensemble CRPS with the M^2 pair denominator (diagonal included).
+
+    The empirical-CDF plug-in. Two distinct legitimate uses: (1) it is the
+    EXACT CRPS of the finite discrete forecast that places mass 1/M on each
+    member, so it is the correct (not merely charitable) score when the
+    members are themselves the forecast, as with a deterministic bounding
+    family; (2) it reproduces previously committed score tables. As an
+    estimate of an underlying continuous predictive it is biased against
+    small ensembles; use crps_ensemble (fair) for that reading and for any
+    cross-ensemble-size comparison of sampled predictives.
     """
     y_true = np.asarray(y_true, dtype=float)
     samples = np.asarray(samples, dtype=float)
@@ -57,14 +94,39 @@ def crps_ensemble(y_true, samples):
 def energy_score(y_true, samples):
     """Fair ensemble energy score (multivariate CRPS generalisation).
 
-    ES = E||X - y|| - 0.5 E||X - X'||. samples: (N, M, d); y_true: (N, d).
+    ES_fair = E||X - y|| - (1/(2 M (M-1))) sum_{i != j} ||X_i - X_j||: the
+    pair term averages off-diagonal pairs only (Ferro 2014), so ensembles of
+    different sizes are comparable. samples: (N, M, d); y_true: (N, d).
+    For M = 1 the pair term is empty and the score reduces to E||X - y||.
     """
     y_true = np.asarray(y_true, dtype=float)
     samples = np.asarray(samples, dtype=float)
     N, M, d = samples.shape
     diff = samples - y_true[:, None, :]
     term1 = np.mean(np.linalg.norm(diff, axis=2), axis=1)
-    # pairwise distances within the ensemble
+    if M < 2:
+        return float(np.mean(term1))
+    # pairwise distances within the ensemble; diagonal is zero, so summing all
+    # M^2 entries and dividing by the M(M-1) off-diagonal count is the fair mean
+    pd = samples[:, :, None, :] - samples[:, None, :, :]
+    term2 = np.linalg.norm(pd, axis=3).sum(axis=(1, 2)) / (M * (M - 1))
+    return float(np.mean(term1 - 0.5 * term2))
+
+
+def energy_score_biased(y_true, samples):
+    """Energy score with the M^2 pair denominator (diagonal zeros included).
+
+    Exactly as crps_ensemble_biased: the exact energy score of the finite
+    discrete forecast on the M members (the right convention for a
+    deterministic bounding family), and the reproduction path for committed
+    tables; biased as an estimate of an underlying continuous predictive,
+    where energy_score (fair) is the comparable choice across ensemble sizes.
+    """
+    y_true = np.asarray(y_true, dtype=float)
+    samples = np.asarray(samples, dtype=float)
+    N, M, d = samples.shape
+    diff = samples - y_true[:, None, :]
+    term1 = np.mean(np.linalg.norm(diff, axis=2), axis=1)
     pd = samples[:, :, None, :] - samples[:, None, :, :]
     term2 = np.linalg.norm(pd, axis=3).mean(axis=(1, 2))
     return float(np.mean(term1 - 0.5 * term2))
@@ -73,13 +135,33 @@ def energy_score(y_true, samples):
 # ---- calibration diagnostics ----------------------------------------------
 
 def pit_values(y_true, samples):
-    """Probability-integral-transform values: P(X <= y) under the ensemble.
+    """Empirical-CDF PIT values: P(X <= y) under the ensemble. samples: (N, M).
 
-    For a calibrated predictor these are Uniform(0, 1). samples: (N, M).
+    NOTE: these are DISCRETE (multiples of 1/M), so they are a histogram
+    diagnostic only; testing them against a continuous Uniform(0,1) (e.g. with
+    a KS test) gives invalid p-values. For a formal uniformity test use
+    pit_values_randomized, which is exactly Uniform(0,1) under calibration.
     """
     y_true = np.asarray(y_true)
     samples = np.asarray(samples)
     return np.mean(samples <= y_true[:, None], axis=1)
+
+
+def pit_values_randomized(y_true, samples, seed=0):
+    """Randomized PIT for a discrete M-member ensemble.
+
+    u_i = (r_i + V_i (t_i + 1)) / (M + 1) with r_i = #{x_ij < y_i},
+    t_i = #{x_ij == y_i} and V_i ~ Uniform(0,1): exactly Uniform(0,1) when the
+    observation is exchangeable with the ensemble members, so KS-type tests are
+    calibrated on these values. Fixed seed keeps reproductions deterministic.
+    """
+    y_true = np.asarray(y_true, dtype=float)
+    samples = np.asarray(samples, dtype=float)
+    N, M = samples.shape
+    r_low = np.sum(samples < y_true[:, None], axis=1)
+    ties = np.sum(samples == y_true[:, None], axis=1)
+    v = np.random.default_rng(seed).uniform(size=N)
+    return (r_low + v * (ties + 1.0)) / (M + 1.0)
 
 
 def pit_histogram(pit, bins=10):
@@ -88,7 +170,12 @@ def pit_histogram(pit, bins=10):
 
 
 def pit_uniformity_pvalue(pit):
-    """Kolmogorov-Smirnov p-value for PIT ~ Uniform(0,1). Large = calibrated."""
+    """Kolmogorov-Smirnov p-value for PIT ~ Uniform(0,1). Large = calibrated.
+
+    Only calibrated for CONTINUOUS pit values: pass pit_values_randomized
+    output. On the discrete pit_values output the KS null is wrong and the
+    p-value is a heuristic at best.
+    """
     return float(stats.kstest(np.asarray(pit), "uniform").pvalue)
 
 

@@ -17,6 +17,7 @@ the posterior recovers the truth within a few σ.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from types import SimpleNamespace
 
@@ -52,12 +53,20 @@ class _LinForward:
         return 0.0
 
 
-class _ToyParamSet:
+class _ToyParamSet(Mapping):
     def __init__(self):
         self._names = ["a", "b"]
         self._defaults = np.array([1.0, 1.0])
         self._lower    = np.array([-2.0, -2.0])
         self._upper    = np.array([ 3.0,  3.0])
+    def __getitem__(self, key):
+        return {
+            "defaults": self._defaults,
+            "lower": self._lower,
+            "upper": self._upper,
+        }[key]
+    def __iter__(self):     return iter(("defaults", "lower", "upper"))
+    def __len__(self):      return 3
     def n_active(self):     return 2
     def active_names(self): return list(self._names)
     def lower_bounds(self): return list(self._lower)

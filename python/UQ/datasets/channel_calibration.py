@@ -150,21 +150,36 @@ class ChannelCalibration:
     # ---- ensemble and surrogates (the expensive step) ---------------------
 
     def run_ensemble(self, n=48, seed=0, verbose=False):
-        """Latin-hypercube ensemble of forward solves; collect loglik + predictions."""
+        """Latin-hypercube ensemble of forward solves; collect loglik + predictions.
+
+        Only genuinely CONVERGED evaluations enter the surrogate training set:
+        an Unconverged solve's likelihood depends on the iteration budget and
+        warm-start history rather than on theta alone, so admitting it would
+        make the posterior a function of solver bookkeeping. Diverged and
+        invalid evaluations already carry the -1e6 sentinel; the status check
+        makes the rejection explicit rather than an accident of the sentinel
+        (matching the strict compressible-calibration policy).
+        """
         fm = self._forward_model()
         np.random.seed(seed)   # latin_hypercube draws from the global RNG
         X = latin_hypercube(n, self.ndim, self.prior.lower, self.prior.upper)
         loglik = np.full(n, -np.inf)
         preds = np.full((n, self.n_qoi), np.nan)
+        converged = np.zeros(n, dtype=bool)
         for i in range(n):
             res = fm.evaluate(X[i].tolist())
             loglik[i] = res.log_lik
+            converged[i] = str(res.status).split(".")[-1] == "Converged"
             p = np.array(res.predictions)
             if p.size == self.n_qoi:
                 preds[i] = p
             if verbose and (i + 1) % 10 == 0:
                 print(f"  ensemble {i+1}/{n}  loglik={loglik[i]:.1f}", flush=True)
-        valid = (loglik > -1e5) & np.all(np.isfinite(preds), axis=1)
+        valid = converged & (loglik > -1e5) & np.all(np.isfinite(preds), axis=1)
+        n_unconverged = int((~converged & (loglik > -1e5)).sum())
+        if n_unconverged:
+            print(f"  rejected {n_unconverged} unconverged evaluation(s) "
+                  f"(status-strict ensemble policy)")
         self.X = X[valid]
         self.loglik = loglik[valid]
         self.preds = preds[valid]
@@ -185,9 +200,28 @@ class ChannelCalibration:
                 "y_delta": self.y_delta, "re_tau": self.dns.re_tau}
 
     def load_cache(self, d):
+        """Rebuild surrogates from a cache dict; returns True on success.
+
+        Refuses (returns False, loads nothing) when the cached observation
+        identity disagrees with this calibration's: a cache built against a
+        different truth vector or sigma level describes a different likelihood
+        and must not be silently reused. File-level configuration identity
+        (ensemble size, grid, seed) is checked by the caller through
+        cache_fingerprint before this method is reached.
+        """
+        for key, mine in (("qoi_truth", self.qoi_truth),
+                          ("qoi_sigma", self.qoi_sigma)):
+            if key in d:
+                theirs = np.asarray(d[key], dtype=float)
+                if theirs.shape != mine.shape or not np.allclose(theirs, mine,
+                                                                 rtol=1e-10):
+                    print(f"  cache REFUSED: stored {key} differs from the "
+                          f"current calibration (different truth/sigma identity)")
+                    return False
         self.X, self.loglik, self.preds = d["X"], d["loglik"], d["preds"]
         self.n_valid = len(self.X)
         self.fit_surrogates()
+        return True
 
     # ---- posterior and posterior predictive -------------------------------
 

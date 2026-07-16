@@ -29,6 +29,18 @@ target_link_libraries(test_bfs_lemoin_bc PRIVATE btm_core)
 add_test(NAME bfs_lemoin_bc COMMAND test_bfs_lemoin_bc)
 set_tests_properties(bfs_lemoin_bc PROPERTIES TIMEOUT 30 LABELS "unit;bc")
 
+# ---- transpose_stress: Boussinesq transpose-stress deferred correction ----
+add_executable(test_transpose_stress cpp/test_transpose_stress.cpp)
+target_link_libraries(test_transpose_stress PRIVATE btm_core)
+add_test(NAME transpose_stress COMMAND test_transpose_stress)
+set_tests_properties(transpose_stress PROPERTIES TIMEOUT 30 LABELS "unit;solver")
+
+# ---- sst_production_2003: corrected omega production (limiter-discriminating) ----
+add_executable(test_sst_production_2003 cpp/test_sst_production_2003.cpp)
+target_link_libraries(test_sst_production_2003 PRIVATE btm_core)
+add_test(NAME sst_production_2003 COMMAND test_sst_production_2003)
+set_tests_properties(sst_production_2003 PROPERTIES TIMEOUT 30 LABELS "unit;sst")
+
 # ---- cp_normalization: pressure-coefficient references (audit fix) ----
 add_executable(test_cp_normalization cpp/test_cp_normalization.cpp)
 target_link_libraries(test_cp_normalization PRIVATE btm_core)
@@ -40,12 +52,6 @@ add_executable(test_infra_fixes cpp/test_infra_fixes.cpp)
 target_link_libraries(test_infra_fixes PRIVATE btm_incompressible)
 add_test(NAME infra_fixes COMMAND test_infra_fixes)
 set_tests_properties(infra_fixes PROPERTIES TIMEOUT 240 LABELS "unit;infra")
-
-# ---- sst_production_2003: corrected omega production (limiter-discriminating) ----
-add_executable(test_sst_production_2003 cpp/test_sst_production_2003.cpp)
-target_link_libraries(test_sst_production_2003 PRIVATE btm_core)
-add_test(NAME sst_production_2003 COMMAND test_sst_production_2003)
-set_tests_properties(sst_production_2003 PROPERTIES TIMEOUT 30 LABELS "unit;sst")
 
 # ---- injection_source: Reynolds-stress injection manufactured-field test ----
 add_executable(test_injection_source cpp/test_injection_source.cpp)
@@ -79,6 +85,10 @@ set_tests_properties(periodic_channel PROPERTIES TIMEOUT 240 LABELS "unit;mesh;s
 add_executable(test_compressible_smoke cpp/test_compressible_smoke.cpp)
 target_link_libraries(test_compressible_smoke PRIVATE btm_compressible)
 add_test(NAME compressible_smoke COMMAND test_compressible_smoke)
+
+add_executable(test_two_pressure_contract cpp/test_two_pressure_contract.cpp)
+target_link_libraries(test_two_pressure_contract PRIVATE btm_compressible)
+add_test(NAME two_pressure_contract COMMAND test_two_pressure_contract)
 
 add_executable(test_compressible_observation_contract
                cpp/test_compressible_observation_contract.cpp)

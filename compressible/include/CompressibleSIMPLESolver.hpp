@@ -29,7 +29,9 @@
 //      ∇·(ρ U Cp T) = ∇·(λ_eff ∇T): pressure work, kinetic energy, and
 //      viscous/turbulent dissipation are NOT modeled.
 //   8. Update T from energy, update ρ from EOS
-//   9. Solve turbulence (k, ω) with density-scaled production
+//   9. Solve turbulence (k, ω) with density-scaled production; because k is
+//      part of the two-pressure EOS, refresh rho and the mechanical outlet
+//      pressure after a k update before convergence can be declared.
 //
 // Evidence and applicability: the COMMITTED validation is the Ma 0.1 channel
 // regression; Ma ~0.5 is the INTENDED applicability ceiling implied by the
@@ -48,7 +50,8 @@ public:
 
     // Direct per-cell state validation: every component of every solved field
     // (U including the spanwise component, p, T, rho, k, omega) is checked
-    // with std::isfinite, plus positivity of T, rho and p. Aggregate max/min
+    // with std::isfinite, plus positivity of T, rho, mechanical p and the
+    // recovered thermodynamic p. Aggregate max/min
     // reductions can never prove this: std::max(a, NaN) evaluates the
     // comparison as false and KEEPS a, so a NaN entering a chained reduction
     // is silently dropped. Public so the divergence detection is unit-testable
@@ -80,10 +83,17 @@ private:
     // Cell-centred dynamic viscosity (from Sutherland at current T)
     std::vector<double> mu_;
 
+
     double normUx0_ = 1, normUy0_ = 1, normP0_ = 1, normT0_ = 1;
 
     void updateViscosity(const CompressibleFlowFields& f);
     void updateDensity(CompressibleFlowFields& f);
+    // The prescribed outlet pressure is a THERMODYNAMIC static value; the
+    // field carries the mechanical working pressure, so every BC application
+    // is followed by this conversion of the outlet boundary faces,
+    // p_mech,b = p_out + (2/3) rho_o k_o with the owner-cell state standing
+    // in for the boundary turbulence energy.
+    void mechanicalizeOutletPressure(CompressibleFlowFields& f) const;
 
     void assembleMomentum(LinearSystem& sys, const CompressibleFlowFields& f,
                           int component, std::vector<double>& aP);
