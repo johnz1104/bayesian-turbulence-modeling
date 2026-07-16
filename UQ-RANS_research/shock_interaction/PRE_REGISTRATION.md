@@ -649,3 +649,100 @@ percent); interaction onsets -2.38 (adiabatic 2011) and -2.46, -2.93, -3.39,
 monotonically with wall heating (0.4 to 4.1 reference lengths between the cf
 sign crossings); the adiabatic 2011 interaction origin at raw x = 51.25 (its
 half-rise landmark).
+## Dated addendum (2026-07-12): post-audit amendments, fixed before any corrected-baseline extraction
+
+An external code audit (adjudicated 2026-07-12) found defects in the solver and
+scoring stack this pre-registration depends on. The amendments below are fixed
+BEFORE any baseline, target, or ensemble is computed on the corrected code.
+No success band, null shape, fold definition, or clause threshold changes;
+what changes is the computational substrate, the estimator definitions, one
+baseline's name, one added baseline, and one representation declaration.
+
+1. SST omega-production form pinned. The density-based baseline solver
+   assembled the omega-equation production as alpha*rho*S^2, the documented
+   misprint of the 2003 SST paper; the specification form
+   alpha*rho*min(S^2, 10 betaStar rho k omega / mu_t) is now implemented
+   (bounded above by the misprint pointwise; where the limiter actually
+   activates on this data is MEASURED, not assumed: every corrected baseline
+   reports its limiter activation fraction and a spatial activation map,
+   committed with the gate A/B evidence, so the localization to shock feet
+   and separated shear layers is a reported result rather than a premise).
+   Every quantity this study derives from a baseline
+   solve (gates A and B, db and dq targets, injection references, wall QoIs)
+   is regenerated on the corrected solver. All interaction baselines, a-priori
+   targets, trained models, and a-posteriori ensembles computed before this
+   addendum are DISCARDED and never compared against the corrected runs.
+   Gates A and B are re-adjudicated on the corrected solver before any
+   downstream stage runs.
+
+2. Score estimator conventions pinned. UQ.evaluation.crps_ensemble and
+   energy_score now implement the fair (unbiased, M(M-1) off-diagonal)
+   finite-ensemble estimators; the previous M^2 forms remain available as
+   *_biased. The convention split is pinned by what the members are: every
+   sampled predictive in this study (flow draws, Gaussian draws, posterior
+   ensembles) is scored with the fair estimators, and every deterministic
+   bounding family (the eigenspace variants) is scored by the M^2 plug-in,
+   which for a finite discrete forecast is its EXACT CRPS/energy score, not
+   a biased estimate; the fair reading of a bounding family is reported as
+   sensitivity only, never in a clause. No claim is made that estimator
+   choice preserves method orderings (at equal ensemble size the fair and
+   plug-in scores differ by a dispersion-dependent term, so reordering is
+   possible in principle); instead the convention above is fixed here,
+   before any corrected-target score is computed, and every clause uses it.
+
+3. Eigenspace baseline named precisely, and one baseline added. The
+   pre-registered "eigenspace-perturbation corner family" is the three-corner
+   EIGENVALUE-ONLY method (Emory, Larsson and Iaccarino 2013), and is scored
+   exactly as pre-registered. The five-state extension (Iaccarino, Mishra and
+   Ghili 2017: the 1C and 2C eigenvalue corners each paired with both
+   production-extremal eigenvector alignments, plus the isotropic 3C corner,
+   the set {(1C, vmax), (1C, vmin), (2C, vmax), (2C, vmin), 3C},
+   UQ.eigenspace.five_state_set) is ADDED as a reported
+   baseline on the same folds with the same injection and scoring; it does
+   not replace the pre-registered corner family in any clause, and its
+   envelope is reported alongside. The structural fact stands unchanged:
+   neither variant can represent a heat-flux correction (anisotropy-only),
+   so both are absent from the dq legs by construction.
+
+4. Conformal language scoped to its validity. The wall-flux-normalized
+   split-conformal line keeps its pre-registered role and thresholds. Its
+   description is corrected from guarantee language to what the design
+   delivers: the calibration units are whole held-out cases, the score
+   quantile is the finite-sample split-conformal quantile, and the coverage
+   statement holds under exchangeability of calibration and test cases; the
+   cross-Mach and interaction transfers deliberately break exchangeability,
+   so measured coverage there is an empirical result with the gap reported,
+   not a distribution-free guarantee.
+
+5. Objective representation of the db leg, declared before training. The db
+   targets were pre-registered as raw Favre anisotropy components conditioned
+   on invariant features, which is not rotation-equivariant. Because every
+   target regenerates under amendment 1 and no corrected-target model has
+   been trained, the db leg (flow AND Gaussian, identically) now predicts
+   integrity-basis coefficients (UQ.discrepancy.basis_coefficients /
+   basis_reconstruct) with the same invariant conditioning; scoring clauses
+   evaluate the reconstructed tensor components exactly as pre-registered, so
+   thresholds are untouched. The representation carries pre-registered
+   FEASIBILITY GATES, checked on the corrected a-priori targets BEFORE any
+   training and reported in the memo either way
+   (UQ.discrepancy.basis_diagnostics): (i) the per-station basis rank and
+   condition number over the interaction-region samples are reported (2-D
+   mean flows admit at most three independent tensors, so a rank collapse is
+   expected structure, not failure); (ii) the DNS db targets must be
+   ACHIEVABLE in the basis, gated as median relative reconstruction residual
+   at most 0.20 over interaction-region samples, with the 90th percentile
+   reported as a diagnostic. If the gate fails, the db leg REVERTS to the
+   raw-component parameterization for flow and Gaussian identically, the
+   reversion is stated in the memo, and the residual numbers are published;
+   the basis is then a documented negative on this data, not a silent swap. The dq legs are vectors under the wall-frame
+   convention already fixed by the loaders and are unchanged. The coupling
+   masks of the flow are the corrected complementary-alternation masks (the
+   shift-and-shrink defect at five components is fixed); the two-component dq
+   architecture is bit-identical to the pre-registered one.
+
+6. Procedural integrity carried into this study: ensemble caches carry
+   validated configuration fingerprints (a reduced-cost run can never
+   masquerade as a production artifact); member records carry convergence
+   status, non-converged members never contribute QoIs (the extraction is
+   status-gated, not only the scoring); and diverged solves invalidate any
+   held fields so no member can inherit its predecessor's state.
