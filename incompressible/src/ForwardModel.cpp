@@ -71,6 +71,12 @@ EvaluationResult ForwardModel::evaluate(const std::vector<double>& theta) {
         if (hist.diverged) {
             result.status = EvaluationStatus::Diverged;
             result.loglik = -1e6;
+            // INVALIDATE any previously retained fields: a diverged solve
+            // leaves no valid state, and keeping the previous run's fields
+            // visible let downstream QoI extraction silently inherit them
+            // (two committed hills member records duplicated their
+            // predecessor exactly this way)
+            hasLastFields_ = false;
             return result;
         } else if (hist.converged) {
             result.status = EvaluationStatus::Converged;

@@ -645,6 +645,14 @@ ConvergenceHistory SIMPLESolver::solve(FlowFields& f) { // input: FlowField obje
     // Passed to assembleOmegaEquation so both k and omega production see the same velocity gradients, preventing omega blow-up.
     ScalarField SmagFrozen(mesh_, "Smag");
 
+    // Last-computed turbulence field-change norms, CARRIED ACROSS iterations:
+    // on non-update iterations (turb_update_interval > 1) the convergence
+    // check must see the most recent turbulence state, never a fresh zero
+    // (a zero would let the solve declare convergence between turbulence
+    // updates while k/omega are still moving). Initialised to 1 so nothing
+    // can claim turbulence convergence before the first update.
+    double lastKChange = 1.0, lastOmChange = 1.0;
+
     // SIMPLE Iteration loop
     for (int iter = 0; iter < settings_.maxIterations; ++iter) {
         // 1. Update SST fields (at turbUpdateInterval cadence after turbStartIter)
@@ -825,6 +833,8 @@ ConvergenceHistory SIMPLESolver::solve(FlowFields& f) { // input: FlowField obje
             }
             kChangeNorm  = kMaxDiff / kMaxVal;
             omChangeNorm = omMaxDiff / omMaxVal;
+            lastKChange  = kChangeNorm;
+            lastOmChange = omChangeNorm;
         }
 
         // 6. Track residuals
@@ -838,8 +848,11 @@ ConvergenceHistory SIMPLESolver::solve(FlowFields& f) { // input: FlowField obje
         entry.Uy    = resUy.initialRes;
         entry.Uz    = resUz.initialRes;
         entry.p     = resP.initialRes;
-        entry.k     = kChangeNorm;
-        entry.omega = omChangeNorm;
+        // the CARRIED norms: on non-update iterations these hold the most
+        // recent turbulence change, so the recorded history and the
+        // convergence check below never see a false zero
+        entry.k     = turbActive ? lastKChange  : 0.0;
+        entry.omega = turbActive ? lastOmChange : 0.0;
 
         // store iter-0 norms for normalisation. The pressure norm keeps a
         // running max over a short warmup: on a fully periodic domain a
@@ -874,9 +887,10 @@ ConvergenceHistory SIMPLESolver::solve(FlowFields& f) { // input: FlowField obje
         double nUx = safeNorm(entry.Ux, normMom0);
         double nUy = safeNorm(entry.Uy, normMom0);
         double nP  = safeNorm(entry.p,  normP0_);
-        // k and omega: field-change norms are already normalised (no iter-0 reference needed)
-        double nK  = kChangeNorm;
-        double nOm = omChangeNorm;
+        // k and omega: carried field-change norms (already normalised; the
+        // most recent update's change, never a fresh zero between updates)
+        double nK  = lastKChange;
+        double nOm = lastOmChange;
         hist.entries.push_back(entry);
 
         // computes maximum normalised residual
@@ -893,24 +907,32 @@ ConvergenceHistory SIMPLESolver::solve(FlowFields& f) { // input: FlowField obje
             std::cout << "\n";
         }
 
-        // convergence check (all normalised residuals below tolerance); while
-        // turbulence is active, convergence is additionally withheld until the
-        // startup nuT floor has released (f.turbEstablished), so no run can
-        // freeze a floored near-wall state as its converged solution
+        // If any individual residual or carried norm is non-finite, force
+        // maxRes to infinity BEFORE the convergence test so a NaN can neither
+        // be masked by chained std::max operand ordering nor slip past the
+        // (NaN < tol) == false accident into a later iteration
+        if (!std::isfinite(entry.Ux) || !std::isfinite(entry.Uy)
+            || !std::isfinite(entry.Uz) || !std::isfinite(entry.p)
+            || !std::isfinite(entry.k) || !std::isfinite(entry.omega)
+            || !std::isfinite(lastKChange) || !std::isfinite(lastOmChange))
+            maxRes = std::numeric_limits<double>::infinity();
+
+        // convergence check (all normalised residuals below tolerance).
+        // Scheduled turbulence must have RUN and its startup floor released:
+        // without the turbScheduled gate a solve could declare convergence
+        // before its first turbulence update, on a laminar transient the
+        // criterion never sees; with it, no run can freeze a floored or
+        // turbulence-free state as its converged solution.
+        const bool turbScheduled =
+            settings_.turbStartIter < settings_.maxIterations;
         if (maxRes < settings_.convergenceTol && iter > 0
-            && (!turbActive || f.turbEstablished)) {
+            && (!turbScheduled || (turbActive && f.turbEstablished))) {
             hist.converged = true;
             hist.finalIter = iter;
             if (settings_.verbose)
                 std::cout << "  SIMPLE converged at iteration " << iter << "\n";
             return hist;
         }
-
-        // If any individual residual is NaN, force maxRes to infinity so divergence is caught
-        // (std::max silently propagates NaN, masking divergence as a false convergence)
-        if (std::isnan(entry.Ux) || std::isnan(entry.Uy) || std::isnan(entry.Uz)
-            || std::isnan(entry.p) || std::isnan(entry.k) || std::isnan(entry.omega))
-            maxRes = std::numeric_limits<double>::infinity();
 
         // divergence check
         if (std::isnan(maxRes) || std::isinf(maxRes) || maxRes > settings_.divergenceLimit) {

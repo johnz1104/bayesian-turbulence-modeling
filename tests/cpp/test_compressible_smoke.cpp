@@ -3,10 +3,12 @@
 // Purpose: lock in the validated Ma=0.1 channel baseline so future changes to
 // btm_compressible cannot silently break the only validated case.
 //
-// Tolerances are loose (smoke-grade, not validation-grade): the test passes if
-//   - the solver does NOT diverge,
+// Post-audit acceptance: the test passes only if
+//   - the solver GENUINELY converges under the full-residual criterion
+//     (Ux, Uy, p, T, and the carried k/omega change norms; MaxIter fails),
 //   - density and temperature stay positive everywhere,
-//   - the computed Cf is within an order of magnitude of the Dean correlation,
+//   - the computed Cf is within coarse-mesh headroom [0.3x, 3x] of Dean
+//     (the 40x30 regression suite carries the quantitative guard),
 //   - the maximum Mach number remains subsonic (< 0.8).
 //
 // Mesh is intentionally small (16x12) so the test runs in a few seconds even
@@ -61,7 +63,13 @@ int main() {
         mesh, Uin, T_in, p_ref, kIn, omIn);
 
     SolverSettings settings;
-    settings.maxIterations      = 1500;
+    // budget sized for the audit's complete convergence criterion (absolute
+    // Ux, Uy and p thresholds plus dimensionless field-change gates on the
+    // velocity field, T, and the carried k/omega norms; the review added Uy,
+    // whose raw residual is the slowest): genuine convergence lands near
+    // iteration 4900 on this coarse case, versus the premature Ux/p-only
+    // declaration the old 1500 budget was sized for
+    settings.maxIterations      = 7000;
     settings.convergenceTol     = 1e-3;
     settings.divergenceLimit    = 1e10;
     settings.alphaU             = 0.5;
@@ -84,7 +92,20 @@ int main() {
     const auto hist = solver.solve(fields);
 
     REQUIRE(!hist.diverged, "compressible solver diverged at Ma=0.1");
+    // audit tightening: a smoke pass requires a GENUINE converged
+    // classification (MaxIter no longer passes silently), under the
+    // full-residual criterion incl. Uy, T and the carried k/omega norms
+    REQUIRE(hist.converged, "compressible solver did not converge at Ma=0.1");
     REQUIRE(!hist.entries.empty(), "no residual history recorded");
+    // the temperature norm is genuinely recorded (previously discarded):
+    // finite everywhere, and strictly positive somewhere during the transient
+    // (a hardcoded zero would pass a plain >= 0 check)
+    bool anyT = false;
+    for (const auto& e : hist.entries) {
+        REQUIRE(std::isfinite(e.T), "temperature norm must be finite");
+        if (e.T > 0.0) anyT = true;
+    }
+    REQUIRE(anyT, "temperature norm was never positive; not actually recorded");
 
     // Positivity invariants: density/temperature/pressure must stay > 0.
     double rho_min = 1e30, T_min = 1e30, p_min = 1e30;
@@ -130,13 +151,17 @@ int main() {
                 "Cf=%.5f  Cf_dean=%.5f\n",
                 rho_min, T_min, p_min, Ma_max, Cf, Cf_dean);
 
-    // Cf should be order 1e-3 for Re_D ~ 1.4e5; allow a wide [0.1x, 10x] band so
-    // this remains a smoke test rather than a quantitative validation.
-    if (std::isfinite(Cf) && Cf > 0.0) {
-        const double ratio = Cf / Cf_dean;
-        REQUIRE(ratio > 0.1 && ratio < 10.0,
-                "Cf differs from Dean correlation by more than an order of magnitude");
-    }
+    // audit tightening: the factor-of-ten band was no guard at all. On this
+    // deliberately coarse 16x12 developing channel the dp/dx-integral Cf at
+    // genuine convergence measures 0.45x Dean (12 cells across a Re 2.2e6
+    // layer under-resolve the log region and the integral spans the entry
+    // length), so the smoke band is [0.3x, 3x]: it catches a broken
+    // momentum/pressure path while the 40x30 station-sampled regression
+    // suite carries the quantitative few-percent guard.
+    REQUIRE(std::isfinite(Cf) && Cf > 0.0, "developed-flow Cf not measurable");
+    const double ratio = Cf / Cf_dean;
+    REQUIRE(ratio > 0.3 && ratio < 3.0,
+            "Cf inconsistent with the Dean correlation beyond coarse-mesh headroom");
 
     std::printf("test_compressible_smoke: all checks passed\n");
     return 0;
