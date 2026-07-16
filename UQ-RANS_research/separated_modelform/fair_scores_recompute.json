@@ -1,0 +1,108 @@
+{
+ "note": "Post-audit score-convention recomputation from committed member records. Biased columns reproduce the committed values; for the sampled flow/Gaussian ensembles the fair column (Ferro 2014) is the corrected comparison, while for the deterministic eigenspace families the biased column IS the exact CRPS of the finite discrete forecast and the fair column is a sensitivity reading only.",
+ "bfs_reattachment_and_cf": {
+  "truth": 6.28,
+  "rows": {
+   "flow": {
+    "n_members": 23,
+    "crps_fair": 0.6342848729313673,
+    "crps_biased": 0.6506252833392252,
+    "crps_committed": 0.6506252833392252,
+    "cf_crps_fair": 0.000633246967660637,
+    "cf_crps_biased": 0.0006419664810680429,
+    "cf_energy_fair": 0.0015077967425289169,
+    "cf_energy_biased": 0.0015320833244759668,
+    "cf_crps_committed": 0.0006419664810680431,
+    "cf_energy_committed": 0.0015320833244759668
+   },
+   "gauss": {
+    "n_members": 24,
+    "crps_fair": 0.30573895839645715,
+    "crps_biased": 0.3183000425730739,
+    "crps_committed": 0.3183000425730739,
+    "cf_crps_fair": 0.00043836976745679975,
+    "cf_crps_biased": 0.00044818087810986705,
+    "cf_energy_fair": 0.0009824118037762256,
+    "cf_energy_biased": 0.0010084995190032526,
+    "cf_crps_committed": 0.00044818087810986705,
+    "cf_energy_committed": 0.0010084995190032526
+   },
+   "eigenspace_1.0": {
+    "n_members": 2,
+    "crps_fair": 0.6710934132360631,
+    "crps_biased": 0.8393779949084839,
+    "crps_committed_uniform_reading": 0.8393779949084839
+   },
+   "eigenspace_0.5": {
+    "n_members": 3,
+    "crps_fair": 0.09176063833351422,
+    "crps_biased": 0.3803792948566409,
+    "crps_committed_uniform_reading": 0.3803792948566409
+   }
+  }
+ },
+ "hills_wall_qois": {
+  "truths": {
+   "separation": 0.27025129022620453,
+   "reattachment": 4.684435220489094,
+   "bubble_length": 4.414183930262889
+  },
+  "rows": {
+   "flow": {
+    "n_members": 24,
+    "separation_crps_fair": 0.07390665255943002,
+    "separation_crps_biased": 0.07395118235840972,
+    "separation_crps_committed": 0.07395118235840972,
+    "reattachment_crps_fair": 1.7948433473130505,
+    "reattachment_crps_biased": 1.8079299250876577,
+    "reattachment_crps_committed": 1.8079299250876577,
+    "bubble_length_crps_fair": 1.7195556957221703,
+    "bubble_length_crps_biased": 1.7326552853241082,
+    "bubble_length_crps_committed": 1.7326552853241082
+   },
+   "gauss": {
+    "n_members": 23,
+    "separation_crps_fair": 0.0774316867639687,
+    "separation_crps_biased": 0.07762417937345345,
+    "separation_crps_committed": 0.07762417937345345,
+    "reattachment_crps_fair": 1.252515243253043,
+    "reattachment_crps_biased": 1.270773093060502,
+    "reattachment_crps_committed": 1.270773093060502,
+    "bubble_length_crps_fair": 1.1672161551778093,
+    "bubble_length_crps_biased": 1.1856235733023601,
+    "bubble_length_crps_committed": 1.1856235733023601
+   },
+   "eigenspace_1.0": {
+    "separation": {
+     "n_members": 0,
+     "note": "all corners excluded"
+    },
+    "reattachment": {
+     "n_members": 0,
+     "note": "all corners excluded"
+    },
+    "bubble_length": {
+     "n_members": 0,
+     "note": "all corners excluded"
+    }
+   },
+   "eigenspace_0.5": {
+    "separation": {
+     "n_members": 2,
+     "crps_fair": 0.07549535703154558,
+     "crps_biased": 0.07638920074803637
+    },
+    "reattachment": {
+     "n_members": 2,
+     "crps_fair": 0.6188025652805722,
+     "crps_biased": 1.2654100157887207
+    },
+    "bubble_length": {
+     "n_members": 2,
+     "crps_fair": 0.5397318333830636,
+     "crps_biased": 1.187233127607703
+    }
+   }
+  }
+ }
+}

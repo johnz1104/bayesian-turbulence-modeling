@@ -276,3 +276,88 @@ python3 UQ-RANS_research/separated_modelform/make_hills_figures.py
 
 Fixed seed 0 throughout; raw outputs cache under the gitignored
 `results/separated/`; the curated numbers here are `hills_numbers.json`.
+## Post-audit revision (2026-07-12)
+
+An external code audit (adjudicated 2026-07-12; see the root post-audit report) touched
+four aspects of this study. The original text above is preserved unchanged; this section
+supersedes it where stated. The pre-registered verdict is NOT withdrawn: the coverage
+clauses still fail for the flow on both geometries, and the diagnosis (the anisotropy-only
+injection is magnitude-capped by the running k) is unchanged by every item below.
+
+1. Erratum: two contaminated hills member records. The incompressible forward model left
+   its cached fields untouched when a solve ended in DivergenceDetected, and the hills
+   wrapper extracted bubble geometry without gating on status, so two diverged members in
+   hills_numbers.json carry wall QoIs bit-identical to the immediately preceding converged
+   member (the flow ensemble's diverged member with iterations 3757 following the
+   converged member with iterations 8536, and the corresponding pair in the gauss
+   ensemble). The scored statistics are NOT affected: every coverage, band, CRPS, and
+   envelope quantity filtered members to status Converged, so the stale values never
+   entered a reported number. The committed JSON is preserved as the record of what ran;
+   the defect is fixed at the source (fields cleared on divergence, extraction
+   status-gated, regression-tested), and any regenerated ensemble uses the fixed path.
+
+2. Score conventions stated precisely, and the comparison recomputed under both. The
+   committed CRPS/energy values were computed with the M^2 (diagonal-included) plug-in
+   estimator under a "fair" docstring. The correction splits by what the M members ARE.
+   For the flow and Gaussian ensembles the members are an iid sample of an underlying
+   predictive, so the fair M(M-1) estimator (Ferro 2014) is the right convention and is
+   now the library default; the recomputation from the committed member records moves
+   those scores by under three percent (BFS reattachment CRPS, truth 6.28: flow 0.651 to
+   0.634 at M = 23, Gaussian 0.318 to 0.306 at M = 24; hills: flow 1.808 to 1.795,
+   Gaussian 1.271 to 1.253) and no conclusion moves. For the eigenspace corner families
+   the members are not a sample of anything: the family IS the forecast, a finite
+   discrete distribution, and for a discrete forecast the M^2 plug-in is the EXACT CRPS,
+   not a biased estimate. The committed corner values therefore stand as exact
+   discrete-forecast scores (BFS delta 1.0: 0.839; delta 0.5: 0.380; hills delta 0.5:
+   1.265). The "fair" numbers for the corner families (0.671, 0.092, 0.619) answer a
+   hypothetical (the CRPS of an imagined predictive the corners sample) and are kept in
+   fair_scores_recompute.json as a sensitivity column only; the biased columns reproduce
+   the committed values to the last digit, validating the read.
+
+   The primary pre-registered reading for the deterministic families remains envelope
+   containment (METHODS_OPERATIONALIZATION.md section 9), with CRPS on them secondary.
+   Under the corrected conventions the committed comparative statement is unchanged: the
+   flow does not beat the moderated corner family on reattachment CRPS on either
+   geometry (BFS 0.634 fair vs 0.380 exact; hills 1.795 fair vs 1.265 exact). One
+   ranking is convention-dependent and is reported as such: on the hills the Gaussian
+   fair score (1.253) and the corner family's exact score (1.265) are numerically close
+   (no Monte Carlo uncertainty analysis backs a stronger word), so "which non-flow
+   method scores best there" has no convention-robust answer; on the BFS the corner
+   family leads under either convention.
+
+3. Precise naming of the eigenspace baseline. What this study ran is the THREE-CORNER
+   EIGENVALUE-ONLY perturbation of Emory, Larsson and Iaccarino (2013): eigenvalues moved
+   to the barycentric corners, eigenvectors preserved. Sentences reading "the dominant
+   model-form method" should be read as naming that 2013 variant, not the five-state
+   extension of Iaccarino, Mishra and Ghili (2017), which additionally permutes
+   eigenvectors to production-extremal alignment and is reported to improve bounds. The
+   2017 five-state family is now implemented (UQ.eigenspace.five_state_set) and enters
+   the corrected-solver BFS probe below; the full-projection non-existence result on the
+   hills grid (no steady solution at delta_B = 1.0) is a statement about the eigenvalue
+   corners and is unaffected by eigenvector permutation at the same corners' amplitude.
+
+4. Solver corrections and the corrected-solver probe. Three solver-level audit fixes move
+   separated baselines specifically: the SST omega production now uses the limited
+   specification form (production-reducing exactly in separated shear layers), the omega
+   cross-diffusion source is no longer clipped, and the baseline momentum operator now
+   assembles the full Boussinesq deviatoric stress (the variable-viscosity transpose
+   term, identically zero in the attached calibrations, is not zero here). Two distinct
+   exactness statements are kept apart. The DELTA-SOURCE algebra was verified exact and
+   stands: the injected force is -div(2 k db) pointwise, it telescopes against the
+   baseline stress operator whatever that operator contains, and a zero correction
+   recovers the baseline solve bit for bit (the audit's contrary reading of a
+   cancellation defect is incorrect). The TOTAL modeled stress is a different matter:
+   before the operator completion the equation the injected solve satisfied was the
+   baseline's incomplete stress divergence plus the exact delta source, so the total
+   target stress -div(2 nu_t S - 2/3 k I + 2 k db) is represented exactly only on the
+   corrected solver. The magnitude-cap diagnosis rests on the delta-source algebra and
+   the running-k scale, not on total-stress exactness, so it stands as written; the
+   corrected operator is one of the reasons the probe below is run at all. A BFS probe
+   on the corrected solver (baseline + flow/Gaussian injection ensembles + three-corner
+   AND five-state families, fair scoring for the sampled ensembles and exact discrete-
+   forecast scoring for the bounding families, status-gated members) re-tests the
+   verdict. As of this revision (2026-07-13) THE PROBE HAS NOT BEEN RUN: this section
+   records the protocol before its outcome is observed, the probe result will be
+   reported in a separate follow-up pull request, and the hills regeneration decision
+   (regenerate only if the probe moves a conclusion rather than a number) is likewise
+   pre-committed here.

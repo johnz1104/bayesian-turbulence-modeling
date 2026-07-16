@@ -219,3 +219,21 @@ standing correction layer; sharpness is not, at this calibration-data
 sparsity. The informative repair is a better-dispersed or better-directed
 model-form rather than a wider multiplier, which is what the dense-field
 second geometry tests.
+
+
+## Post-audit note (2026-07-12)
+
+See the dated post-audit revision at the end of hills_crossgeom_finding.md; it
+applies to this memo's score tables and eigenspace naming too. For this
+geometry specifically: the committed member records are CLEAN of the
+stale-field defect (the max-iteration failure mode evaluates its own fields;
+the bit-identical duplication was a hills DivergenceDetected artifact), and
+the score-convention recomputation (fair_scores_recompute.json; the biased
+columns reproduce the committed values exactly) applies the fair estimator to
+the sampled flow and Gaussian ensembles only, moving them by under three
+percent (flow 0.651 to 0.634 on reattachment CRPS). The corner-family values
+stand as committed: a deterministic bounding family is itself a finite
+discrete forecast, for which the M^2 plug-in is the exact CRPS (0.380 at
+delta 0.5), and its fair column is a sensitivity reading of a hypothetical
+sampled predictive. The committed statement that the flow does not beat the
+corner family holds under either convention (0.634 fair vs 0.380 exact).
