@@ -61,9 +61,10 @@ CONFIG = {
     "seed": 0,
     "param_set": "a1_betaStar",
     # channel forward-model resolution (matches Step 1's calibration config)
-    # sized for the honest criterion with cold members (see reproduce_channel)
+    # sized for the honest criterion with cold members (see reproduce_channel:
+    # the cold cost grows with Re, ~21600 iterations at Re_tau 5200 means)
     "channel_cfg": {"nx": 40, "ny": 56, "Lx": 18.0,
-                    "max_iter": 20000, "conv_tol": 1.0e-3, "yplus_target": 0.5},
+                    "max_iter": 45000, "conv_tol": 1.0e-3, "yplus_target": 0.5},
     "couette_cfg": dict(COUETTE_CFG),
 }
 OUT = os.path.join(_HERE, "..", "..", "results", "couette")

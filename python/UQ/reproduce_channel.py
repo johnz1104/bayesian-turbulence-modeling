@@ -73,11 +73,15 @@ CONFIG = {
     # forward-model resolution for the calibration ensembles (faster than the
     # baseline config; the developing channel is the same model either way)
     # max_iter is sized for the HONEST convergence criterion with COLD
-    # ensemble members: measured cold convergence on this mesh is ~7000
-    # iterations at this tolerance (~12000 at 1e-4); the old 4000 budget
-    # predates the audit and never produced a genuinely converged member
+    # ensemble members. Measured cold convergence at prior means on this mesh
+    # grows with Reynolds number: ~7000 iterations at Re_tau 550, 19717 at
+    # Re_tau 2000, 21640 at Re_tau 5200 (the old 4000 budget predates the
+    # audit and never produced a genuinely converged member; a 20000 budget
+    # sat at the high-Re means-cost and thinned those ensembles to 21/48 and
+    # 5/48 valid). 45000 is roughly twice the highest measured means-cost so
+    # sampled coefficients in the expensive corners of the prior box converge.
     "cfg": {"nx": 40, "ny": 56, "Lx": 18.0,
-            "max_iter": 20000, "conv_tol": 1.0e-3, "yplus_target": 0.5},
+            "max_iter": 45000, "conv_tol": 1.0e-3, "yplus_target": 0.5},
     # baseline-field resolution (only used when regenerating baselines)
     "baseline_cfg": dict(ChannelBaselineRANS.DEFAULT_CONFIG),
     "param_set": "a1_betaStar",
