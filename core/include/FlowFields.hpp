@@ -76,6 +76,18 @@ struct SolverSettings {
     // must be floor-free. Widen per-case in config if a startup needs it.
     int nuTFloorIters = 500;
 
+    // Rhie-Chow face-flux dissipation on ALL meshes (opt-in probe). The
+    // default gating applies it only where the p' system is all-Neumann
+    // (outlet-free domains), which is EXACTLY where an unbroken odd-even
+    // null mode exists; any outlet contributes a Dirichlet row that breaks
+    // both the singularity and the mode, the bounded cases are DNS-validated
+    // without the term, and the semi-analytic coupled tangent linearises the
+    // legacy bounded operator bit-for-bit. This switch exists so
+    // checkerboard susceptibility on bounded meshes can be PROBED rather
+    // than assumed (pair with oddEvenEnergyRatio); enabling it globally is a
+    // reviewed physics change, not a default.
+    bool rhieChowAllMeshes = false;
+
     // Under-relaxation of the explicit Reynolds-stress-injection source (the
     // deferred-correction body force is blended across outer iterations at
     // this factor; 1.0 disables blending). The explicit correction cancels a

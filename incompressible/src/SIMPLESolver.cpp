@@ -304,9 +304,26 @@ void SIMPLESolver::assemblePressureCorrection(LinearSystem& sys,
         if (mesh_.patch(pi).type == "outlet" && !mesh_.patch(pi).faces.empty())
             hasOutlet = true;
 
+    // Audit adjudication of this gate: the outlet test identifies where the
+    // p' system is all-Neumann and the odd-even mode is an EXACT null mode.
+    // An outlet's Dirichlet row removes the exact null mode and the
+    // singularity, but interior odd-even susceptibility on a collocated
+    // grid is a local stencil property that boundary rows only damp, so the
+    // question on bounded meshes is EMPIRICAL, not settled by the gate:
+    // the bounded production cases are DNS-validated without the
+    // dissipation and their solved-pressure checkerboard energy measures
+    // low (oddEvenEnergyRatio, pinned by test on the bounded channel), and
+    // the coupled tangent linearises the legacy bounded operator
+    // bit-for-bit. The term therefore stays gated by default with
+    // settings_.rhieChowAllMeshes as the standing probe; enabling it
+    // globally is a reviewed physics change to make if the diagnostic ever
+    // measures otherwise on a production case. The pressure PIN below
+    // remains outlet-free-only, where the singular system needs it.
+    const bool rcActive = !hasOutlet || settings_.rhieChowAllMeshes;
+
     // cell pressure gradient for the Rhie-Chow face-flux dissipation below
     VectorField gradP(mesh_, "gradP");
-    if (!hasOutlet) gradP = greenGaussGrad(f.p);
+    if (rcActive) gradP = greenGaussGrad(f.p);
 
     // internal faces
     for (int fi = 0; fi < nIF; ++fi) {
@@ -345,7 +362,7 @@ void SIMPLESolver::assemblePressureCorrection(LinearSystem& sys,
         Vec3 Uf = f.U[o] * face.weight + f.U[n] * (1.0 - face.weight);
         double massFlux = (Uf.x * face.normal.x + Uf.y * face.normal.y
                          + Uf.z * face.normal.z) * Sf;
-        if (!hasOutlet) {
+        if (rcActive) {
             Vec3 ehat = face.d / std::max(face.delta, 1e-30);
             Vec3 gbar = gradP[o] * face.weight + gradP[n] * (1.0 - face.weight);
             massFlux += -dP_f * Sf * ((f.p[n] - f.p[o]) / delta - gbar.dot(ehat));

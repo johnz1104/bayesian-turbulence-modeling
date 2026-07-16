@@ -35,6 +35,12 @@ target_link_libraries(test_cp_normalization PRIVATE btm_core)
 add_test(NAME cp_normalization COMMAND test_cp_normalization)
 set_tests_properties(cp_normalization PROPERTIES TIMEOUT 30 LABELS "unit;observation")
 
+# ---- infra_fixes: Gauss-Seidel sweep, inBounds guard, cache copy, RC probe ----
+add_executable(test_infra_fixes cpp/test_infra_fixes.cpp)
+target_link_libraries(test_infra_fixes PRIVATE btm_incompressible)
+add_test(NAME infra_fixes COMMAND test_infra_fixes)
+set_tests_properties(infra_fixes PROPERTIES TIMEOUT 240 LABELS "unit;infra")
+
 # ---- sst_production_2003: corrected omega production (limiter-discriminating) ----
 add_executable(test_sst_production_2003 cpp/test_sst_production_2003.cpp)
 target_link_libraries(test_sst_production_2003 PRIVATE btm_core)

@@ -4,6 +4,8 @@
 #include <vector>
 #include <cmath>
 #include <algorithm>
+#include <deque>
+#include <stdexcept>
 #include <string>
 
 // Field<T> -- cell-centered FVM field (control volume) 
@@ -155,6 +157,77 @@ struct VelocityGradients {
     VectorField dvdx;   // (dv/dx, dv/dy, dv/dz)
     VectorField dwdx;   // (dw/dx, dw/dy, dw/dz)
 };
+
+// Odd-even (checkerboard) energy ratio of a cell field: the magnitude of the
+// volume-weighted projection of the demeaned field onto the alternating
+// two-colour mode of the cell-adjacency graph, normalized by the field and
+// mode energies. The value is in [0,1]: an exact checkerboard scores one and
+// a smooth field with no alternating component scores near zero.
+//
+// The mesh factories used by the collocated SIMPLE solver produce bipartite
+// quadrilateral cell graphs, including their periodic wrap faces. Requiring
+// bipartiteness is deliberate: the all-Neumann odd-even null mode being
+// diagnosed is precisely this graph mode. The former neighbour-average
+// residual also responded strongly to smooth curvature and boundary stencil
+// imbalance (a solved smooth channel scored 0.59), so it was not a specific
+// checkerboard measurement.
+inline double oddEvenEnergyRatio(const Mesh& mesh, const ScalarField& phi) {
+    int n = mesh.nCells();
+    if (n == 0) return 0.0;
+
+    std::vector<std::vector<int>> adjacency(n);
+    for (int fi = 0; fi < mesh.nInternalFaces(); ++fi) {
+        const Face& face = mesh.face(fi);
+        adjacency[face.owner].push_back(face.neighbor);
+        adjacency[face.neighbor].push_back(face.owner);
+    }
+
+    std::vector<int> colour(n, -1);
+    std::deque<int> queue;
+    for (int seed = 0; seed < n; ++seed) {
+        if (colour[seed] != -1) continue;
+        colour[seed] = 0;
+        queue.push_back(seed);
+        while (!queue.empty()) {
+            int ci = queue.front();
+            queue.pop_front();
+            for (int nb : adjacency[ci]) {
+                if (colour[nb] == -1) {
+                    colour[nb] = 1 - colour[ci];
+                    queue.push_back(nb);
+                } else if (colour[nb] == colour[ci]) {
+                    throw std::invalid_argument(
+                        "oddEvenEnergyRatio requires a bipartite cell graph");
+                }
+            }
+        }
+    }
+
+    double weight = 0.0, mean = 0.0, modeMean = 0.0;
+    for (int ci = 0; ci < n; ++ci) {
+        double w = std::max(mesh.cell(ci).volume, 0.0);
+        double q = colour[ci] == 0 ? 1.0 : -1.0;
+        weight += w;
+        mean += w * phi[ci];
+        modeMean += w * q;
+    }
+    if (weight <= 1e-300) return 0.0;
+    mean /= weight;
+    modeMean /= weight;
+
+    double projection = 0.0, fieldEnergy = 0.0, modeEnergy = 0.0;
+    for (int ci = 0; ci < n; ++ci) {
+        double w = std::max(mesh.cell(ci).volume, 0.0);
+        double v = phi[ci] - mean;
+        double q = (colour[ci] == 0 ? 1.0 : -1.0) - modeMean;
+        projection += w * v * q;
+        fieldEnergy += w * v * v;
+        modeEnergy += w * q * q;
+    }
+    if (fieldEnergy <= 1e-300 || modeEnergy <= 1e-300) return 0.0;
+    return std::abs(projection)
+         / std::sqrt(fieldEnergy * modeEnergy);
+}
 
 inline VelocityGradients computeVelocityGradients(const VectorField& U){
     const Mesh& m = U.mesh();
