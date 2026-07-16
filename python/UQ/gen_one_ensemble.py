@@ -20,7 +20,8 @@ sys.path.insert(0, os.path.join(_HERE, ".."))
 
 from UQ.datasets import ChannelDNS
 from UQ.datasets.channel_calibration import ChannelCalibration
-from UQ.reproduce_channel import CONFIG, OUT, ensemble_path
+from UQ.reproduce_channel import CONFIG, OUT, PHYSICS, ensemble_path
+from UQ import cache_fingerprint as cfp
 
 
 def main():
@@ -32,8 +33,18 @@ def main():
                            n_stations=CONFIG["n_stations"], cfg=CONFIG["cfg"],
                            sigma_floor=CONFIG["sigma_floor"])
     nv = c.run_ensemble(n=CONFIG["n_ensemble"], seed=CONFIG["seed"], verbose=True)
+    if nv == 0:
+        print(f"[{param_set} Re_tau {n}] EVERY member rejected; no cache written")
+        sys.exit(1)
     path = ensemble_path(n, param_set)
-    np.savez(path, **c.to_cache())
+    # the SAME identity stage_ensembles validates against, so this cache is
+    # accepted there instead of being refused as unstamped
+    ident = {"kind": "channel_ensemble", "physics": PHYSICS, "case": n,
+             "n_ensemble": CONFIG["n_ensemble"],
+             "seed": CONFIG["seed"], "param_set": param_set,
+             "n_stations": CONFIG["n_stations"], "cfg": CONFIG["cfg"],
+             "sigma_floor": CONFIG["sigma_floor"]}
+    np.savez(path, **cfp.attach(c.to_cache(), ident))
     print(f"[{param_set} Re_tau {n}] {nv}/{CONFIG['n_ensemble']} valid -> {path}",
           flush=True)
 

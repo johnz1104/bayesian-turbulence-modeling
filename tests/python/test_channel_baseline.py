@@ -13,8 +13,12 @@ from UQ.datasets import ChannelDNS
 
 # tiny, fast config: a few hundred cells and a short march, enough to produce a
 # sensible developing-channel field in a couple of seconds
+# max_iter sized for GENUINE convergence on this mesh (measured 5634
+# iterations, ~9 s): baselines now refuse unconverged profiles, so the old
+# 1500 budget, which never truly converged and was silently accepted before
+# the audit, would fail every solve here
 FAST_CFG = {"nx": 24, "ny": 32, "Lx": 10.0,
-            "max_iter": 1500, "conv_tol": 1.0e-3, "yplus_target": 0.5}
+            "max_iter": 12000, "conv_tol": 1.0e-3, "yplus_target": 0.5}
 
 
 @pytest.fixture(scope="module")
