@@ -29,6 +29,12 @@ target_link_libraries(test_bfs_lemoin_bc PRIVATE btm_core)
 add_test(NAME bfs_lemoin_bc COMMAND test_bfs_lemoin_bc)
 set_tests_properties(bfs_lemoin_bc PROPERTIES TIMEOUT 30 LABELS "unit;bc")
 
+# ---- cp_normalization: pressure-coefficient references (audit fix) ----
+add_executable(test_cp_normalization cpp/test_cp_normalization.cpp)
+target_link_libraries(test_cp_normalization PRIVATE btm_core)
+add_test(NAME cp_normalization COMMAND test_cp_normalization)
+set_tests_properties(cp_normalization PROPERTIES TIMEOUT 30 LABELS "unit;observation")
+
 # ---- sst_production_2003: corrected omega production (limiter-discriminating) ----
 add_executable(test_sst_production_2003 cpp/test_sst_production_2003.cpp)
 target_link_libraries(test_sst_production_2003 PRIVATE btm_core)
@@ -67,6 +73,15 @@ set_tests_properties(periodic_channel PROPERTIES TIMEOUT 240 LABELS "unit;mesh;s
 add_executable(test_compressible_smoke cpp/test_compressible_smoke.cpp)
 target_link_libraries(test_compressible_smoke PRIVATE btm_compressible)
 add_test(NAME compressible_smoke COMMAND test_compressible_smoke)
+
+add_executable(test_compressible_observation_contract
+               cpp/test_compressible_observation_contract.cpp)
+target_link_libraries(test_compressible_observation_contract PRIVATE btm_compressible)
+add_test(NAME compressible_observation_contract
+         COMMAND test_compressible_observation_contract)
+set_tests_properties(compressible_observation_contract PROPERTIES
+    TIMEOUT 30
+    LABELS "unit;observation;compressible")
 set_tests_properties(compressible_smoke PROPERTIES
     TIMEOUT 180
     LABELS "smoke;compressible")

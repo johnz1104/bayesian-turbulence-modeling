@@ -593,7 +593,13 @@ CompressibleConvergenceHistory CompressibleSIMPLESolver::solve(CompressibleFlowF
                 k_scaled[ci] = f.k[ci];
 
             double nu0 = mu_[0] / std::max(f.rho[0], 1e-30);
-            sst_.computeFields(mesh_, k_scaled, f.omega, f.U, nu0,
+            // LOCAL kinematic viscosity mu(T)/rho per cell for the F1/F2
+            // blending arguments (the inlet-cell nu0 remains only as the
+            // steady startup-floor value below)
+            ScalarField nuLocal(mesh_, "nuLocal");
+            for (int ci = 0; ci < mesh_.nCells(); ++ci)
+                nuLocal[ci] = mu_[ci] / std::max(f.rho[ci], 1e-30);
+            sst_.computeFields(mesh_, k_scaled, f.omega, f.U, nuLocal,
                                f.nuT, f.F1, f.F2, f.Pk, f.CDkw);
 
             SmagFrozen = strainRateMagnitude(computeVelocityGradients(f.U));
@@ -732,7 +738,6 @@ CompressibleConvergenceHistory CompressibleSIMPLESolver::solve(CompressibleFlowF
         // 6. Turbulence equations
         SolverResult resK = {}, resOm = {};
         if (turbUpdate) {
-            double nu0 = mu_[0] / std::max(f.rho[0], 1e-30);
             // pre-solve fields for the change-norm convergence metric (the
             // wall re-pinning below keeps the omega EQUATION imbalance
             // permanently nonzero, so field change is the honest signal,
@@ -752,7 +757,12 @@ CompressibleConvergenceHistory CompressibleSIMPLESolver::solve(CompressibleFlowF
             resOm = tSolver_->solve(omSys, omVec, settings_.innerIterations, settings_.innerTolerance);
             for (int ci = 0; ci < mesh_.nCells(); ++ci) f.omega[ci] = omVec[ci];
             f.omega.clamp(settings_.omegaMin, 1e15);
-            applyOmegaBC(f.omega, mesh_, fbc_tmp, nu0, sst_.coeffs.beta1);
+            // boundary-face omega with the LOCAL owner-cell viscosity, not
+            // the inlet value (review fix; matches the wall-anchor treatment)
+            ScalarField nuLocalBC(mesh_, "nuLocalBC");
+            for (int ci = 0; ci < mesh_.nCells(); ++ci)
+                nuLocalBC[ci] = mu_[ci] / std::max(f.rho[ci], 1e-30);
+            applyOmegaBC(f.omega, mesh_, fbc_tmp, nuLocalBC, sst_.coeffs.beta1);
 
             // Re-pin near-wall omega.  PHASE 7 — when settings_.useWallFunctions
             // is on, blend the resolved-LES form with the log-law form so the
@@ -766,7 +776,9 @@ CompressibleConvergenceHistory CompressibleSIMPLESolver::solve(CompressibleFlowF
                     const Face& face = mesh_.face(fi);
                     int       o    = face.owner;
                     double    y1   = std::max(face.delta, 1e-20);
-                    double omRes = 60.0 * nu0 / (sst_.coeffs.beta1 * y1 * y1);
+                    // wall anchor with the LOCAL owner-cell viscosity
+                    double nuO   = mu_[o] / std::max(f.rho[o], 1e-30);
+                    double omRes = 60.0 * nuO / (sst_.coeffs.beta1 * y1 * y1);
                     if (settings_.useWallFunctions) {
                         double k_p   = std::max(f.k[o], 1e-30);
                         double uTau  = std::sqrt(std::sqrt(betaStar) * k_p);
