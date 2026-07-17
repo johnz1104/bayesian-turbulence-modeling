@@ -69,7 +69,14 @@ class BFSAPosteriori:
         members = []
         for m in range(n_members):
             r = self.inj.run(b_targets[:, m])
-            xw, cf = self.inj.wall_cf(r["fields"])
+            # a non-converged member carries NO fields (the solver's honest
+            # divergence invalidation); its wall series is NaN and the
+            # status-filtered scoring excludes it, stated in the exclusion
+            # counts (pre-audit this path was masked by stale-field reuse)
+            if r["fields"] is not None:
+                xw, cf = self.inj.wall_cf(r["fields"])
+            else:
+                xw, cf = np.array([]), np.array([])
             members.append({
                 "reattachment": r["reattachment"],
                 "status": r["status"],
@@ -100,7 +107,10 @@ class BFSAPosteriori:
         for name, b_pert in family.items():
             bt, _ = self.inj.target_from_db(b_pert - self.inj.b_baseline)
             r = self.inj.run(bt)
-            xw, cf = self.inj.wall_cf(r["fields"])
+            if r["fields"] is not None:
+                xw, cf = self.inj.wall_cf(r["fields"])
+            else:
+                xw, cf = np.array([]), np.array([])
             members[name] = {
                 "reattachment": r["reattachment"],
                 "status": r["status"],
@@ -158,12 +168,18 @@ class BFSAPosteriori:
                                                            xr[None, :])
         return out
 
-    def score_cf(self, members, level=0.9):
+    def score_cf(self, members, level=0.9, discrete_forecast=False):
         """Coverage of the measured downstream-station Cf by the Cf ensemble.
 
         The DNS supplies Cf at the five downstream stations (x/h = 4, 6, 10,
         15, 19); each member's wall-Cf curve is interpolated to those stations
         and the per-station ensemble is scored against the measured value.
+
+        discrete_forecast=True applies the exact M^2 plug-in CRPS/energy
+        convention for a deterministic bounding family whose members ARE the
+        forecast (the eigenspace families); the default fair estimators are
+        for sampled predictives. The convention used is recorded in the
+        returned record.
         """
         dns = self.apriori.disc.dns
         xs, cf_dns = dns.cf_stations()
@@ -175,14 +191,21 @@ class BFSAPosteriori:
         samples = np.stack([np.interp(xs, m["cf_x"], m["cf"]) for m in ok],
                            axis=1)           # (n_stations, n_members)
         cov, shp = ev.coverage_from_samples(cf_dns, samples, level=level)
+        if discrete_forecast:
+            crps = ev.crps_ensemble_biased(cf_dns, samples)
+            es = ev.energy_score_biased(cf_dns[None, :], samples.T[None, :, :])
+        else:
+            crps = ev.crps_ensemble(cf_dns, samples)
+            es = ev.energy_score(cf_dns[None, :], samples.T[None, :, :])
         return {
             "n_used": len(ok),
             "stations_xh": xs.tolist(),
             "coverage": cov,
             "sharpness": shp,
-            "crps": ev.crps_ensemble(cf_dns, samples),
-            "energy_score": ev.energy_score(cf_dns[None, :],
-                                            samples.T[None, :, :]),
+            "crps": crps,
+            "energy_score": es,
+            "score_convention": ("exact-discrete-forecast" if discrete_forecast
+                                 else "fair-sampled-predictive"),
         }
 
 
