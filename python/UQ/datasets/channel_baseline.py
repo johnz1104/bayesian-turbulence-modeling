@@ -42,8 +42,14 @@ class ChannelBaselineRANS:
     # tests override it with a tiny, fast config to exercise the machinery only
     HALF_HEIGHT = 1.0
     U_BULK = 1.0
+    # max_iter sized for genuine convergence under the honest criterion at
+    # every calibration Reynolds number: the measured cold cost on this mesh
+    # at 1e-4 grows from ~25000 at Re_tau 550 to 41406/44825 at the Re_tau
+    # 2000 bracketing points and 49037 at Re_tau 5200, so the budget is about
+    # twice the worst measured cost (solves stop at convergence, so the cap
+    # only prices the failure mode, not the typical solve)
     DEFAULT_CONFIG = {"nx": 48, "ny": 64, "Lx": 20.0,
-                      "max_iter": 40000, "conv_tol": 1.0e-4, "yplus_target": 0.5}
+                      "max_iter": 100000, "conv_tol": 1.0e-4, "yplus_target": 0.5}
 
     def __init__(self, nu, u_tau, re_tau, yplus, U, k, nu_t, omega,
                  cf, status, iterations, meta):
