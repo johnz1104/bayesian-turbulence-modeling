@@ -72,8 +72,16 @@ CONFIG = {
     "seed": 0,
     # forward-model resolution for the calibration ensembles (faster than the
     # baseline config; the developing channel is the same model either way)
+    # max_iter is sized for the HONEST convergence criterion with COLD
+    # ensemble members. Measured cold convergence at prior means on this mesh
+    # grows with Reynolds number: ~7000 iterations at Re_tau 550, 19717 at
+    # Re_tau 2000, 21640 at Re_tau 5200 (the old 4000 budget predates the
+    # audit and never produced a genuinely converged member; a 20000 budget
+    # sat at the high-Re means-cost and thinned those ensembles to 21/48 and
+    # 5/48 valid). 45000 is roughly twice the highest measured means-cost so
+    # sampled coefficients in the expensive corners of the prior box converge.
     "cfg": {"nx": 40, "ny": 56, "Lx": 18.0,
-            "max_iter": 4000, "conv_tol": 1.0e-3, "yplus_target": 0.5},
+            "max_iter": 45000, "conv_tol": 1.0e-3, "yplus_target": 0.5},
     # baseline-field resolution (only used when regenerating baselines)
     "baseline_cfg": dict(ChannelBaselineRANS.DEFAULT_CONFIG),
     "param_set": "a1_betaStar",
@@ -180,9 +188,15 @@ def stage_ensembles(regen, quick):
                     print(f"  Re_tau {n:>4}: loaded {c.n_valid} ensemble points")
         if not loaded:
             print(f"  Re_tau {n:>4}: running {n_ens} forward solves ...", flush=True)
-            c.run_ensemble(n=n_ens, seed=CONFIG["seed"])
+            nv = c.run_ensemble(n=n_ens, seed=CONFIG["seed"])
+            if nv == 0:
+                print(f"  Re_tau {n:>4}: EVERY member rejected under the "
+                      f"honest convergence criterion; aborting (raise "
+                      f"cfg['max_iter'] or inspect the solver)")
+                sys.exit(1)
             np.savez(path, **cfp.attach(c.to_cache(), ident))
-            c.fit_surrogates()
+            if not c.fit_surrogates():
+                sys.exit(1)
             print(f"           {c.n_valid}/{n_ens} valid")
         cals[n] = c
     return cals

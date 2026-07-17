@@ -61,8 +61,10 @@ CONFIG = {
     "seed": 0,
     "param_set": "a1_betaStar",
     # channel forward-model resolution (matches Step 1's calibration config)
+    # sized for the honest criterion with cold members (see reproduce_channel:
+    # the cold cost grows with Re, ~21600 iterations at Re_tau 5200 means)
     "channel_cfg": {"nx": 40, "ny": 56, "Lx": 18.0,
-                    "max_iter": 4000, "conv_tol": 1.0e-3, "yplus_target": 0.5},
+                    "max_iter": 45000, "conv_tol": 1.0e-3, "yplus_target": 0.5},
     "couette_cfg": dict(COUETTE_CFG),
 }
 OUT = os.path.join(_HERE, "..", "..", "results", "couette")
@@ -122,9 +124,13 @@ def stage_channel(regen):
         if not loaded:
             print(f"  channel Re_tau {n:>4}: running {CONFIG['n_ensemble']} solves ...",
                   flush=True)
-            c.run_ensemble(n=CONFIG["n_ensemble"], seed=CONFIG["seed"])
+            nv = c.run_ensemble(n=CONFIG["n_ensemble"], seed=CONFIG["seed"])
+            if nv == 0:
+                print(f"  channel Re_tau {n:>4}: EVERY member rejected; aborting")
+                sys.exit(1)
             np.savez(path, **cfp.attach(c.to_cache(), ident))
-            c.fit_surrogates()
+            if not c.fit_surrogates():
+                sys.exit(1)
             print(f"           {c.n_valid}/{CONFIG['n_ensemble']} valid")
         cals[n] = c
     return cals
@@ -187,9 +193,13 @@ def stage_couette(regen):
         if not loaded:
             print(f"  couette Re_tau {n:>4}: running {CONFIG['n_ensemble']} solves ...",
                   flush=True)
-            c.run_ensemble(n=CONFIG["n_ensemble"], seed=CONFIG["seed"])
+            nv = c.run_ensemble(n=CONFIG["n_ensemble"], seed=CONFIG["seed"])
+            if nv == 0:
+                print(f"  couette Re_tau {n:>4}: EVERY member rejected; aborting")
+                sys.exit(1)
             np.savez(path, **cfp.attach(c.to_cache(), ident))
-            c.fit_surrogates()
+            if not c.fit_surrogates():
+                sys.exit(1)
             print(f"           {c.n_valid}/{CONFIG['n_ensemble']} valid")
         cals[n] = c
     json.dump({"fingerprint": cfp.fingerprint(nu_ident),

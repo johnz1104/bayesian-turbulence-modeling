@@ -42,8 +42,14 @@ class ChannelBaselineRANS:
     # tests override it with a tiny, fast config to exercise the machinery only
     HALF_HEIGHT = 1.0
     U_BULK = 1.0
+    # max_iter sized for genuine convergence under the honest criterion at
+    # every calibration Reynolds number: the measured cold cost on this mesh
+    # at 1e-4 grows from ~25000 at Re_tau 550 to 41406/44825 at the Re_tau
+    # 2000 bracketing points and 49037 at Re_tau 5200, so the budget is about
+    # twice the worst measured cost (solves stop at convergence, so the cap
+    # only prices the failure mode, not the typical solve)
     DEFAULT_CONFIG = {"nx": 48, "ny": 64, "Lx": 20.0,
-                      "max_iter": 6000, "conv_tol": 1.0e-4, "yplus_target": 0.5}
+                      "max_iter": 100000, "conv_tol": 1.0e-4, "yplus_target": 0.5}
 
     def __init__(self, nu, u_tau, re_tau, yplus, U, k, nu_t, omega,
                  cf, status, iterations, meta):
@@ -115,7 +121,11 @@ class ChannelBaselineRANS:
         theta = list(param_set.pack(rs.SSTCoefficients()))
         result = fm.evaluate(theta)
         status = str(result.status).split(".")[-1]
-        if not fm.has_last_fields():
+        # only a GENUINELY CONVERGED solve yields a baseline profile: an
+        # unconverged field is a function of the iteration budget, and the
+        # committed pre-audit baselines silently accepted such fields (the
+        # audit's unconverged-fields-enter-inference finding, closed here)
+        if status != "Converged" or not fm.has_last_fields():
             return {"status": status, "ok": False}
 
         ff = fm.last_fields()
@@ -154,7 +164,7 @@ class ChannelBaselineRANS:
             "u_tau": u_tau,
             "re_tau": re_tau,
             "cf": cf_dev,
-            "iterations": cfg["max_iter"],
+            "iterations": int(result.simple_iters),
             # wall units
             "yplus": ysel * u_tau / nu,
             "U": U[col][keep][order] / u_tau,

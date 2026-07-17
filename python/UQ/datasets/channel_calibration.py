@@ -160,13 +160,24 @@ class ChannelCalibration:
         makes the rejection explicit rather than an accident of the sentinel
         (matching the strict compressible-calibration policy).
         """
-        fm = self._forward_model()
         np.random.seed(seed)   # latin_hypercube draws from the global RNG
         X = latin_hypercube(n, self.ndim, self.prior.lower, self.prior.upper)
         loglik = np.full(n, -np.inf)
         preds = np.full((n, self.n_qoi), np.nan)
         converged = np.zeros(n, dtype=bool)
         for i in range(n):
+            # a FRESH forward model per member: every member solves COLD, so
+            # its convergence classification is independent of evaluation
+            # order. The warm-start cache is deliberately not shared across
+            # members, because the solver normalizes residuals by the
+            # per-solve peak, so a warm-started solve is judged against its
+            # own (tiny) transient scale and the classification would depend
+            # on the initial guess (measured: a +3 percent warm perturbation
+            # never converges in 30000 iterations while the same theta
+            # converges cold; two solves reaching the same state must not
+            # classify differently). Cold members cost more iterations and
+            # buy order-independent, reproducible classifications.
+            fm = self._forward_model()
             res = fm.evaluate(X[i].tolist())
             loglik[i] = res.log_lik
             converged[i] = str(res.status).split(".")[-1] == "Converged"
@@ -187,11 +198,25 @@ class ChannelCalibration:
         return self.n_valid
 
     def fit_surrogates(self, noise_floor=1e-3):
-        """GP surrogate of the log-likelihood and a multi-output QoI surrogate."""
+        """GP surrogate of the log-likelihood and a multi-output QoI surrogate.
+
+        Returns False (classified, no exception) when there are no valid
+        members to train on: an empty design would otherwise surface as an
+        opaque BLAS shape error deep inside the GP library. Callers abort
+        with the actionable message run_ensemble already printed (every
+        member rejected means the solve budget or configuration cannot
+        satisfy the honest convergence criterion, not a data problem).
+        """
+        if self.X is None or len(self.X) == 0:
+            print("  fit_surrogates: NO valid ensemble members; surrogate "
+                  "not trained (raise the solve budget or inspect the "
+                  "rejection messages above)")
+            return False
         self.gp = GPSurrogate()
         self.gp.train(self.X, self.loglik, noise_floor=noise_floor)
         self.mo = MultiOutputSurrogate()
         self.mo.train(self.X, self.preds, noise_floor=noise_floor)
+        return True
 
     def to_cache(self):
         """Arrays sufficient to rebuild the surrogates without re-solving."""

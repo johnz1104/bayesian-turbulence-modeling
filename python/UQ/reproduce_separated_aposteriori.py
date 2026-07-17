@@ -70,8 +70,13 @@ def _member_summary(members, cf_stations=None):
         rec = {k: (float(v) if isinstance(v, (int, float, np.floating)) else v)
                for k, v in m.items() if k not in ("cf_x", "cf")}
         if cf_stations is not None:
-            rec["cf_at_stations"] = np.interp(cf_stations, m["cf_x"],
-                                              m["cf"]).tolist()
+            if len(np.atleast_1d(m["cf_x"])) > 0:
+                rec["cf_at_stations"] = np.interp(cf_stations, m["cf_x"],
+                                                  m["cf"]).tolist()
+            else:
+                # non-converged member: no fields, no wall series (the honest
+                # divergence invalidation); persisted as NaN, status says why
+                rec["cf_at_stations"] = [float("nan")] * len(cf_stations)
         out.append(rec)
     return out
 
@@ -143,16 +148,32 @@ def main():
               f"band {r.get('band')}, contains truth: "
               f"{r.get('contains_truth')}", flush=True)
 
-    print("== stage 4: eigenspace corner families ==", flush=True)
+    print("== stage 4: eigenspace families (three-corner and five-state) ==",
+          flush=True)
+    numbers["five_state"] = {}
     for delta in CONFIG["eigenspace_deltas"]:
         corners = study.run_eigenspace(delta_b=delta)
         env = BFSAPosteriori.score_envelope(corners, truth)
         env["cf"] = study.score_cf(list(corners.values()),
-                                   level=CONFIG["level"])
+                                   level=CONFIG["level"],
+                                   discrete_forecast=True)
         numbers["eigenspace"][str(delta)] = env
         print(f"  delta_B={delta}: corners {env['corners']} envelope "
               f"{env.get('envelope')} contains truth: "
               f"{env.get('contains_truth')}", flush=True)
+        # the documented 2017 five-state family (the corrected-solver probe's
+        # added reported baseline; scored exactly like the corner family, and
+        # as a deterministic bounding family its CRPS convention downstream is
+        # the exact M^2 discrete-forecast reading, never the fair estimator)
+        five = study.run_eigenspace(delta_b=delta, five_state=True)
+        env5 = BFSAPosteriori.score_envelope(five, truth)
+        env5["cf"] = study.score_cf(list(five.values()),
+                                    level=CONFIG["level"],
+                                    discrete_forecast=True)
+        numbers["five_state"][str(delta)] = env5
+        print(f"  delta_B={delta} five-state: {env5['corners']} envelope "
+              f"{env5.get('envelope')} contains truth: "
+              f"{env5.get('contains_truth')}", flush=True)
 
     path = os.path.join(OUT, "aposteriori_numbers.json")
     with open(path, "w") as fh:
