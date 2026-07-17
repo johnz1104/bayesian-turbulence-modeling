@@ -120,8 +120,20 @@ public:
     // BiCGSTAB stagnates on it. The coupled tangent keeps the full operator.
     void setFreezeTransposeStress(bool v) { freezeTransposeStress_ = v; }
 
+    // Phase C instrumentation: cumulative per-phase wall-clock of the LAST
+    // solve() call (momentum assembly+solves, pressure assembly, pressure
+    // solve, turbulence updates), printed at solve exit when verbose; the
+    // AMG setup/iterate split lives on the AMG solver instance.
+    double momSeconds() const { return momSeconds_; }
+    double pAssembleSeconds() const { return pAssembleSeconds_; }
+    double pSolveSeconds() const { return pSolveSeconds_; }
+    double turbSeconds() const { return turbSeconds_; }
+    void reportTimers() const;
+
 private:
     bool freezeTransposeStress_ = false;
+    double momSeconds_ = 0.0, pAssembleSeconds_ = 0.0,
+           pSolveSeconds_ = 0.0, turbSeconds_ = 0.0;
 
     const Mesh& mesh_;
     SSTModel sst_;

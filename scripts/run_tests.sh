@@ -89,7 +89,9 @@ FAIL=0
 
 if [ "$DO_CPP" -eq 1 ]; then
     bold "[ctest] running C++ tests (excluding pytest target)"
-    if (cd "$BUILD_DIR" && ctest -E '^pytest$' --output-on-failure); then
+    # CTEST_WORKERS > 1 runs the independent test executables concurrently
+    # (default 1 preserves the serial baseline behavior)
+    if (cd "$BUILD_DIR" && ctest -E '^pytest$' -j "${CTEST_WORKERS:-1}" --output-on-failure); then
         green "[ctest] PASSED"
     else
         red "[ctest] FAILED"
@@ -103,7 +105,16 @@ if [ "$DO_PY" -eq 1 ]; then
 
     # Same pinned interpreter as the build above, so the .so ABI tag matches.
     bold "[pytest] using interpreter: $PY_BIN"
-    if (cd "$REPO_ROOT" && "$PY_BIN" -m pytest -q tests/python); then
+    # PYTEST_WORKERS > 1 shards test FILES across xdist workers (loadfile
+    # keeps a file's tests on one worker so intra-file cache/file reuse is
+    # race-free) with BLAS pinned to one thread per worker; unset = serial,
+    # the baseline behavior. --durations surfaces the slowest tests either way.
+    PYTEST_ARGS=(-q --durations=30 tests/python)
+    if [ -n "${PYTEST_WORKERS:-}" ] && [ "${PYTEST_WORKERS:-1}" -gt 1 ]; then
+        export OMP_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1 OPENBLAS_NUM_THREADS=1
+        PYTEST_ARGS=(-q --durations=30 -n "$PYTEST_WORKERS" --dist loadfile tests/python)
+    fi
+    if (cd "$REPO_ROOT" && "$PY_BIN" -m pytest "${PYTEST_ARGS[@]}"); then
         green "[pytest] PASSED"
     else
         red "[pytest] FAILED"

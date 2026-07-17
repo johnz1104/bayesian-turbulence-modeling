@@ -170,6 +170,9 @@ class CouetteCalibration(ChannelCalibration):
 
     def __init__(self, dns, nu, param_set="a1_betaStar", n_stations=20,
                  yplus_lo=1.0, rel=0.005, cfg=None):
+        self._spawn_kwargs = dict(dns=dns, nu=nu, param_set=param_set,
+                                  n_stations=n_stations, yplus_lo=yplus_lo,
+                                  rel=rel, cfg=cfg)
         self.dns = dns
         self.param_set_name = param_set
         self.cfg = dict(COUETTE_CFG if cfg is None else cfg)

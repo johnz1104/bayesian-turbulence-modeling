@@ -677,7 +677,24 @@ double SIMPLESolver::computeResidual(const FlowFields& f, int component) {
 
 // Main SIMPLE loop     
 // SIMPLE algorithm runs until flow solution converges or diverges
+void SIMPLESolver::reportTimers() const {
+    if (!settings_.verbose) return;
+    double amgSetup = 0.0, amgIter = 0.0;
+    if (const auto* amg = dynamic_cast<const AMGSolver*>(pSolver_.get())) {
+        amgSetup = amg->setupSeconds;
+        amgIter  = amg->iterateSeconds;
+    }
+    std::cout << "  timers: momentum=" << momSeconds_
+              << "s  p_assemble=" << pAssembleSeconds_
+              << "s  p_solve=" << pSolveSeconds_ << "s";
+    if (amgSetup > 0.0 || amgIter > 0.0)
+        std::cout << " (amg setup=" << amgSetup
+                  << "s iterate=" << amgIter << "s)";
+    std::cout << "  turbulence=" << turbSeconds_ << "s\n";
+}
+
 ConvergenceHistory SIMPLESolver::solve(FlowFields& f) { // input: FlowField object / flow variables
+    momSeconds_ = pAssembleSeconds_ = pSolveSeconds_ = turbSeconds_ = 0.0;
     ConvergenceHistory hist;
     // Reynolds-stress injection: fresh blend state and diagnostics per solve;
     // the explicit source is under-relaxed inside the outer loop (see
@@ -747,6 +764,7 @@ ConvergenceHistory SIMPLESolver::solve(FlowFields& f) { // input: FlowField obje
 
         // 2. Assemble + solve momentum x, y, z 
         SolverResult resUx, resUy, resUz;
+        const auto tMom0 = std::chrono::steady_clock::now();
         {
             assembleMomentum(momSys, f, 0, aP_);
             std::vector<double> Ux(mesh_.nCells());
@@ -755,6 +773,8 @@ ConvergenceHistory SIMPLESolver::solve(FlowFields& f) { // input: FlowField obje
                                     settings_.innerTolerance);
             for (int ci = 0; ci < mesh_.nCells(); ++ci) f.U[ci].x = Ux[ci];
         }
+        momSeconds_ += std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - tMom0).count();
         // store aP from Ux for corrections (diagonal dominance is similar for all components)
         std::vector<double> aPstore = aP_;              // relaxed — for velocity correction
         std::vector<double> aPrhie = aPunrelaxed_;      // unrelaxed — for pressure Laplacian
@@ -781,12 +801,18 @@ ConvergenceHistory SIMPLESolver::solve(FlowFields& f) { // input: FlowField obje
         // Note: U_corrected = U* - U' = U* - r_AP * ∇p' (r_AP = V/a_p)
         //  - when you solve the momentum eq, you get provisional velocity U* which does not satisfy continuity
         //  - SIMPLE introduces a correction U = U* + U' where U' is velocity correction derived from pressure correction or U_corrected
+        const auto tP0 = std::chrono::steady_clock::now();
         assemblePressureCorrection(pSys, f, aPstore, pPrime);
+        pAssembleSeconds_ += std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - tP0).count();
+        const auto tPs0 = std::chrono::steady_clock::now();
         std::vector<double> ppVec(mesh_.nCells(), 0.0);
         SolverResult resP = pSolver_->solve(pSys,
                                             ppVec, 
                                             settings_.innerIterations,
                                             settings_.innerTolerance);
+        pSolveSeconds_ += std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - tPs0).count();
         for (int ci = 0; ci < mesh_.nCells(); ++ci) pPrime[ci] = ppVec[ci];
         
         // Gradient of pressure correction p' was being computed using incorrect boundary face values
@@ -821,6 +847,7 @@ ConvergenceHistory SIMPLESolver::solve(FlowFields& f) { // input: FlowField obje
             std::vector<double> omOld = f.omega.data();
 
             // k equation
+            const auto tT0 = std::chrono::steady_clock::now();
             assembleKEquation(kSys, f);
             std::vector<double> kVec = f.k.data();
             resK = tSolver_->solve(kSys, kVec, settings_.innerIterations,
@@ -834,6 +861,8 @@ ConvergenceHistory SIMPLESolver::solve(FlowFields& f) { // input: FlowField obje
             std::vector<double> omVec = f.omega.data();
             resOm = tSolver_->solve(omSys, omVec, settings_.innerIterations,
                                     settings_.innerTolerance);
+            turbSeconds_ += std::chrono::duration<double>(
+                std::chrono::steady_clock::now() - tT0).count();
             for (int ci = 0; ci < mesh_.nCells(); ++ci) f.omega[ci] = omVec[ci];
             f.omega.clamp(settings_.omegaMin, 1e15);
             applyOmegaBC(f.omega, mesh_, bcs_, nu_, sst_.coeffs.beta1);
@@ -983,6 +1012,7 @@ ConvergenceHistory SIMPLESolver::solve(FlowFields& f) { // input: FlowField obje
             hist.finalIter = iter;
             if (settings_.verbose)
                 std::cout << "  SIMPLE converged at iteration " << iter << "\n";
+            reportTimers();
             return hist;
         }
 
@@ -992,6 +1022,7 @@ ConvergenceHistory SIMPLESolver::solve(FlowFields& f) { // input: FlowField obje
             hist.finalIter = iter;
             if (settings_.verbose)
                 std::cout << "  SIMPLE diverged at iteration " << iter << "\n";
+            reportTimers();
             return hist;
         }
     }
@@ -999,6 +1030,7 @@ ConvergenceHistory SIMPLESolver::solve(FlowFields& f) { // input: FlowField obje
     hist.finalIter = settings_.maxIterations;
     if (settings_.verbose)
         std::cout << "  SIMPLE reached maxIter (" << settings_.maxIterations << ")\n";
+    reportTimers();
     return hist;
 }
 

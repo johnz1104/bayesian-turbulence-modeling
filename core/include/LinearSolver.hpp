@@ -2,6 +2,7 @@
 
 #include "Mesh.hpp"
 #include <vector>
+#include <chrono>
 #include <cmath>
 #include <algorithm>
 #include <memory>
@@ -494,6 +495,16 @@ struct AMGLevel {
 
 // AMG-preconditioned PCG solver
 class AMGSolver : public ILinearSolver {
+public:
+    // cumulative wall-clock split between hierarchy construction and the
+    // preconditioned iteration, across every solve this instance performed;
+    // the Phase C instrumentation behind the planned setup/solve separation
+    // (the hierarchy is rebuilt every solve today although the sparsity
+    // pattern never changes; these timers price exactly that)
+    double setupSeconds = 0.0;
+    double iterateSeconds = 0.0;
+
+private:
     static constexpr int maxLevels_ = 20;
     static constexpr int minCoarseSize_ = 50;
     static constexpr int nPreSmooth_ = 2;
@@ -590,11 +601,26 @@ class AMGSolver : public ILinearSolver {
 public:
     SolverResult solve(const LinearSystem& A, std::vector<double>& x, int maxIter = 500, double tol = 1e-6) override {
         // rebuild hierarchy (pressure matrix changes each SIMPLE iteration)
+        const auto tSetup0 = std::chrono::steady_clock::now();
         setup(A);
+        const auto tSetup1 = std::chrono::steady_clock::now();
+        setupSeconds += std::chrono::duration<double>(tSetup1 - tSetup0).count();
 
         int n = A.nCells;
         std::vector<double> r(n), z(n), p(n), Ap(n);
         SolverResult res;
+
+        // everything after setup is the iteration phase; the destructor
+        // closes the account on every return path
+        struct IterTimer {
+            AMGSolver* s; std::chrono::steady_clock::time_point t0;
+            explicit IterTimer(AMGSolver* self)
+                : s(self), t0(std::chrono::steady_clock::now()) {}
+            ~IterTimer() {
+                s->iterateSeconds += std::chrono::duration<double>(
+                    std::chrono::steady_clock::now() - t0).count();
+            }
+        } iterTimer(this);
 
         A.residual(x, r);
         double r0 = linalg::norm(r);

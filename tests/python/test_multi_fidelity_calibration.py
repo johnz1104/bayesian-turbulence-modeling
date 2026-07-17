@@ -108,8 +108,11 @@ class TestMultiFidelityStudyConstruction:
 # ---------------------------------------------------------------------------
 
 class TestMultiFidelityStudyRunAll:
-    @pytest.fixture
-    def two_level_study(self):
+    @pytest.fixture(scope="class")
+    def ran_two_level(self):
+        """The two-level study RUN ONCE; every test inspects this one result
+        (the four assertions are properties of a single completed run, not of
+        four identical reruns)."""
         prior = _make_simple_prior()
         study = MultiFidelityStudy(prior, ["a1", "betaStar"])
 
@@ -118,32 +121,30 @@ class TestMultiFidelityStudyRunAll:
                                                   ObservableType.SKIN_FRICTION_CF})
         study.add_level("lo", obs_lo, fm_lo)
         study.add_level("hi", obs_hi, fm_hi)
-        return study
+        result = study.run_all(n_ensemble=20, n_steps=100, rng_seed=0,
+                               verbose=False)
+        return study, result
 
-    def test_run_all_sets_samples(self, two_level_study):
-        two_level_study.run_all(n_ensemble=20, n_steps=100, rng_seed=0,
-                                verbose=False)
-        for lvl in two_level_study.levels:
+    def test_run_all_sets_samples(self, ran_two_level):
+        study, _ = ran_two_level
+        for lvl in study.levels:
             assert lvl.ran
             assert lvl.samples is not None
 
-    def test_run_all_samples_shape(self, two_level_study):
-        two_level_study.run_all(n_ensemble=20, n_steps=100, rng_seed=0,
-                                verbose=False)
-        for lvl in two_level_study.levels:
+    def test_run_all_samples_shape(self, ran_two_level):
+        study, _ = ran_two_level
+        for lvl in study.levels:
             # samples shape: (n_mcmc, n_theta + n_extra)
             assert lvl.samples.ndim == 2
             assert lvl.samples.shape[1] == 3  # a1, betaStar, log_sigma_delta
 
-    def test_run_all_returns_self(self, two_level_study):
-        result = two_level_study.run_all(n_ensemble=20, n_steps=80,
-                                         rng_seed=0, verbose=False)
-        assert result is two_level_study
+    def test_run_all_returns_self(self, ran_two_level):
+        study, result = ran_two_level
+        assert result is study
 
-    def test_elapsed_recorded(self, two_level_study):
-        two_level_study.run_all(n_ensemble=20, n_steps=80, rng_seed=0,
-                                verbose=False)
-        for lvl in two_level_study.levels:
+    def test_elapsed_recorded(self, ran_two_level):
+        study, _ = ran_two_level
+        for lvl in study.levels:
             assert lvl.elapsed_s > 0.0
 
 
@@ -152,7 +153,7 @@ class TestMultiFidelityStudyRunAll:
 # ---------------------------------------------------------------------------
 
 class TestComparisonTable:
-    @pytest.fixture
+    @pytest.fixture(scope="class")
     def ran_study(self):
         prior = _make_simple_prior()
         study = MultiFidelityStudy(prior, ["a1", "betaStar"])
