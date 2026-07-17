@@ -163,7 +163,9 @@ def main():
               f"{r.get('mean', float('nan')):.3f} band {r.get('band')}, "
               f"contains truth: {r.get('contains_truth')}", flush=True)
 
-    print("== stage 3: eigenspace corner families ==", flush=True)
+    print("== stage 3: eigenspace families (three-corner and five-state) ==",
+          flush=True)
+    numbers["five_state"] = {}
     for delta in CONFIG["eigenspace_deltas"]:
         corners = hills.run_eigenspace(delta_b=delta)
         env = {key: HillsAPosteriori.score_envelope(corners, key, truths[key])
@@ -175,6 +177,19 @@ def main():
         print(f"  delta_B={delta}: corners {er['corners']} envelope "
               f"{er.get('envelope')} contains truth: "
               f"{er.get('contains_truth')}", flush=True)
+        # the documented five-state family (the corrected-solver probe's added
+        # reported baseline; deterministic bounding family, so any CRPS read
+        # downstream uses the exact discrete-forecast convention)
+        five = hills.run_eigenspace(delta_b=delta, five_state=True)
+        env5 = {key: HillsAPosteriori.score_envelope(five, key, truths[key])
+                for key in HillsAPosteriori.SCALAR_KEYS}
+        env5["probes"] = hills.score_probes(list(five.values()),
+                                            level=CONFIG["level"])
+        numbers["five_state"][str(delta)] = env5
+        er5 = env5["reattachment"]
+        print(f"  delta_B={delta} five-state: {er5['corners']} envelope "
+              f"{er5.get('envelope')} contains truth: "
+              f"{er5.get('contains_truth')}", flush=True)
 
     if not args.skip_cross:
         print("== stage 4: cross-geometry propagation (both directions) ==",
