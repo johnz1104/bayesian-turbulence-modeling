@@ -143,7 +143,9 @@ def main():
               f"band {r.get('band')}, contains truth: "
               f"{r.get('contains_truth')}", flush=True)
 
-    print("== stage 4: eigenspace corner families ==", flush=True)
+    print("== stage 4: eigenspace families (three-corner and five-state) ==",
+          flush=True)
+    numbers["five_state"] = {}
     for delta in CONFIG["eigenspace_deltas"]:
         corners = study.run_eigenspace(delta_b=delta)
         env = BFSAPosteriori.score_envelope(corners, truth)
@@ -153,6 +155,18 @@ def main():
         print(f"  delta_B={delta}: corners {env['corners']} envelope "
               f"{env.get('envelope')} contains truth: "
               f"{env.get('contains_truth')}", flush=True)
+        # the documented 2017 five-state family (the corrected-solver probe's
+        # added reported baseline; scored exactly like the corner family, and
+        # as a deterministic bounding family its CRPS convention downstream is
+        # the exact M^2 discrete-forecast reading, never the fair estimator)
+        five = study.run_eigenspace(delta_b=delta, five_state=True)
+        env5 = BFSAPosteriori.score_envelope(five, truth)
+        env5["cf"] = study.score_cf(list(five.values()),
+                                    level=CONFIG["level"])
+        numbers["five_state"][str(delta)] = env5
+        print(f"  delta_B={delta} five-state: {env5['corners']} envelope "
+              f"{env5.get('envelope')} contains truth: "
+              f"{env5.get('contains_truth')}", flush=True)
 
     path = os.path.join(OUT, "aposteriori_numbers.json")
     with open(path, "w") as fh:
