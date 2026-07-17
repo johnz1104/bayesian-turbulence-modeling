@@ -1,0 +1,863 @@
+{
+ "config": {
+  "bfs_cfg": null,
+  "kinds": [
+   "flow",
+   "gauss"
+  ],
+  "epochs": 400,
+  "n_members": 24,
+  "level": 0.9,
+  "seed": 0,
+  "eigenspace_deltas": [
+   1.0,
+   0.5
+  ]
+ },
+ "baseline": {
+  "status": "Converged",
+  "reattachment": 6.556018402913404,
+  "reattachment_dns": 6.28,
+  "abs_error": 0.2760184029134036
+ },
+ "ensembles": {
+  "flow": {
+   "reattachment": {
+    "n_members": 24,
+    "n_nonconverged": 6,
+    "all_realizable": true,
+    "mean": 6.549218694170412,
+    "std": 1.1063230978932357,
+    "band": [
+     5.348158446992703,
+     7.42435280934158
+    ],
+    "contains_truth": true,
+    "sharpness": 2.076194362348877,
+    "crps": 0.2449282741610369,
+    "abs_error_of_mean": 0.26921869417041133
+   },
+   "cf": {
+    "n_used": 18,
+    "stations_xh": [
+     4.0,
+     6.0,
+     10.0,
+     15.0,
+     19.0
+    ],
+    "coverage": 0.4,
+    "sharpness": 0.0013996887514128105,
+    "crps": 0.00048465244868244295,
+    "energy_score": 0.0010300157760066376,
+    "score_convention": "fair-sampled-predictive"
+   },
+   "members": [
+    {
+     "reattachment": 6.9186616861542,
+     "status": "Converged",
+     "iterations": 2919.0,
+     "all_realizable": 1.0,
+     "cf_at_stations": [
+      -0.003493727796618208,
+      -0.0012668982692559379,
+      0.001634695609503125,
+      0.002154874110882781,
+      0.0022961798067206458
+     ]
+    },
+    {
+     "reattachment": NaN,
+     "status": "DivergenceDetected",
+     "iterations": 1411.0,
+     "all_realizable": 1.0,
+     "cf_at_stations": [
+      NaN,
+      NaN,
+      NaN,
+      NaN,
+      NaN
+     ]
+    },
+    {
+     "reattachment": 6.19025313692292,
+     "status": "Converged",
+     "iterations": 2875.0,
+     "all_realizable": 1.0,
+     "cf_at_stations": [
+      -0.0026408831059348318,
+      -0.00031013072737878366,
+      0.0021801223831346144,
+      0.002338531059028506,
+      0.002366248914155956
+     ]
+    },
+    {
+     "reattachment": 6.7149814017295615,
+     "status": "Converged",
+     "iterations": 2637.0,
+     "all_realizable": 1.0,
+     "cf_at_stations": [
+      -0.0037764310158403254,
+      -0.0011615615865490558,
+      0.001888167161931241,
+      0.0022259580108816546,
+      0.0023061131204329234
+     ]
+    },
+    {
+     "reattachment": 6.287765482181292,
+     "status": "Converged",
+     "iterations": 2221.0,
+     "all_realizable": 1.0,
+     "cf_at_stations": [
+      -0.003389360584351751,
+      -0.00044972795122931957,
+      0.002401546384174947,
+      0.0024986099635544096,
+      0.0024676596246097286
+     ]
+    },
+    {
+     "reattachment": 7.025791186391437,
+     "status": "Converged",
+     "iterations": 2921.0,
+     "all_realizable": 1.0,
+     "cf_at_stations": [
+      -0.0035632711355036446,
+      -0.0014063034309175762,
+      0.0015643522059696794,
+      0.002139877238694411,
+      0.0022871453807375075
+     ]
+    },
+    {
+     "reattachment": 6.357853468377286,
+     "status": "Converged",
+     "iterations": 3731.0,
+     "all_realizable": 1.0,
+     "cf_at_stations": [
+      -0.002469131506450452,
+      -0.0004728762494755131,
+      0.0019115746385908843,
+      0.002208961618324438,
+      0.002298832050139627
+     ]
+    },
+    {
+     "reattachment": 6.712518890071622,
+     "status": "Converged",
+     "iterations": 3087.0,
+     "all_realizable": 1.0,
+     "cf_at_stations": [
+      -0.003068181410916956,
+      -0.0009863262138077918,
+      0.001784191741139934,
+      0.002207398406658348,
+      0.00230746884562368
+     ]
+    },
+    {
+     "reattachment": 6.726987302531787,
+     "status": "Converged",
+     "iterations": 2477.0,
+     "all_realizable": 1.0,
+     "cf_at_stations": [
+      -0.0039102001879960675,
+      -0.0011700049538076523,
+      0.001918470063681778,
+      0.0022456892527499043,
+      0.0023216886899697113
+     ]
+    },
+    {
+     "reattachment": 6.731202134772688,
+     "status": "Converged",
+     "iterations": 2111.0,
+     "all_realizable": 1.0,
+     "cf_at_stations": [
+      -0.00442781561611419,
+      -0.00142619346859143,
+      0.0021613696864573816,
+      0.0024397246305976556,
+      0.002452298998523654
+     ]
+    },
+    {
+     "reattachment": NaN,
+     "status": "DivergenceDetected",
+     "iterations": 2869.0,
+     "all_realizable": 1.0,
+     "cf_at_stations": [
+      NaN,
+      NaN,
+      NaN,
+      NaN,
+      NaN
+     ]
+    },
+    {
+     "reattachment": 7.188295998067488,
+     "status": "Converged",
+     "iterations": 2499.0,
+     "all_realizable": 1.0,
+     "cf_at_stations": [
+      -0.0035847611460431885,
+      -0.001818652227643792,
+      0.0017837664880999088,
+      0.002324128777851697,
+      0.0023783522635097932
+     ]
+    },
+    {
+     "reattachment": NaN,
+     "status": "DivergenceDetected",
+     "iterations": 897.0,
+     "all_realizable": 1.0,
+     "cf_at_stations": [
+      NaN,
+      NaN,
+      NaN,
+      NaN,
+      NaN
+     ]
+    },
+    {
+     "reattachment": 6.7235877553266175,
+     "status": "Converged",
+     "iterations": 2925.0,
+     "all_realizable": 1.0,
+     "cf_at_stations": [
+      -0.004619271433210448,
+      -0.0012825967771327815,
+      0.0018220865202437388,
+      0.002233009142196871,
+      0.0023216653085560363
+     ]
+    },
+    {
+     "reattachment": 8.36448450983726,
+     "status": "Converged",
+     "iterations": 4678.0,
+     "all_realizable": 1.0,
+     "cf_at_stations": [
+      -0.003218678536537051,
+      -0.002814692866981737,
+      0.000966794964242002,
+      0.001935391808388424,
+      0.002172240324509014
+     ]
+    },
+    {
+     "reattachment": 2.529220121323788,
+     "status": "Converged",
+     "iterations": 5430.0,
+     "all_realizable": 1.0,
+     "cf_at_stations": [
+      0.0021350310714848453,
+      0.0028149666769476766,
+      0.0026150641656595463,
+      0.00239881839556904,
+      0.002398478135497356
+     ]
+    },
+    {
+     "reattachment": 5.845618151522512,
+     "status": "Converged",
+     "iterations": 2749.0,
+     "all_realizable": 1.0,
+     "cf_at_stations": [
+      -0.0021678759499683194,
+      0.0001970653838009183,
+      0.0021089454705240235,
+      0.0023215445053866505,
+      0.0023703712687299797
+     ]
+    },
+    {
+     "reattachment": 7.010589436891176,
+     "status": "Converged",
+     "iterations": 3073.0,
+     "all_realizable": 1.0,
+     "cf_at_stations": [
+      -0.0034718941087817667,
+      -0.0013591943952622383,
+      0.0015670342255217195,
+      0.002132097603789573,
+      0.0022781740397698155
+     ]
+    },
+    {
+     "reattachment": NaN,
+     "status": "DivergenceDetected",
+     "iterations": 1431.0,
+     "all_realizable": 1.0,
+     "cf_at_stations": [
+      NaN,
+      NaN,
+      NaN,
+      NaN,
+      NaN
+     ]
+    },
+    {
+     "reattachment": NaN,
+     "status": "DivergenceDetected",
+     "iterations": 2015.0,
+     "all_realizable": 1.0,
+     "cf_at_stations": [
+      NaN,
+      NaN,
+      NaN,
+      NaN,
+      NaN
+     ]
+    },
+    {
+     "reattachment": NaN,
+     "status": "DivergenceDetected",
+     "iterations": 2307.0,
+     "all_realizable": 1.0,
+     "cf_at_stations": [
+      NaN,
+      NaN,
+      NaN,
+      NaN,
+      NaN
+     ]
+    },
+    {
+     "reattachment": 7.258447215136463,
+     "status": "Converged",
+     "iterations": 3013.0,
+     "all_realizable": 1.0,
+     "cf_at_stations": [
+      -0.0035050013095917613,
+      -0.001823598432775231,
+      0.0015648589507669013,
+      0.002134690887183205,
+      0.002272060802414649
+     ]
+    },
+    {
+     "reattachment": 6.957436954432673,
+     "status": "Converged",
+     "iterations": 3103.0,
+     "all_realizable": 1.0,
+     "cf_at_stations": [
+      -0.003214406095690886,
+      -0.0013114485787444556,
+      0.0016937014995391632,
+      0.002183649796619119,
+      0.002292322514733472
+     ]
+    },
+    {
+     "reattachment": 6.342241663396644,
+     "status": "Converged",
+     "iterations": 3129.0,
+     "all_realizable": 1.0,
+     "cf_at_stations": [
+      -0.0026636330554350306,
+      -0.00046396656894047775,
+      0.001940144235627407,
+      0.002224564739301595,
+      0.002302888945672617
+     ]
+    }
+   ],
+   "cf_stations_xh": [
+    4.0,
+    6.0,
+    10.0,
+    15.0,
+    19.0
+   ],
+   "cf_measured": [
+    -0.0027624,
+    -0.00031328,
+    0.0024492,
+    0.0029231,
+    0.0030061
+   ]
+  },
+  "gauss": {
+   "reattachment": {
+    "n_members": 24,
+    "n_nonconverged": 0,
+    "all_realizable": true,
+    "mean": 6.767726781959762,
+    "std": 0.5426724580266633,
+    "band": [
+     6.007482424946344,
+     7.6824954424487375
+    ],
+    "contains_truth": true,
+    "sharpness": 1.6750130175023932,
+    "crps": 0.26797220673610717,
+    "abs_error_of_mean": 0.48772678195976216
+   },
+   "cf": {
+    "n_used": 24,
+    "stations_xh": [
+     4.0,
+     6.0,
+     10.0,
+     15.0,
+     19.0
+    ],
+    "coverage": 0.4,
+    "sharpness": 0.0012893685594899105,
+    "crps": 0.0004127051244739514,
+    "energy_score": 0.0009115844148027067,
+    "score_convention": "fair-sampled-predictive"
+   },
+   "members": [
+    {
+     "reattachment": 6.681047023719831,
+     "status": "Converged",
+     "iterations": 2509.0,
+     "all_realizable": 1.0,
+     "cf_at_stations": [
+      -0.0031556779913803476,
+      -0.0010395094460530772,
+      0.0019889802505726447,
+      0.0023453306733711332,
+      0.0023846634181584514
+     ]
+    },
+    {
+     "reattachment": 5.814794366511653,
+     "status": "Converged",
+     "iterations": 2481.0,
+     "all_realizable": 1.0,
+     "cf_at_stations": [
+      -0.002144330537946479,
+      0.00024942208361762184,
+      0.0025017806371939806,
+      0.002644647940856481,
+      0.002606781131260331
+     ]
+    },
+    {
+     "reattachment": 6.940913874290945,
+     "status": "Converged",
+     "iterations": 2569.0,
+     "all_realizable": 1.0,
+     "cf_at_stations": [
+      -0.0033447344105521875,
+      -0.0014247017797617285,
+      0.0018527308893006595,
+      0.0022776186260769493,
+      0.00233742234943833
+     ]
+    },
+    {
+     "reattachment": 6.075997864083169,
+     "status": "Converged",
+     "iterations": 2471.0,
+     "all_realizable": 1.0,
+     "cf_at_stations": [
+      -0.0024431846343262896,
+      -0.00011122185136291192,
+      0.0023663029123551626,
+      0.002559070417031561,
+      0.0025470217134213554
+     ]
+    },
+    {
+     "reattachment": 6.76796197735535,
+     "status": "Converged",
+     "iterations": 2597.0,
+     "all_realizable": 1.0,
+     "cf_at_stations": [
+      -0.003021245311222311,
+      -0.001168021284446072,
+      0.0019889104198684902,
+      0.0023716357062024285,
+      0.002415124381326906
+     ]
+    },
+    {
+     "reattachment": 6.940394813631698,
+     "status": "Converged",
+     "iterations": 2543.0,
+     "all_realizable": 1.0,
+     "cf_at_stations": [
+      -0.003417334050369186,
+      -0.001423360397081859,
+      0.0018398182683181685,
+      0.002262352748271129,
+      0.002323770950641324
+     ]
+    },
+    {
+     "reattachment": 6.586266773616434,
+     "status": "Converged",
+     "iterations": 2567.0,
+     "all_realizable": 1.0,
+     "cf_at_stations": [
+      -0.0028851016213819274,
+      -0.0008833142223959335,
+      0.002083234768144021,
+      0.002419173815935164,
+      0.0024472529975072188
+     ]
+    },
+    {
+     "reattachment": 6.924019235521249,
+     "status": "Converged",
+     "iterations": 2559.0,
+     "all_realizable": 1.0,
+     "cf_at_stations": [
+      -0.0033487106244321847,
+      -0.0013976359960250482,
+      0.0018586996587102562,
+      0.002278159633306913,
+      0.002336409987354157
+     ]
+    },
+    {
+     "reattachment": 6.636785247053801,
+     "status": "Converged",
+     "iterations": 2499.0,
+     "all_realizable": 1.0,
+     "cf_at_stations": [
+      -0.0031287631710317397,
+      -0.0009758433774064656,
+      0.0020052379922938578,
+      0.002350329435421793,
+      0.0023838356917777583
+     ]
+    },
+    {
+     "reattachment": 6.175042353647298,
+     "status": "Converged",
+     "iterations": 2573.0,
+     "all_realizable": 1.0,
+     "cf_at_stations": [
+      -0.0024062559689322143,
+      -0.00026479242417962363,
+      0.00235677277949465,
+      0.0025859192664193374,
+      0.0025768203843862534
+     ]
+    },
+    {
+     "reattachment": 6.781465060626559,
+     "status": "Converged",
+     "iterations": 2575.0,
+     "all_realizable": 1.0,
+     "cf_at_stations": [
+      -0.0030990190457390954,
+      -0.001197723574910055,
+      0.0019628268120620994,
+      0.002347630414661398,
+      0.0023915288207536317
+     ]
+    },
+    {
+     "reattachment": 7.334071932387932,
+     "status": "Converged",
+     "iterations": 2621.0,
+     "all_realizable": 1.0,
+     "cf_at_stations": [
+      -0.003786467831038901,
+      -0.002009132361286021,
+      0.0016108955023974142,
+      0.002141810207494289,
+      0.0022442346544784943
+     ]
+    },
+    {
+     "reattachment": 7.690800711218042,
+     "status": "Converged",
+     "iterations": 2617.0,
+     "all_realizable": 1.0,
+     "cf_at_stations": [
+      -0.005044857154361816,
+      -0.002387038209884825,
+      0.0012123039375970463,
+      0.0018178576955685448,
+      0.0020231977584887983
+     ]
+    },
+    {
+     "reattachment": 7.861948870283898,
+     "status": "Converged",
+     "iterations": 2805.0,
+     "all_realizable": 1.0,
+     "cf_at_stations": [
+      -0.003614889772609451,
+      -0.0023960087073165203,
+      0.001275919330697913,
+      0.0019978705845129134,
+      0.002149971626513539
+     ]
+    },
+    {
+     "reattachment": 5.9953914650986695,
+     "status": "Converged",
+     "iterations": 2435.0,
+     "all_realizable": 1.0,
+     "cf_at_stations": [
+      -0.0024105992531670136,
+      6.534472140716215e-06,
+      0.00237957943684107,
+      0.0025607162127134707,
+      0.002539938079011744
+     ]
+    },
+    {
+     "reattachment": 7.555569953290444,
+     "status": "Converged",
+     "iterations": 2693.0,
+     "all_realizable": 1.0,
+     "cf_at_stations": [
+      -0.004096323992175596,
+      -0.0023858349018008964,
+      0.0014498774219492737,
+      0.0020497857411908966,
+      0.0021868955653114234
+     ]
+    },
+    {
+     "reattachment": 6.367188859877781,
+     "status": "Converged",
+     "iterations": 2469.0,
+     "all_realizable": 1.0,
+     "cf_at_stations": [
+      -0.0028194892795909607,
+      -0.0005445220184927079,
+      0.0021698301275400915,
+      0.002442639221539882,
+      0.0024520275942839635
+     ]
+    },
+    {
+     "reattachment": 6.998649151075861,
+     "status": "Converged",
+     "iterations": 2525.0,
+     "all_realizable": 1.0,
+     "cf_at_stations": [
+      -0.003555654249089144,
+      -0.0015178543351184305,
+      0.0017856433534017648,
+      0.002223391836779105,
+      0.0022908021182067076
+     ]
+    },
+    {
+     "reattachment": 6.207868926043751,
+     "status": "Converged",
+     "iterations": 2407.0,
+     "all_realizable": 1.0,
+     "cf_at_stations": [
+      -0.0027347644975193558,
+      -0.0003181537213855694,
+      0.0022313185110350332,
+      0.00246632642356137,
+      0.0024654679124499882
+     ]
+    },
+    {
+     "reattachment": 6.618306512463875,
+     "status": "Converged",
+     "iterations": 2383.0,
+     "all_realizable": 1.0,
+     "cf_at_stations": [
+      -0.003306419411759802,
+      -0.0009917121880838702,
+      0.002123470749428119,
+      0.0024760068392742462,
+      0.002492182766139831
+     ]
+    },
+    {
+     "reattachment": 6.757003157525184,
+     "status": "Converged",
+     "iterations": 2461.0,
+     "all_realizable": 1.0,
+     "cf_at_stations": [
+      -0.00329663123201075,
+      -0.0011287272895745795,
+      0.001881005811305094,
+      0.0022529067643370336,
+      0.002327450093913192
+     ]
+    },
+    {
+     "reattachment": 6.22804596651766,
+     "status": "Converged",
+     "iterations": 2523.0,
+     "all_realizable": 1.0,
+     "cf_at_stations": [
+      -0.002556052548225949,
+      -0.0003412267291561819,
+      0.002282266506514318,
+      0.002525484002724357,
+      0.0025238916664551128
+     ]
+    },
+    {
+     "reattachment": 7.635432252756015,
+     "status": "Converged",
+     "iterations": 2723.0,
+     "all_realizable": 1.0,
+     "cf_at_stations": [
+      -0.004408956758478201,
+      -0.002494344829255087,
+      0.001361360008881077,
+      0.001982957003286934,
+      0.0021501182378212986
+     ]
+    },
+    {
+     "reattachment": 6.850476418437197,
+     "status": "Converged",
+     "iterations": 2503.0,
+     "all_realizable": 1.0,
+     "cf_at_stations": [
+      -0.003394650737821663,
+      -0.0012812103082862666,
+      0.0018774304879679996,
+      0.002274144900745273,
+      0.0023275688573516523
+     ]
+    }
+   ],
+   "cf_stations_xh": [
+    4.0,
+    6.0,
+    10.0,
+    15.0,
+    19.0
+   ],
+   "cf_measured": [
+    -0.0027624,
+    -0.00031328,
+    0.0024492,
+    0.0029231,
+    0.0030061
+   ]
+  }
+ },
+ "eigenspace": {
+  "1.0": {
+   "corners": {
+    "1C": 4.799763791944204,
+    "2C": 5.477214424144699
+   },
+   "n_nonconverged": 1,
+   "envelope": [
+    4.799763791944204,
+    5.477214424144699
+   ],
+   "contains_truth": false,
+   "crps_uniform_reading": 0.8027855758553013,
+   "cf": {
+    "n_used": 2,
+    "stations_xh": [
+     4.0,
+     6.0,
+     10.0,
+     15.0,
+     19.0
+    ],
+    "coverage": 0.2,
+    "sharpness": 0.00043060125844560104,
+    "crps": 0.00038146814321440945,
+    "energy_score": 0.0013844717462991828,
+    "score_convention": "exact-discrete-forecast"
+   }
+  },
+  "0.5": {
+   "corners": {
+    "1C": 5.310225327962906,
+    "2C": 5.893233166718016,
+    "3C": 7.995358007026792
+   },
+   "n_nonconverged": 0,
+   "envelope": [
+    5.310225327962906,
+    7.995358007026792
+   ],
+   "contains_truth": true,
+   "crps_uniform_reading": 0.12892227776066156,
+   "cf": {
+    "n_used": 3,
+    "stations_xh": [
+     4.0,
+     6.0,
+     10.0,
+     15.0,
+     19.0
+    ],
+    "coverage": 0.6,
+    "sharpness": 0.0012994227918198462,
+    "crps": 0.0003724380696368694,
+    "energy_score": 0.0009080869142578498,
+    "score_convention": "exact-discrete-forecast"
+   }
+  }
+ },
+ "five_state": {
+  "1.0": {
+   "corners": {
+    "1C_vmax": 4.799763791944206,
+    "2C_vmax": 5.477214424144694
+   },
+   "n_nonconverged": 3,
+   "envelope": [
+    4.799763791944206,
+    5.477214424144694
+   ],
+   "contains_truth": false,
+   "crps_uniform_reading": 0.8027855758553066,
+   "cf": {
+    "n_used": 2,
+    "stations_xh": [
+     4.0,
+     6.0,
+     10.0,
+     15.0,
+     19.0
+    ],
+    "coverage": 0.2,
+    "sharpness": 0.0004306012584455992,
+    "crps": 0.00038146814321441037,
+    "energy_score": 0.0013844717462991858,
+    "score_convention": "exact-discrete-forecast"
+   }
+  },
+  "0.5": {
+   "corners": {
+    "1C_vmax": 5.310225327962904,
+    "2C_vmax": 5.893233166718017,
+    "3C": 7.995358007026792
+   },
+   "n_nonconverged": 2,
+   "envelope": [
+    5.310225327962904,
+    7.995358007026792
+   ],
+   "contains_truth": true,
+   "crps_uniform_reading": 0.12892227776066123,
+   "cf": {
+    "n_used": 3,
+    "stations_xh": [
+     4.0,
+     6.0,
+     10.0,
+     15.0,
+     19.0
+    ],
+    "coverage": 0.6,
+    "sharpness": 0.0012994227918198473,
+    "crps": 0.00037243806963686973,
+    "energy_score": 0.0009080869142578503,
+    "score_convention": "exact-discrete-forecast"
+   }
+  }
+ }
+}
