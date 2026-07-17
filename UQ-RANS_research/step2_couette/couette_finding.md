@@ -213,3 +213,38 @@ the Couette friction by about 17 percent, which is the model-form error the UQ c
 seed 0; the matched viscosities and the ensembles are cached under the gitignored
 `results/couette/`. The numbers above are in `finding_numbers.json`; the figures are
 `figures/crossflow_coverage.png` and `figures/rotating_diffuse_inflation.png`.
+
+
+## Post-audit revision (2026-07-17): corrected solver, converged members, disjoint conformal roles
+
+The same audit remediation and regeneration as the channel package (see
+step1_plane_channel/channel_finding.md for the full list: corrected solver physics,
+genuinely converged cold members with budgets sized to the measured Reynolds-dependent
+cost, and the disclosure that the committed ensembles were built almost entirely from
+unconverged solves). Numbers from `finding_numbers_corrected.json`, same reproduce
+script, fixed seeds, corrected trunk. The cross-flow conformal leg now uses
+three-way-disjoint case roles: its posterior refits on the channel cases minus a
+reserved calibration case (Re_tau 550 here), which supplies only the residuals, with
+the Couette test flow untouched.
+
+Revised headline numbers at nominal 0.90 (0.5 percent band, with the 1 percent band
+in the JSON):
+
+- Cross-flow transfer (channel-calibrated, held-out Couette flow type): standard
+  Bayes overconfident at 0.053 to 0.211 coverage, the same band as committed;
+  generalized Bayes partial restoration 0.421 to 0.526 (0.526 to 0.684 at the
+  1 percent band); conformal with disjoint roles restores fully, 0.895 to 1.000
+  with gaps -0.100 to +0.005, where the committed design's worst gap was +0.22.
+- Within-Couette cross-Re: standard 0.632 to 0.947, generalized Bayes 1.000,
+  conformal 0.947 to 1.000 per case with pooled held-out-station coverage 1.000
+  (conservative at these calibration-set sizes).
+- The cross-flow learning rate is eta = 0.0092, an order below the channel's
+  in-distribution values, consistent with the committed reading that the channel
+  posterior transfers its location but not its width.
+
+The finding's shape is unchanged: the cross-flow overconfidence of standard Bayes is
+confirmed on genuinely converged solves at the committed severity, and the corrected
+UQ restores coverage at the held-out flow type, now with the conformal leg's validity
+conditions actually satisfied by construction. The moving-wall solver results and the
+rotating-channel diffuse-inflation diagnostic carry over unchanged in kind; the
+companion diagnostics regenerate in the JSON.

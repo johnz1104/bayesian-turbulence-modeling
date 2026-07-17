@@ -98,7 +98,12 @@ and under-cover at high ones, so the distribution-free interval is no free fix f
 the across-level shape here. The Gaussian generalized-Bayes curve is in fact the
 best-calibrated of the channel options across levels, and it is exactly on target at
 the primary 0.9 (0.905). Conformal remains valuable at the single primary level
-(0.91 in the main finding) where it is a coverage guarantee, not a curve fit.
+(0.91 in the main finding; see the post-audit revision in channel_finding.md,
+where the redesigned genuinely-held-out split measures 0.800 pooled). The
+split-conformal coverage statement holds under exchangeability of calibration
+and test units on an untouched calibration set; the original 0.91 was computed
+on a relabeling of stations already used in the fits, so it carried no such
+property, and the phrase "a coverage guarantee, not a curve fit" is withdrawn.
 
 So within the channel calibration there is no clean fix, and that is the point. The principled fix
 is a predictive that matches the discrepancy shape rather than its variance: the
