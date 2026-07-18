@@ -135,12 +135,14 @@ def stage_targets(records, results_dir, fold, quick, n_members, epochs):
     # interaction targets, conditioned on the fold's own converged baseline
     base, _ = _load_baseline(records, fold, results_dir, quick,
                              derived_probe=True)
-    feats, b_base, mask, basis_M = cell_conditioning(base, records[fold])
+    feats, b_base, mask, basis_M = cell_conditioning(base, records[fold],
+                                                     m_t_from_fields=True)
     meta["n_cells"] = int(len(feats))
     meta["mask_fraction"] = float(np.mean(mask))
     meta["b_base_abs_med_masked"] = float(np.median(np.abs(b_base[mask])))
     for kind in KINDS:
         b_t, dq = member_targets(models[kind], feats, b_base, mask, basis_M,
+                                 db_raw=not study.db_gate()["all_pass"],
                                  n_members=n_members, seed=MEMBER_SEED)
         np.savez_compressed(
             _targets_path(results_dir, fold, kind),
@@ -163,6 +165,7 @@ def stage_targets(records, results_dir, fold, quick, n_members, epochs):
     meta["attached_mask_fraction"] = float(np.mean(amask))
     for kind in KINDS:
         b_t, dq = member_targets(models[kind], afeats, ab_base, amask, abasis_M,
+                                 db_raw=not study.db_gate()["all_pass"],
                                  n_members=n_members, seed=MEMBER_SEED)
         np.savez_compressed(
             _targets_path(results_dir, fold, kind, attached=True),

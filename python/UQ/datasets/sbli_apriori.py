@@ -119,15 +119,42 @@ class SBLIAPriori:
     # ---- target and feature views ----------------------------------------------
 
     @staticmethod
-    def _target(extraction, leg):
+    def basis_feasibility(extraction, gate_median=0.20):
+        """The pre-registered objective-basis feasibility gate, evaluated on
+        the DEPLOYED representation (the cached normalized three-tensor maps):
+        the relative residual of reconstructing db_free from the stored
+        coefficients through the stored per-sample map, over the
+        interaction-region samples. Returns the record the drivers persist;
+        gate_pass False triggers the registered raw-component reversion
+        (flow and Gaussian identically), stated wherever scores are reported.
+        """
+        keep = extraction["region"] == "interaction"
+        db_free = np.asarray(extraction["db_free"], float)[keep]
+        g = np.asarray(extraction["g_basis"], float)[keep]
+        M = np.asarray(extraction["basis_M"], float)[keep]
+        recon = np.einsum("nij,nj->ni", M, g)
+        num = np.linalg.norm(recon - db_free, axis=1)
+        den = np.maximum(np.linalg.norm(db_free, axis=1), 1e-300)
+        rel = num / den
+        med = float(np.median(rel))
+        return {"n_interaction_samples": int(keep.sum()),
+                "rel_residual_median": med,
+                "rel_residual_p90": float(np.percentile(rel, 90)),
+                "gate_median_max": float(gate_median),
+                "gate_pass": bool(med <= gate_median)}
+
+    @staticmethod
+    def _target(extraction, leg, db_raw=False):
         if leg == "dq_y":
             return extraction["dq"][:, 1:2]
         if leg == "dq_joint":
             return extraction["dq"][:, 0:2]
         if leg == "db":
             # the amendment's objective representation: models train on the
-            # integrity-basis coefficients; scoring reconstructs components
-            return extraction["g_basis"]
+            # integrity-basis coefficients; scoring reconstructs components.
+            # db_raw True is the registered feasibility-gate reversion (raw
+            # free components, flow and Gaussian identically).
+            return extraction["db_free"] if db_raw else extraction["g_basis"]
         raise ValueError(f"unknown leg '{leg}'")
 
     @staticmethod
@@ -200,11 +227,28 @@ class SBLIAPriori:
 
     # ---- pre-registered splits ---------------------------------------------------
 
+    def db_gate(self):
+        """Evaluate the deployed-basis feasibility gate on every heated test
+        extraction; the db leg reverts to raw components unless EVERY fold
+        passes (one convention for the whole leg, as registered)."""
+        gates = {c: self.basis_feasibility(self.test_sets[c])
+                 for c in self.test_sets
+                 if self.test_sets[c]["dq"] is not None}
+        all_pass = all(g["gate_pass"] for g in gates.values())
+        return {"per_fold": gates, "all_pass": bool(all_pass),
+                "representation": ("objective-basis" if all_pass
+                                   else "raw-components (registered "
+                                        "feasibility reversion)")}
+
     def loso(self, leg, history=False, seeds=SEEDS, epochs=EPOCHS):
-        """Leave-one-wall-thermal-out over the heated-set cases (dq legs) or
-        all six records (db leg)."""
+        """Leave-one-wall-thermal-out over the FIVE heated-set cases for
+        every leg (the pre-registered split: train on four s conditions,
+        score the held-out fifth). The adiabatic campaign never trains; for
+        the db leg it is scored as the independent-campaign second truth
+        surface on the s = 1.0 fold, reported separately."""
         cases = [c for c in self.test_sets
-                 if (leg == "db") or self.test_sets[c]["dq"] is not None]
+                 if self.test_sets[c]["dq"] is not None]
+        db_raw = leg == "db" and not self.db_gate()["all_pass"]
         results = {}
         for held in cases:
             train_cases = [c for c in cases if c != held]
@@ -212,9 +256,11 @@ class SBLIAPriori:
                 self._features(self.train_sets[c], history)
                 for c in train_cases])
             Y_tr = np.concatenate([
-                self._target(self.train_sets[c], leg) for c in train_cases])
+                self._target(self.train_sets[c], leg, db_raw=db_raw)
+                for c in train_cases])
             X_te = self._features(self.test_sets[held], history)
-            cmap = (self.test_sets[held]["basis_M"] if leg == "db" else None)
+            cmap = (self.test_sets[held]["basis_M"]
+                    if leg == "db" and not db_raw else None)
             Y_te = (self.test_sets[held]["db_free"] if leg == "db"
                     else self._target(self.test_sets[held], leg))
             regions = self.test_sets[held]["region"]
@@ -232,24 +278,45 @@ class SBLIAPriori:
             results[held] = {"n_train": int(len(X_tr)),
                              "n_test": int(len(X_te)),
                              "models": per_model}
+            if leg == "db" and held == "s1.0" and "adiabatic" in self.test_sets:
+                # the independent-campaign second truth surface: the same
+                # s1.0-fold-trained models scored on the adiabatic extraction
+                adia = self.test_sets["adiabatic"]
+                X_ad = self._features(adia, history)
+                Y_ad = adia["db_free"]
+                cmap_ad = adia["basis_M"]
+                surface = {}
+                for kind in ("flow", "gauss", "pooled"):
+                    per_seed = []
+                    for seed in seeds:
+                        scores, _ = self._fit_and_score(
+                            kind, X_tr, Y_tr, X_ad, Y_ad, seed, epochs,
+                            component_map=cmap_ad)
+                        per_seed.append(scores)
+                    surface[kind] = per_seed
+                results[held]["independent_campaign_surface"] = {
+                    "n_test": int(len(X_ad)), "models": surface}
         return results
 
     def insample(self, leg, history=False, seeds=SEEDS, epochs=EPOCHS):
         """Train on every record at the train stride, score every record at
         the test stride (the machinery check)."""
         cases = [c for c in self.test_sets
-                 if (leg == "db") or self.test_sets[c]["dq"] is not None]
+                 if self.test_sets[c]["dq"] is not None]
         X_tr = np.concatenate([
             self._features(self.train_sets[c], history) for c in cases])
         Y_tr = np.concatenate([
-            self._target(self.train_sets[c], leg) for c in cases])
+            self._target(self.train_sets[c], leg,
+                         db_raw=leg == "db" and db_raw) for c in cases])
         X_te = np.concatenate([
             self._features(self.test_sets[c], history) for c in cases])
+        db_raw = leg == "db" and not self.db_gate()["all_pass"]
         if leg == "db":
             Y_te = np.concatenate([self.test_sets[c]["db_free"]
                                    for c in cases])
-            cmap = np.concatenate([self.test_sets[c]["basis_M"]
-                                   for c in cases])
+            cmap = (None if db_raw else
+                    np.concatenate([self.test_sets[c]["basis_M"]
+                                    for c in cases]))
         else:
             Y_te = np.concatenate([
                 self._target(self.test_sets[c], leg) for c in cases])

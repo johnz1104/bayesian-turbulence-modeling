@@ -55,21 +55,25 @@ MASK_K_FLOOR = 1e-3       # k > floor * max(k), the extraction's quiet cut
 def fold_models(study, held, history=False, seed=MEMBER_SEED,
                 epochs=EPOCHS, kinds=("flow", "gauss")):
     """The leave-`held`-out conditional models, refit in-process on the
-    identical loso pools: the db leg over every record, the joint dq leg
-    over the heated records. Returns kind -> (db_model, dq_model)."""
-    db_cases = [c for c in study.test_sets]
-    dq_cases = [c for c in study.test_sets
-                if study.test_sets[c]["dq"] is not None]
+    identical loso pools. BOTH legs train on the HEATED records only (the
+    pre-registered split: the adiabatic campaign is an independent test
+    surface, never a training member). Returns kind -> (db_model, dq_model)."""
+    heated = [c for c in study.test_sets
+              if study.test_sets[c]["dq"] is not None]
+    db_cases = heated
+    dq_cases = heated
     out = {}
     for kind in kinds:
         fitted = {}
+        db_raw = not study.db_gate()["all_pass"]
         for leg, cases in (("db", db_cases), ("dq_joint", dq_cases)):
             train = [c for c in cases if c != held]
             X = np.concatenate([SBLIAPriori._features(study.train_sets[c],
                                                       history)
                                 for c in train])
-            Y = np.concatenate([SBLIAPriori._target(study.train_sets[c], leg)
-                                for c in train])
+            Y = np.concatenate([SBLIAPriori._target(
+                study.train_sets[c], leg,
+                db_raw=(leg == "db" and db_raw)) for c in train])
             model = SBLIAPriori._make(kind, X.shape[1], Y.shape[1], seed)
             model.fit(X, Y, epochs=epochs, lr=1e-3, batch=256)
             fitted[leg] = model
@@ -110,6 +114,10 @@ def cell_conditioning(baseline, record, m_t_from_fields=False):
                * record.meta["mach"]
                / np.sqrt(np.maximum(sample["T"], 1e-6)))
     else:
+        # DNS-derived M_t is an A-PRIORI extraction convention; a held-out
+        # coupled prediction must not read the held-out record's fields, so
+        # every predictive caller passes m_t_from_fields=True (enforced at
+        # the driver call sites; this branch remains for diagnostics)
         m_t = turbulent_mach(record,
                              np.clip(x_star, record.x[0], record.x[-1]),
                              np.clip(y_star, record.y[0], record.y[-1]))
@@ -128,7 +136,10 @@ def cell_conditioning(baseline, record, m_t_from_fields=False):
     # the training-like region: inside the layer band the extraction used,
     # turbulent by its quiet cut, and within the record's streamwise span
     k = sample["k"]
-    mask = ((y_star >= 0.0) & (y_star <= MASK_Y_MAX)
+    # the training-support floor matches the extraction interior mask
+    # (y* >= 0.05): wall-adjacent cells below it never appeared in training
+    # and receive no injection
+    mask = ((y_star >= 0.05) & (y_star <= MASK_Y_MAX)
             & (k > MASK_K_FLOOR * float(np.max(k)))
             & (x_star >= record.x[0]) & (x_star <= record.x[-1]))
     return features, b_base, mask, basis_M
@@ -147,7 +158,7 @@ def _db3_to_tensor(draws):
 
 
 def member_targets(models, features, b_base, mask, basis_M,
-                   n_members=N_MEMBERS, seed=MEMBER_SEED):
+                   n_members=N_MEMBERS, seed=MEMBER_SEED, db_raw=False):
     """Coherent member targets for one model kind: (b_targets, dq_targets)
     with b (m, n, 3, 3) realizability-projected and dq (m, n, 2) in the
     record's (u_tau_ref, T_w) units; masked cells revert to the baseline
@@ -163,7 +174,10 @@ def member_targets(models, features, b_base, mask, basis_M,
     dq_draws = np.asarray(dq_model.sample(features, n_per=n_members,
                                           shared_latent=True))
 
-    db_draws = np.einsum("nij,nmj->nmi", basis_M, g_draws)
+    # under the registered feasibility reversion the model emits raw free
+    # components directly and no basis map applies
+    db_draws = (g_draws if db_raw
+                else np.einsum("nij,nmj->nmi", basis_M, g_draws))
     db = _db3_to_tensor(db_draws)
     b_t = b_base[:, None, :, :] + db
     proj, _ = realizability.project_anisotropy(b_t.reshape(-1, 3, 3))
