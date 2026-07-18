@@ -117,6 +117,33 @@ def _impingement_offset(w, record):
     return float(x_half - dns_half), x_half, dns_half
 
 
+def _extraction_current(results_dir, case, history=True):
+    """True when every extraction cache for the case carries the
+    objective-basis keys (the amendment's representation); a stale-format
+    cache regenerates from the CACHED converged fields through a warm-loaded
+    baseline, never a re-solve."""
+    strides = (TEST_STRIDE[case], sbli_apriori._train_stride(case))
+    for st in strides:
+        path = SBLIAPriori._cache_path(results_dir, case, st, history)
+        if not os.path.isfile(path):
+            return False
+        if "g_basis" not in np.load(path, allow_pickle=True).files:
+            return False
+    return True
+
+
+def _warm_baseline(records, case, results_dir, quick, with_shock=True):
+    """Rebuild the case and warm it with the cached converged primitive
+    state; one sweep populates the derived fields the extraction samples."""
+    base = _configure(records[case], quick, with_shock=with_shock,
+                      max_iterations=1, convergence_tol=1e-30)
+    prim = np.load(_fields_path(
+        results_dir, case if with_shock else "gate_a_attached"))["primitive"]
+    base.solver.init_field(prim)
+    base.solver.solve()
+    return base
+
+
 def _case_cached(results_dir, case, history=True):
     strides = (TEST_STRIDE[case], sbli_apriori._train_stride(case))
     have = all(os.path.isfile(SBLIAPriori._cache_path(
@@ -166,7 +193,13 @@ def stage_baselines(records, results_dir, quick, regen):
         if _case_cached(results_dir, case) and os.path.isfile(gate_path) \
                 and not regen:
             out["gates"]["B"][case] = json.load(open(gate_path))
-            baselines[case] = None      # extraction reads the caches
+            if _extraction_current(results_dir, case):
+                baselines[case] = None  # extraction reads the caches
+            else:
+                # stale-format extraction: regenerate from the cached
+                # converged fields (a warm reload, never a re-solve)
+                baselines[case] = _warm_baseline(records, case, results_dir,
+                                                 quick)
             print(f"[gate B {case}] cached: "
                   f"{out['gates']['B'][case]['status']}")
             continue
