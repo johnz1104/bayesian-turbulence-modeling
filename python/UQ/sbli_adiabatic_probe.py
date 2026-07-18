@@ -49,8 +49,8 @@ def main():
     # one warm baseline per member solve (independent, order-free)
     cond_base, _ = _load_baseline(records, "adiabatic", RESULTS, quick=False,
                                   member_caps=False, derived_probe=True)
-    cond = cell_conditioning(cond_base, rec)
-    targets = corner_targets(cond["b_base"], cond["mask"], deltas=(0.5,))
+    _features, b_base, mask, _basis_M = cell_conditioning(cond_base, rec)
+    targets = corner_targets(b_base, mask, deltas=(0.5,))
 
     w0 = cond_base.wall()
     off0, x0, dns0 = _impingement_offset(w0, rec)

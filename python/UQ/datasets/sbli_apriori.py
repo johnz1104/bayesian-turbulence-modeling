@@ -76,11 +76,16 @@ class SBLIAPriori:
                                        history)
         if os.path.isfile(path):
             z = np.load(path, allow_pickle=True)
-            out = {k: z[k] for k in z.files if k != "meta"}
-            out["meta"] = json.loads(str(z["meta"]))
-            out["dq"] = None if out["dq"].size == 0 else out["dq"]
-            out["region"] = out["region"].astype(object)
-            return out
+            if "g_basis" in z.files:
+                out = {k: z[k] for k in z.files if k != "meta"}
+                out["meta"] = json.loads(str(z["meta"]))
+                out["dq"] = None if out["dq"].size == 0 else out["dq"]
+                out["region"] = out["region"].astype(object)
+                return out
+            # pre-basis cache (no objective-representation keys): stale under
+            # the amendment; regenerate from the cached converged baseline
+            print(f"  [extract] {os.path.basename(path)} predates the "
+                  f"objective-basis representation; regenerating")
         study = interaction_study(record, baseline, stride=stride,
                                   history=history)
         os.makedirs(results_dir, exist_ok=True)
@@ -88,6 +93,8 @@ class SBLIAPriori:
             path,
             features=study["features"], db=study["db"],
             db_free=study["db_free"],
+            g_basis=study["g_basis"],
+            basis_M=study["basis_M"],
             dq=study["dq"] if study["dq"] is not None else np.zeros(0),
             x=study["x"], y=study["y"],
             region=np.asarray(study["region"], dtype=str),
@@ -118,7 +125,9 @@ class SBLIAPriori:
         if leg == "dq_joint":
             return extraction["dq"][:, 0:2]
         if leg == "db":
-            return extraction["db_free"]
+            # the amendment's objective representation: models train on the
+            # integrity-basis coefficients; scoring reconstructs components
+            return extraction["g_basis"]
         raise ValueError(f"unknown leg '{leg}'")
 
     @staticmethod
@@ -143,7 +152,7 @@ class SBLIAPriori:
         raise ValueError(kind)
 
     def _fit_and_score(self, kind, X_tr, Y_tr, X_te, Y_te, seed,
-                       epochs=EPOCHS):
+                       epochs=EPOCHS, component_map=None):
         model = self._make(kind, X_tr.shape[1], Y_tr.shape[1], seed)
         model.fit(X_tr, Y_tr, epochs=epochs, lr=1e-3, batch=256)
         # the committed draw-seeding pattern: the pooled diagnostic takes a
@@ -155,6 +164,12 @@ class SBLIAPriori:
             import torch
             torch.manual_seed(seed)
             S = np.asarray(model.sample(X_te, n_per=SAMPLES_PER_POINT))
+        if component_map is not None:
+            # draws live in basis-coefficient space; the pre-registered
+            # clauses are evaluated on the reconstructed tensor components,
+            # so the per-sample exact linear map is applied BEFORE scoring
+            # and Y_te is already the component-space truth
+            S = np.einsum("nij,nmj->nmi", component_map, S)
         out = {}
         for level in (0.9, 0.5):
             covs, shps = [], []
@@ -199,14 +214,17 @@ class SBLIAPriori:
             Y_tr = np.concatenate([
                 self._target(self.train_sets[c], leg) for c in train_cases])
             X_te = self._features(self.test_sets[held], history)
-            Y_te = self._target(self.test_sets[held], leg)
+            cmap = (self.test_sets[held]["basis_M"] if leg == "db" else None)
+            Y_te = (self.test_sets[held]["db_free"] if leg == "db"
+                    else self._target(self.test_sets[held], leg))
             regions = self.test_sets[held]["region"]
             per_model = {}
             for kind in ("flow", "gauss", "pooled"):
                 per_seed = []
                 for seed in seeds:
                     scores, S = self._fit_and_score(
-                        kind, X_tr, Y_tr, X_te, Y_te, seed, epochs)
+                        kind, X_tr, Y_tr, X_te, Y_te, seed, epochs,
+                        component_map=cmap)
                     scores["region_coverage_0.9"] = self._region_coverage(
                         Y_te, S, regions)
                     per_seed.append(scores)
@@ -227,12 +245,20 @@ class SBLIAPriori:
             self._target(self.train_sets[c], leg) for c in cases])
         X_te = np.concatenate([
             self._features(self.test_sets[c], history) for c in cases])
-        Y_te = np.concatenate([
-            self._target(self.test_sets[c], leg) for c in cases])
+        if leg == "db":
+            Y_te = np.concatenate([self.test_sets[c]["db_free"]
+                                   for c in cases])
+            cmap = np.concatenate([self.test_sets[c]["basis_M"]
+                                   for c in cases])
+        else:
+            Y_te = np.concatenate([
+                self._target(self.test_sets[c], leg) for c in cases])
+            cmap = None
         out = {}
         for kind in ("flow", "gauss", "pooled"):
             out[kind] = [self._fit_and_score(kind, X_tr, Y_tr, X_te, Y_te,
-                                             seed, epochs)[0]
+                                             seed, epochs,
+                                             component_map=cmap)[0]
                          for seed in seeds]
         return {"n_train": int(len(X_tr)), "n_test": int(len(X_te)),
                 "models": out}

@@ -116,13 +116,22 @@ def cell_conditioning(baseline, record, m_t_from_fields=False):
     features = discrepancy.feature_set(grad_u, timescale,
                                        extra=m_t[:, None])
 
+    # the per-cell coefficient-to-component map of the objective basis (the
+    # SAME normalized first-three construction the extraction trains against),
+    # so sampled basis coefficients reconstruct to tensors at the solver cells
+    S_full, W_full = discrepancy.strain_rotation(grad_u, timescale)
+    T = discrepancy.integrity_basis(S_full, W_full)[:, :3]
+    Tn = np.linalg.norm(T.reshape(T.shape[0], 3, 9), axis=2)
+    T = T / np.maximum(Tn, 1e-300)[:, :, None, None]
+    basis_M = np.stack([T[:, :, 0, 0], T[:, :, 1, 1], T[:, :, 0, 1]], axis=1)
+
     # the training-like region: inside the layer band the extraction used,
     # turbulent by its quiet cut, and within the record's streamwise span
     k = sample["k"]
     mask = ((y_star >= 0.0) & (y_star <= MASK_Y_MAX)
             & (k > MASK_K_FLOOR * float(np.max(k)))
             & (x_star >= record.x[0]) & (x_star <= record.x[-1]))
-    return features, b_base, mask
+    return features, b_base, mask, basis_M
 
 
 def _db3_to_tensor(draws):
@@ -137,21 +146,24 @@ def _db3_to_tensor(draws):
     return db
 
 
-def member_targets(models, features, b_base, mask, n_members=N_MEMBERS,
-                   seed=MEMBER_SEED):
+def member_targets(models, features, b_base, mask, basis_M,
+                   n_members=N_MEMBERS, seed=MEMBER_SEED):
     """Coherent member targets for one model kind: (b_targets, dq_targets)
     with b (m, n, 3, 3) realizability-projected and dq (m, n, 2) in the
     record's (u_tau_ref, T_w) units; masked cells revert to the baseline
-    anisotropy and zero correction."""
+    anisotropy and zero correction. The db model emits objective-basis
+    coefficients (the amendment's representation); the per-cell exact linear
+    map reconstructs the free components before the tensor assembly."""
     import torch
     db_model, dq_model = models
     torch.manual_seed(seed)
-    db_draws = np.asarray(db_model.sample(features, n_per=n_members,
-                                          shared_latent=True))
+    g_draws = np.asarray(db_model.sample(features, n_per=n_members,
+                                         shared_latent=True))
     torch.manual_seed(seed + 1)
     dq_draws = np.asarray(dq_model.sample(features, n_per=n_members,
                                           shared_latent=True))
 
+    db_draws = np.einsum("nij,nmj->nmi", basis_M, g_draws)
     db = _db3_to_tensor(db_draws)
     b_t = b_base[:, None, :, :] + db
     proj, _ = realizability.project_anisotropy(b_t.reshape(-1, 3, 3))

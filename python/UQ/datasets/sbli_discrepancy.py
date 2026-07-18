@@ -169,7 +169,7 @@ def interaction_study(record, baseline, stride=(8, 4), history=False):
 
     grad_u = _gradients_tensor(sample)
     timescale = 1.0 / np.maximum(_CMU * sample["omega"], 1e-6)
-    S, _ = discrepancy.strain_rotation(grad_u, timescale)
+    S, W = discrepancy.strain_rotation(grad_u, timescale)
 
     b_dns = realizability.anisotropy(record.R[ii, jj])
     b_base = discrepancy.boussinesq_anisotropy_actual(
@@ -214,10 +214,29 @@ def interaction_study(record, baseline, stride=(8, 4), history=False):
         region[pts_x > x_r + 2.0] = "relaxation"
 
     frac = record.realizable_fraction()
+
+    # objective-basis representation of the db targets (the amendment's db
+    # leg): per-sample coefficients on the first three integrity-basis
+    # tensors, normalized to unit Frobenius norm so the map is
+    # well-conditioned across the shock. basis_M takes coefficients to the
+    # free components (b11, b22, b12); on a 2-D mean flow the rank-3 basis
+    # spans exactly the achievable subspace (the pre-registered feasibility
+    # gates measured machine-zero reconstruction residuals), so g is exact
+    # via the pseudo-inverse and degenerate quiet-flow samples degrade
+    # gracefully instead of raising
+    db_free = np.stack([db[:, 0, 0], db[:, 1, 1], db[:, 0, 1]], axis=1)
+    T = discrepancy.integrity_basis(S, W)[:, :3]
+    Tn = np.linalg.norm(T.reshape(T.shape[0], 3, 9), axis=2)
+    T = T / np.maximum(Tn, 1e-300)[:, :, None, None]
+    basis_M = np.stack([T[:, :, 0, 0], T[:, :, 1, 1], T[:, :, 0, 1]], axis=1)
+    g_basis = np.einsum("nij,nj->ni", np.linalg.pinv(basis_M), db_free)
+
     return {
         "features": features,
         "db": db,
-        "db_free": np.stack([db[:, 0, 0], db[:, 1, 1], db[:, 0, 1]], axis=1),
+        "db_free": db_free,
+        "g_basis": g_basis,
+        "basis_M": basis_M,
         "dq": dq,
         "x": pts_x, "y": pts_y,
         "region": region,

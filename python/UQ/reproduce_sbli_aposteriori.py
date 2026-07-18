@@ -135,12 +135,12 @@ def stage_targets(records, results_dir, fold, quick, n_members, epochs):
     # interaction targets, conditioned on the fold's own converged baseline
     base, _ = _load_baseline(records, fold, results_dir, quick,
                              derived_probe=True)
-    feats, b_base, mask = cell_conditioning(base, records[fold])
+    feats, b_base, mask, basis_M = cell_conditioning(base, records[fold])
     meta["n_cells"] = int(len(feats))
     meta["mask_fraction"] = float(np.mean(mask))
     meta["b_base_abs_med_masked"] = float(np.median(np.abs(b_base[mask])))
     for kind in KINDS:
-        b_t, dq = member_targets(models[kind], feats, b_base, mask,
+        b_t, dq = member_targets(models[kind], feats, b_base, mask, basis_M,
                                  n_members=n_members, seed=MEMBER_SEED)
         np.savez_compressed(
             _targets_path(results_dir, fold, kind),
@@ -158,11 +158,11 @@ def stage_targets(records, results_dir, fold, quick, n_members, epochs):
     # no DNS record exists for this configuration)
     abase, _ = _load_baseline(records, "adiabatic", results_dir, quick,
                               with_shock=False, derived_probe=True)
-    afeats, ab_base, amask = cell_conditioning(
+    afeats, ab_base, amask, abasis_M = cell_conditioning(
         abase, records["adiabatic"], m_t_from_fields=True)
     meta["attached_mask_fraction"] = float(np.mean(amask))
     for kind in KINDS:
-        b_t, dq = member_targets(models[kind], afeats, ab_base, amask,
+        b_t, dq = member_targets(models[kind], afeats, ab_base, amask, abasis_M,
                                  n_members=n_members, seed=MEMBER_SEED)
         np.savez_compressed(
             _targets_path(results_dir, fold, kind, attached=True),
@@ -190,7 +190,7 @@ def stage_targets_far(records, results_dir, quick, n_members, epochs):
     Y_tr = dq_tr[:, 0:2]
     base, _ = _load_baseline(records, "adiabatic", results_dir, quick,
                              derived_probe=True)
-    feats, b_base, mask = cell_conditioning(base, records["adiabatic"])
+    feats, b_base, mask, basis_M = cell_conditioning(base, records["adiabatic"])
     meta = {"fold": "faradiab", "n_members": n_members, "epochs": epochs,
             "n_train": int(len(X_tr)), "n_cells": int(len(feats)),
             "mask_fraction": float(np.mean(mask))}

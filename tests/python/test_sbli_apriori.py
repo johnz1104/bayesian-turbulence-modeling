@@ -96,6 +96,11 @@ def _synthetic_extraction(n=60, with_dq=True, history=True):
         "region": np.array(["upstream"] * (n // 2)
                            + ["interaction"] * (n - n // 2), dtype=object),
         "realizable_fraction": 1.0,
+        "g_basis": rng.normal(size=(n, 3)),
+        # identity coefficient-to-component maps: the synthetic fixture's
+        # basis is orthonormal by construction, so g and db_free coincide up
+        # to the draw and the reconstruction path is exercised end to end
+        "basis_M": np.tile(np.eye(3), (n, 1, 1)),
         "meta": {"n_points": n},
     }
 
