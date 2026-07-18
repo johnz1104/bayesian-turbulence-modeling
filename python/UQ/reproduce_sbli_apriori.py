@@ -101,6 +101,63 @@ def _save_fields(results_dir, case, solver):
     np.savez_compressed(_fields_path(results_dir, case), primitive=prim)
 
 
+def _gate_a_profile_metrics(base, record, cf_station):
+    """The pre-registered gate-A incoming-layer clauses beyond skin friction:
+    the momentum-thickness Reynolds number against the record's own value at
+    the same station, and the van-Driest transformed log-region RMS.
+
+    Conventions (one rule for both sides): density from the boundary-layer
+    constant-pressure relation rho_hat = 1/T_hat; theta from the standard
+    momentum-thickness integral in delta0 units, Re_theta = theta_hat times
+    the dataset inlet Reynolds number; van-Driest u_vd = int sqrt(rho/rho_w)
+    du with u_tau from each side's OWN wall stress (the solve's station Cf,
+    the record's measured gate value), and the log-region band
+    y+ in [30, 0.3 delta+]. The RMS is of the relative U+ difference over
+    that band, interpolated in log y+.
+    """
+    ys = np.asarray(record.y, float)
+    i_st = int(np.argmin(np.abs(np.asarray(record.x, float) - GATE_A_STATION)))
+    u_dns = np.asarray(record.U, float)[i_st]
+    T_dns = np.maximum(np.asarray(record.T, float)[i_st], 1e-6)
+
+    s = base.sample_fields(np.full(ys.size, GATE_A_STATION), ys)
+    u_sol = np.asarray(s["u"], float)
+    T_sol = np.maximum(np.asarray(s["T"], float), 1e-6)
+
+    def theta_hat(u, T):
+        rho = 1.0 / T
+        integrand = rho * np.clip(u, 0.0, None) * (1.0 - np.clip(u, 0.0, 1.0))
+        return float(np.trapz(integrand, ys))
+
+    re_inlet = 16750.0
+    re_theta_sol = theta_hat(u_sol, T_sol) * re_inlet
+    re_theta_dns = theta_hat(u_dns, T_dns) * re_inlet
+
+    def vd_profile(u, T, cf):
+        rho = 1.0 / T
+        rho_w = rho[0]
+        u_tau = np.sqrt(max(cf, 1e-12) / 2.0 / rho_w)
+        u_vd = np.concatenate([[0.0], np.cumsum(
+            np.sqrt(rho[1:] / rho_w) * np.diff(u))])
+        y_plus = ys * rho_w * u_tau * re_inlet
+        return y_plus, u_vd / u_tau
+
+    yp_s, up_s = vd_profile(u_sol, T_sol, cf_station)
+    yp_d, up_d = vd_profile(u_dns, T_dns, GATE_A_CF)
+    delta_plus = float(np.interp(0.99, np.clip(u_dns, 0, 1), yp_d))
+    lo, hi = 30.0, 0.3 * delta_plus
+    band = np.geomspace(max(lo, yp_d[1]), max(hi, lo * 1.5), 24)
+    up_s_b = np.interp(np.log(band), np.log(np.maximum(yp_s, 1e-12)), up_s)
+    up_d_b = np.interp(np.log(band), np.log(np.maximum(yp_d, 1e-12)), up_d)
+    vd_rms = float(np.sqrt(np.mean(((up_s_b - up_d_b) / up_d_b) ** 2)))
+    return {
+        "re_theta_solve": re_theta_sol, "re_theta_dns": re_theta_dns,
+        "re_theta_ratio": float(re_theta_sol / max(re_theta_dns, 1e-12)),
+        "vd_log_rms": vd_rms,
+        "vd_band_yplus": [float(band[0]), float(band[-1])],
+    }
+
+
 def _impingement_offset(w, record):
     """The solve's wall-pressure half-rise against the record's own landmark
     (the pinned rule on both sides)."""
@@ -179,9 +236,18 @@ def stage_baselines(records, results_dir, quick, regen):
             "cf_rel_error": float(abs(cf_station / GATE_A_CF - 1.0)),
             "wall_time_s": round(time.time() - t0, 1),
         }
+        out["gates"]["A"].update(
+            _gate_a_profile_metrics(gate_a, records["adiabatic"], cf_station))
+        out["gates"]["A"]["pass"] = bool(
+            str(rep.status).endswith("Converged")
+            and out["gates"]["A"]["cf_rel_error"] <= 0.10
+            and out["gates"]["A"]["vd_log_rms"] <= 0.05)
         os.makedirs(results_dir, exist_ok=True)
-        _save_wall(results_dir, "gate_a_attached", w)
-        _save_fields(results_dir, "gate_a_attached", gate_a.solver)
+        if str(rep.status).endswith("Converged"):
+            _save_wall(results_dir, "gate_a_attached", w)
+            _save_fields(results_dir, "gate_a_attached", gate_a.solver)
+        else:
+            print("[gate A] NOT converged: caches withheld")
         json.dump(out["gates"]["A"], open(gate_a_path, "w"), indent=1)
         print(f"[gate A] {rep.status} iters {rep.iterations} "
               f"cf {cf_station:.3e} vs {GATE_A_CF:.3e} "
@@ -215,14 +281,47 @@ def stage_baselines(records, results_dir, quick, regen):
             "offset": offset,
             "wall_time_s": round(time.time() - t0, 1),
         }
+        entry["pass"] = bool(str(rep.status).endswith("Converged")
+                             and offset is not None and abs(offset) <= 1.0)
         out["gates"]["B"][case] = entry
         os.makedirs(results_dir, exist_ok=True)
-        _save_wall(results_dir, case, w)
-        _save_fields(results_dir, case, base.solver)
+        if str(rep.status).endswith("Converged"):
+            _save_wall(results_dir, case, w)
+            _save_fields(results_dir, case, base.solver)
+        else:
+            print(f"[gate B {case}] NOT converged: caches withheld")
         json.dump(entry, open(gate_path, "w"), indent=1)
         print(f"[gate B {case}] {rep.status} iters {rep.iterations} "
               f"offset {offset}")
         baselines[case] = base
+
+    # the hard gate adjudication record, written before ANY downstream stage:
+    # gate A must pass outright; gate B is adjudicated PER CASE under the
+    # reviewer's recorded 2026-07-18 ruling (the pinned propagated folds all
+    # pass; a failing case is excluded from claim-bearing coupled legs, takes
+    # the registered frozen-mean fallback on its a-priori role, and any
+    # injection probe on it is EXPLORATORY, never gate rehabilitation)
+    adjud = {
+        "ruling": "per-case (reviewer adjudication 2026-07-18); gate "
+                  "failures take the registered fallback and are excluded "
+                  "from claim-bearing coupled legs",
+        "gate_a_pass": bool(out["gates"]["A"].get("pass", False)),
+        "gate_b_pass_cases": sorted(c for c, e in out["gates"]["B"].items()
+                                    if e.get("pass")),
+        "gate_b_fail_cases": sorted(c for c, e in out["gates"]["B"].items()
+                                    if not e.get("pass")),
+    }
+    json.dump(adjud, open(os.path.join(results_dir,
+                                       "gates_adjudication.json"), "w"),
+              indent=1)
+    if not adjud["gate_a_pass"]:
+        print("[gates] GATE A FAILED: stopping before any downstream stage "
+              "(solver-capability null; see the pre-registration)")
+        sys.exit(1)
+    if adjud["gate_b_fail_cases"]:
+        print(f"[gates] gate B failing cases {adjud['gate_b_fail_cases']}: "
+              f"excluded from claim-bearing coupled legs per the recorded "
+              f"ruling; passing cases {adjud['gate_b_pass_cases']}")
 
     # extraction caches at both strides (with the history feature); cached
     # cases pass baseline None and are never touched

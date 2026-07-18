@@ -484,6 +484,31 @@ def stage_orchestrate(records, results_dir, quick, throttle, n_members,
     print("wrote", path)
 
 
+def _require_gates(results_dir, fold):
+    """Claim-bearing coupled stages run only on gate-passing configurations
+    (the recorded per-case ruling); the far-transfer target is exempt only
+    when explicitly labeled exploratory via QBTM_SBLI_EXPLORATORY=1."""
+    path = os.path.join(results_dir, "gates_adjudication.json")
+    if not os.path.isfile(path):
+        print("[gates] no adjudication record; run the a-priori baselines "
+              "stage first")
+        sys.exit(1)
+    adjud = json.load(open(path))
+    if not adjud.get("gate_a_pass"):
+        print("[gates] gate A failed; coupled stages are not adjudicable")
+        sys.exit(1)
+    case = "adiabatic" if fold == "faradiab" else fold
+    if case in adjud.get("gate_b_fail_cases", []):
+        if os.environ.get("QBTM_SBLI_EXPLORATORY") == "1":
+            print(f"[gates] {case} failed gate B: proceeding EXPLORATORY "
+                  f"(labeled, never claim-bearing)")
+        else:
+            print(f"[gates] {case} failed gate B: coupled stage refused "
+                  f"(set QBTM_SBLI_EXPLORATORY=1 for a labeled exploratory "
+                  f"run)")
+            sys.exit(1)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--stage", required=True,
@@ -498,6 +523,8 @@ def main():
     ap.add_argument("--throttle", type=int, default=4)
     ap.add_argument("--folds", default=",".join(FOLDS))
     args = ap.parse_args()
+    if getattr(args, "fold", None):
+        _require_gates(args.results, args.fold)
 
     np.random.seed(MEMBER_SEED)
     n_members = 3 if args.quick else N_MEMBERS

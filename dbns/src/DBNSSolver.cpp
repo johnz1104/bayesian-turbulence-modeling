@@ -770,6 +770,27 @@ void DBNSSolver::computeFaceSpectralRadii() {
     }
 }
 
+std::array<double, NVAR> DBNSSolver::equationResidualNorms() const {
+    std::array<double, NVAR> s{};
+    for (int ci = 0; ci < mesh_.nCells(); ++ci)
+        for (int v = 0; v < NVAR; ++v) {
+            double r = res_[ci][v] / std::max(vol_[ci], 1e-30);
+            s[v] += r * r;
+        }
+    for (int v = 0; v < NVAR; ++v)
+        s[v] = std::sqrt(s[v] / std::max(1, mesh_.nCells()));
+    return s;
+}
+
+bool DBNSSolver::stateIsValid() const {
+    for (int ci = 0; ci < mesh_.nCells(); ++ci) {
+        for (int v = 0; v < NVAR; ++v)
+            if (!std::isfinite(W_[ci][v])) return false;
+        if (!GasState::admissible(W_[ci], eos_)) return false;
+    }
+    return true;
+}
+
 double DBNSSolver::rhoResidualNorm() const {
     double s = 0.0;
     for (int ci = 0; ci < mesh_.nCells(); ++ci) {
@@ -894,6 +915,7 @@ SolveReport DBNSSolver::solveImplicitSteady() {
     SolveReport rep;
     int nc = mesh_.nCells();
     double res0 = -1.0;
+    std::array<double, NVAR> eqRes0{};
     if ((int)dW_.size() != nc) dW_.assign(nc, StateVec{});
 
     double betaMax = std::max(sstCoeffs_.beta1, sstCoeffs_.beta2);
@@ -1023,25 +1045,58 @@ SolveReport DBNSSolver::solveImplicitSteady() {
         cflScale = std::min(1.0, cflScale * 1.5);
         clampPositivity();
 
-        double rn = rhoResidualNorm();
-        if (iter <= freezeIter || res0 < 0.0)
+        const std::array<double, NVAR> rns = equationResidualNorms();
+        double rn = rns[I_RHO];
+        const int nEq = settings_.turbulent ? NVAR : 4;
+        if (iter <= freezeIter || res0 < 0.0) {
             res0 = std::max(res0, std::max(rn, 1e-30));
+            for (int v = 0; v < nEq; ++v)
+                eqRes0[v] = std::max(eqRes0[v], std::max(rns[v], 1e-30));
+        }
+        // an equation whose reference residual is negligible against the
+        // system scale (a quiescent direction) must not gate convergence on
+        // round-off; its reference is floored at 1e-6 of the largest
+        double eqRefMax = 1e-30;
+        for (int v = 0; v < nEq; ++v) eqRefMax = std::max(eqRefMax, eqRes0[v]);
+        double relMax = 0.0;
+        for (int v = 0; v < nEq; ++v)
+            relMax = std::max(relMax,
+                              rns[v] / std::max(eqRes0[v], 1e-6 * eqRefMax));
         if (settings_.verbose && (iter % settings_.reportInterval == 0))
-            std::printf("  [lusgs] iter %6d  cfl %.1f  res_rho %.3e (rel %.3e)\n",
-                        iter, cfl, rn, rn / res0);
+            std::printf("  [lusgs] iter %6d  cfl %.1f  res_rho %.3e (rel %.3e)"
+                        "  rel_max %.3e\n",
+                        iter, cfl, rn, rn / res0, relMax);
         if (iter % settings_.reportInterval == 0)
             rep.residualHistory.push_back(rn);
         if (iter > freezeIter && !limiterFrozen && rn / res0 < 1e-2)
             limiterFrozen = true;
-        if (iter > freezeIter && rn / res0 < settings_.convergenceTol) {
-            rep.status = EvaluationStatus::Converged;
+        // convergence requires EVERY live equation's relative decay below the
+        // tolerance AND a directly validated state (the per-cell sweep; the
+        // acceptance logic alone cannot prove finiteness)
+        if (iter > freezeIter && relMax < settings_.convergenceTol) {
+            if (stateIsValid()) {
+                rep.status = EvaluationStatus::Converged;
+            } else {
+                rep.status = EvaluationStatus::Diverged;
+                rep.iterations = iter;
+                return rep;
+            }
             break;
         }
     }
     if (rep.status == EvaluationStatus::Unknown)
         rep.status = EvaluationStatus::Unconverged;
     rep.iterations = iter;
-    rep.finalResidual = (res0 > 0.0) ? rhoResidualNorm() / res0 : 0.0;
+    {
+        const std::array<double, NVAR> rnsF = equationResidualNorms();
+        const int nEq = settings_.turbulent ? NVAR : 4;
+        double eqRefMax = 1e-30, relMax = 0.0;
+        for (int v = 0; v < nEq; ++v) eqRefMax = std::max(eqRefMax, eqRes0[v]);
+        for (int v = 0; v < nEq; ++v)
+            relMax = std::max(relMax,
+                              rnsF[v] / std::max(eqRes0[v], 1e-6 * eqRefMax));
+        rep.finalResidual = relMax;
+    }
     return rep;
 }
 

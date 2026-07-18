@@ -301,19 +301,32 @@ class SBLIBaseline:
         out.kind = rans.DBNSBoundaryKind.Extrapolate
         bcs.set("outlet", out)
 
-        # wall: isothermal at the record's own measured wall-temperature row
-        # (recovery upstream of the thermal switch, the s-condition after);
-        # the adiabatic case runs at its measured recovery value throughout
+        # wall thermal condition, per the record's own physics:
+        # - the wall-thermal (heated/cooled) campaigns are controlled
+        #   isothermal experiments, so the wall prescribes the record's
+        #   measured temperature row (recovery upstream of the thermal
+        #   switch, the s-condition after);
+        # - the 2011 adiabatic campaign is a genuinely adiabatic DNS, so the
+        #   wall is the solver's zero-heat-flux condition. Prescribing the
+        #   DNS recovery temperature there (the previous convention) forces
+        #   the MODEL to a nonzero wall heat flux wherever its own recovery
+        #   differs from the DNS value, which is a matched-thermal-state
+        #   sensitivity, not an adiabatic wall; the review flagged it and the
+        #   gate adjudication runs on the honest condition.
         wall = rans.DBNSBoundarySpec()
-        wall.kind = rans.DBNSBoundaryKind.NoSlipIsothermal
-        Tw_row_hat = record.wall_temperature_row()
-        xs_wall = np.unique(np.round(mesh.cell_centers()[:, 0], 12))
-        xw_star = xs_wall / units.delta0 + x_lo
-        Tw_faces_hat = np.interp(xw_star, record.x, Tw_row_hat,
-                                 left=Tw_row_hat[0], right=Tw_row_hat[-1])
-        wall_temps_dim = units.temperature(Tw_faces_hat)
-        wall.wall_temp = float(wall_temps_dim[0])
-        wall.set_wall_temp_profile(wall_temps_dim)
+        if record.meta.get("wall_thermal") == "adiabatic":
+            wall.kind = rans.DBNSBoundaryKind.NoSlipAdiabatic
+            wall_temps_dim = None
+        else:
+            wall.kind = rans.DBNSBoundaryKind.NoSlipIsothermal
+            Tw_row_hat = record.wall_temperature_row()
+            xs_wall = np.unique(np.round(mesh.cell_centers()[:, 0], 12))
+            xw_star = xs_wall / units.delta0 + x_lo
+            Tw_faces_hat = np.interp(xw_star, record.x, Tw_row_hat,
+                                     left=Tw_row_hat[0], right=Tw_row_hat[-1])
+            wall_temps_dim = units.temperature(Tw_faces_hat)
+            wall.wall_temp = float(wall_temps_dim[0])
+            wall.set_wall_temp_profile(wall_temps_dim)
         bcs.set("bottom", wall)
 
         st = rans.DBNSSettings()
@@ -354,8 +367,21 @@ class SBLIBaseline:
         # laminar sqrt(Pr), which would bias the heated cases' Stanton
         ref.recovery_factor = (1.9318 - 1.0) / (0.2 * MACH ** 2)
         obs = rans.DBNSObservation(self.solver, ref)
-        w = obs.wall_profile("bottom", self.wall_temps_dim,
-                             float(self.wall_temps_dim[0]))
+        if self.wall_temps_dim is None:
+            # adiabatic wall: the wall temperature is the SOLVED near-wall
+            # value (the zero-heat-flux condition makes the face temperature
+            # the zero-gradient extrapolation), so the reported qw is the
+            # discrete residual of the adiabatic condition (near zero) and
+            # St reads against the solved recovery temperature
+            cc = np.asarray(self.mesh.cell_centers())
+            xs_wall = np.unique(np.round(cc[:, 0], 12))
+            y1_star = float(cc[:, 1].min()) / self.units.delta0
+            xw_star = xs_wall / self.units.delta0 + self.meta["x_lo"]
+            s = self.sample_fields(xw_star, np.full(xs_wall.size, y1_star))
+            temps = self.units.temperature(np.asarray(s["T"]))
+        else:
+            temps = self.wall_temps_dim
+        w = obs.wall_profile("bottom", temps, float(temps[0]))
         x_star = np.asarray(w["x"]) / self.units.delta0 + self.meta["x_lo"]
         return {"x_star": x_star, "Cf": np.asarray(w["Cf"]),
                 "Cp": np.asarray(w["Cp"]), "qw": np.asarray(w["qw"]),

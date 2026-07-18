@@ -746,3 +746,45 @@ baseline's name, one added baseline, and one representation declaration.
    status, non-converged members never contribute QoIs (the extraction is
    status-gated, not only the scoring); and diverged solves invalidate any
    held fields so no member can inherit its predecessor's state.
+
+
+## Adjudication note (2026-07-18): gate rulings and corrections, recorded before any claim-bearing run
+
+Recorded by the reviewer's ruling during the post-audit restart, before any
+a-priori training or coupled propagation on the corrected implementation.
+
+1. Gate B is adjudicated PER CASE. The document's prerequisite clause reads
+   whole-gate; the reviewer ruled per-case on 2026-07-18, noting that the
+   pinned propagated folds (s = 0.5, 1.0, 1.9) are unaffected by the one
+   failing configuration. A case failing gate B is excluded from
+   claim-bearing coupled legs, takes the registered frozen-mean fallback on
+   its a-priori role, and its far-transfer-target role is reported as the
+   solver-capability boundary. The gates_adjudication.json record in the
+   results tree is the machine-readable form, enforced by the drivers.
+
+2. The adiabatic-campaign injection probe is EXPLORATORY. It was run after
+   the gate-B baseline was observed and cannot rehabilitate the gate; its
+   role is the pre-registered position-error attribution: the converged
+   sensitivity of the half-rise to the strongest moderated realizable
+   perturbation measured 0.16 reference lengths against the 2.95 offset,
+   with two of three bounding directions admitting no steady solution.
+
+3. The adiabatic wall boundary condition is corrected to the solver's
+   zero-heat-flux wall. The previous convention prescribed the DNS recovery
+   temperature as an isothermal wall, which forces a nonzero modeled wall
+   heat flux wherever the model's own recovery differs; that is a
+   matched-thermal-state sensitivity, not an adiabatic wall. Every gate and
+   baseline quantity for the adiabatic configuration regenerates under the
+   honest condition before adjudication. The s = 1.0 campaign REMAINS
+   isothermal at its measured recovery row: it is a controlled
+   isothermal-wall experiment in its own dataset, adjudicated as such.
+
+4. Gate A is measured in full: skin friction within 10 percent, the
+   momentum-thickness Reynolds number reported against the record's own
+   value at the same station, and the van-Driest log-region RMS within
+   5 percent, with the density convention rho_hat = 1/T_hat and each side's
+   own wall stress in the transform, one rule for both sides. Convergence is
+   the completed all-equation criterion of the density-based solver
+   (every live conservative equation's relative decay below tolerance plus
+   a direct per-cell state validation), and non-converged solves never
+   populate baseline caches.

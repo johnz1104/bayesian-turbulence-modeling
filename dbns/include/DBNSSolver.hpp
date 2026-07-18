@@ -170,6 +170,17 @@ private:
     void clampPositivity();
     void clampPositivityCore();
     double rhoResidualNorm() const;
+    // per-equation volume-scaled RMS residual norms (all NVAR conservative
+    // equations); the completed implicit-steady convergence criterion gates
+    // on EVERY live equation's relative decay, not density alone (a member
+    // could otherwise classify converged while momentum, energy or the
+    // turbulence equations are still moving, exactly the false-convergence
+    // class the audit closed on the pressure-based solvers)
+    std::array<double, NVAR> equationResidualNorms() const;
+    // direct per-cell conservative-state validation: every component finite
+    // and the decoded thermodynamic state admissible (max/min reductions
+    // drop NaN operands, so only an explicit sweep can prove integrity)
+    bool stateIsValid() const;
 
     // implicit (LU-SGS) steady march: matrix-free backward-Euler pseudo-time
     // with lower-upper symmetric Gauss-Seidel sweeps on the spectral-radius-
