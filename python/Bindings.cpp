@@ -751,7 +751,7 @@ PYBIND11_MODULE(rans_sst_py, m) {
         .def("fields", &dbnsFields)
         .def("set_target_correction",
              [](DBNSSolver& s, py::array_t<double> b, py::array_t<double> dq,
-                bool energy_reach) {
+                bool energy_reach, py::array_t<bool> mask) {
                  // b: (n_cells, 3, 3) symmetric target anisotropy; dq:
                  // (n_cells, 2) or (0,) turbulent heat-flux correction in
                  // solver units (<rho u_i''T''>/<rho>, m/s K). Values are
@@ -783,10 +783,31 @@ PYBIND11_MODULE(rans_sst_py, m) {
                          dq2[2 * ci + 1] = aq(ci, 1);
                      }
                  }
-                 s.setTargetCorrection(b6, dq2, energy_reach);
+                 std::vector<std::uint8_t> m8;
+                 if (mask.size() > 0) {
+                     auto am = mask.unchecked<1>();
+                     if ((int)am.shape(0) != nc)
+                         throw std::runtime_error(
+                             "set_target_correction: mask must be (n_cells,)");
+                     m8.resize(nc);
+                     for (int ci = 0; ci < nc; ++ci) m8[ci] = am(ci) ? 1 : 0;
+                 }
+                 s.setTargetCorrection(b6, dq2, energy_reach, m8);
              },
-             py::arg("b"), py::arg("dq"), py::arg("energy_reach") = true)
+             py::arg("b"), py::arg("dq"), py::arg("energy_reach") = true,
+             py::arg("mask") = py::array_t<bool>())
         .def("clear_target_correction", &DBNSSolver::clearTargetCorrection)
+        .def("limiter_active",
+             [](const DBNSSolver& s) {
+                 const auto& v = s.limiterActive();
+                 py::array_t<bool> out((py::ssize_t)v.size());
+                 auto a = out.mutable_unchecked<1>();
+                 for (py::ssize_t i = 0; i < (py::ssize_t)v.size(); ++i)
+                     a(i) = v[i] != 0;
+                 return out;
+             },
+             "Per-cell omega-production limiter activation of the last "
+             "residual evaluation (the solver's own branch record).")
         .def("injection_diagnostics",
              [](const DBNSSolver& s) {
                  const auto& d = s.injectionDiagnostics();

@@ -118,7 +118,10 @@ def _load_baseline(records, case, results_dir, quick, with_shock=True,
         results_dir, case if with_shock else "gate_a_attached"))["primitive"]
     base.solver.init_field(prim)
     if derived_probe:
-        base.solver.solve()
+        # property preparation (gradients + derived fields) WITHOUT a solver
+        # iteration: the loaded converged state is not advanced (the one-sweep
+        # probe drifted it by the order of the converged residual)
+        base.solver.prepare_properties()
     return base, prim
 
 
@@ -148,7 +151,8 @@ def stage_targets(records, results_dir, fold, quick, n_members, epochs):
                                  n_members=n_members, seed=MEMBER_SEED)
         np.savez_compressed(
             _targets_path(results_dir, fold, kind),
-            b=b_t.astype(np.float32), dq=dq.astype(np.float32))
+            b=b_t.astype(np.float32), dq=dq.astype(np.float32),
+            mask=mask)
         meta[f"{kind}_db_fro_med_masked"] = float(np.median(
             np.linalg.norm((b_t - b_base[None])[:, mask], axis=(2, 3))))
         meta[f"{kind}_dq_abs_med"] = float(np.median(np.abs(dq)))
@@ -156,6 +160,7 @@ def stage_targets(records, results_dir, fold, quick, n_members, epochs):
     corners.update(five_state_targets(b_base, mask, strain))
     np.savez_compressed(
         _targets_path(results_dir, fold, "corners"),
+        mask=mask,
         **{lab: b.astype(np.float32) for lab, b in corners.items()})
 
     # attached-control targets: the same fold models conditioned on the
@@ -172,7 +177,8 @@ def stage_targets(records, results_dir, fold, quick, n_members, epochs):
                                  n_members=n_members, seed=MEMBER_SEED)
         np.savez_compressed(
             _targets_path(results_dir, fold, kind, attached=True),
-            b=b_t.astype(np.float32), dq=dq.astype(np.float32))
+            b=b_t.astype(np.float32), dq=dq.astype(np.float32),
+            mask=amask)
 
     meta["wall_time_s"] = round(time.time() - t0, 1)
     json.dump(meta, open(os.path.join(
@@ -238,6 +244,8 @@ def stage_member(records, results_dir, fold, kind, index, quick,
         tg = np.load(_targets_path(results_dir, fold, "corners"))
         b_t = np.asarray(tg[corner], dtype=float)
         dq_dim = np.zeros((b_t.shape[0], 2))
+        inj_mask = (np.asarray(tg["mask"], bool) if "mask" in tg.files
+                    else np.array([], dtype=bool))
         out_path = os.path.join(_apo_dir(results_dir),
                                 f"member_{fold}_corner_{corner}.npz")
     else:
@@ -250,6 +258,8 @@ def stage_member(records, results_dir, fold, kind, index, quick,
                          dtype=float)
         dq = np.asarray(tg["dq"][index], dtype=float)
         dq_dim = dq_to_solver_units(dq[None], record, base.units)[0]
+        inj_mask = (np.asarray(tg["mask"], bool) if "mask" in tg.files
+                    else np.array([], dtype=bool))
         out_path = _member_path(results_dir, fold, kind, index,
                                 attached=attached)
 
@@ -258,7 +268,8 @@ def stage_member(records, results_dir, fold, kind, index, quick,
         # the registered anisotropy-only diagnostic: identical targets, the
         # energy-equation reach disabled, so the dq contribution is isolated
         dq_dim = np.zeros_like(dq_dim)
-    base.solver.set_target_correction(b_t, dq_dim, energy_reach)
+    base.solver.set_target_correction(b_t, dq_dim, energy_reach,
+                                      mask=inj_mask)
     rep = base.solver.solve()
     w = base.wall()
     lm = landmarks_from_wall(w)

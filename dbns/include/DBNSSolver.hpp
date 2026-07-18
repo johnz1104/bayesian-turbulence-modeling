@@ -6,6 +6,7 @@
 #include "SSTModel.hpp"
 #include "EvaluationTypes.hpp"
 #include <array>
+#include <cstdint>
 #include <vector>
 
 // ---------------------------------------------------------------------------
@@ -98,8 +99,15 @@ public:
     // the diagnostics rather than silently projecting.
     void setTargetCorrection(const std::vector<double>& b6,
                              const std::vector<double>& dq2,
-                             bool energyReach = true);
+                             bool energyReach = true,
+                             const std::vector<std::uint8_t>& mask = {});
     void clearTargetCorrection();
+    // per-cell omega-production limiter activation of the LAST residual
+    // evaluation (the solver's own branch decision, so activation maps are
+    // exact rather than a python recomputation)
+    const std::vector<std::uint8_t>& limiterActive() const {
+        return limiterActive_;
+    }
     const InjectionDiagnostics& injectionDiagnostics() const { return injDiag_; }
 
     // --- MMS support ---
@@ -193,6 +201,8 @@ private:
     // model-form injection state (values owned by the solver)
     void addInjectionFluxes();               // internal-face deferred correction
     std::vector<double>   bTarget6_;         // nCells x 6 target anisotropy
+    std::vector<std::uint8_t> injMask_;      // per-cell injection activity
+    std::vector<std::uint8_t> limiterActive_;  // omega-limiter branch record
     std::vector<double>   dqTarget2_;        // nCells x 2 heat-flux correction
     bool                  injectEnergyReach_ = true;
     InjectionDiagnostics  injDiag_;

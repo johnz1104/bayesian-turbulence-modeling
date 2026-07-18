@@ -55,6 +55,7 @@ DBNSSolver::DBNSSolver(const Mesh& mesh, const IdealGasEOS& eos,
     grad_.assign(nc, std::array<Vec3, 6>{});
     limiter_.assign(nc, std::array<double, 6>{});
     res_.assign(nc, StateVec{});
+    limiterActive_.assign(nc, 0);
     dtCell_.assign(nc, 0.0);
 
     // wall distance to the no-slip patches of THESE boundary conditions
@@ -554,7 +555,10 @@ void DBNSSolver::addTurbulenceSources() {
         // (SST-2003 corrected form; alpha*rho*S2 is the paper's documented misprint, see the
         // NASA TMR SST page). Singular-safe: as muT -> 0 the min selects S2, the correct
         // limit; min(S2, lim) <= S2 so the corrected term is bounded by the old one.
-        double PwSpec = std::min(S2, 10.0 * bStar * rho * k * w / std::max(muT, 1e-30));
+        double lim = 10.0 * bStar * rho * k * w / std::max(muT, 1e-30);
+        double PwSpec = std::min(S2, lim);
+        if (!limiterActive_.empty())
+            limiterActive_[ci] = (lim < S2) ? 1 : 0;
         double Pw = alpha * rho * PwSpec;                       // omega production
         double Dw = beta * rho * w * w;
         double crossW = 2.0 * (1.0 - F1) * rho * sstCoeffs_.sigma_w2 / w * gkgw;
@@ -601,7 +605,9 @@ void DBNSSolver::computeResidual() {
 // --- model-form injection (the deferred-correction coupling) -----------------
 void DBNSSolver::setTargetCorrection(const std::vector<double>& b6,
                                      const std::vector<double>& dq2,
-                                     bool energyReach) {
+                                     bool energyReach,
+                                     const std::vector<std::uint8_t>& mask) {
+    injMask_ = mask;
     int nc = mesh_.nCells();
     if ((int)b6.size() != 6 * nc)
         throw std::runtime_error("setTargetCorrection: b6 must be nCells*6");
@@ -622,6 +628,7 @@ void DBNSSolver::setTargetCorrection(const std::vector<double>& b6,
 void DBNSSolver::clearTargetCorrection() {
     bTarget6_.clear();
     dqTarget2_.clear();
+    injMask_.clear();
     injDiag_ = InjectionDiagnostics{};
 }
 
@@ -647,7 +654,13 @@ void DBNSSolver::clearTargetCorrection() {
 void DBNSSolver::addInjectionFluxes() {
     int nc = mesh_.nCells();
     injDiag_.checkedIters += 1;
+    const bool masked = (int)injMask_.size() == nc;
     for (int ci = 0; ci < nc; ++ci) {
+        // realizability is a property of ACTIVE targets; outside the
+        // injection mask the stored rows are the raw baseline placeholder
+        // and carry no injected flux (skipped below), so they are not
+        // checked (the review's convention item)
+        if (masked && !injMask_[ci]) continue;
         double margin = aniso::barycentricMargin(bTarget6_.data() + 6 * ci);
         if (margin < -1e-9) {
             injDiag_.allRealizable = false;
@@ -686,6 +699,14 @@ void DBNSSolver::addInjectionFluxes() {
     for (int fi = 0; fi < nIF; ++fi) {
         const Face& f = mesh_.face(fi);
         int P = f.owner, N = f.neighbor;
+        // the solver-side injection mask: correction fluxes exist only on
+        // faces INTERIOR to the active region (both cells active). A flux
+        // either crosses a face fully or not at all, so the correction ends
+        // conservatively at the mask boundary and cells outside the training
+        // support receive no injection as the member state evolves (the
+        // python-side baseline placeholder only cancelled at the initial
+        // state; this gate makes the inactivity exact for all iterations).
+        if (masked && (!injMask_[P] || !injMask_[N])) continue;
         double w = f.weight;
         double fxx = w * txx[P] + (1.0 - w) * txx[N];
         double fyy = w * tyy[P] + (1.0 - w) * tyy[N];

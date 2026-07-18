@@ -53,6 +53,10 @@ def _load_record(case, root=None):
 
 def activation(case):
     rec = _load_record(case)
+    # prefer the solver's own branch record when the fields cache carries it
+    cache = np.load(os.path.join(RESULTS, f"fields_{case}.npz"))
+    if "limiter_active" in cache.files:
+        return _activation_exact(case, rec, cache)
     base = SBLIBaseline.configure(rec, with_shock=True, nx=480, ny=224,
                                   x_hi=14.0, height=8.0, cfl=300.0,
                                   max_iterations=1, convergence_tol=1e-6,
@@ -122,6 +126,42 @@ def activation(case):
                              f"limiter_activation_{case}.png"), dpi=140)
     plt.close(fig)
     return {"fraction_overall": frac_all, "fraction_band_x5": frac_band}
+
+
+def _activation_exact(case, rec, cache):
+    base = SBLIBaseline.configure(rec, with_shock=True, nx=480, ny=224,
+                                  x_hi=14.0, height=8.0, cfl=300.0,
+                                  max_iterations=1, convergence_tol=1e-6,
+                                  yplus_target=0.05)
+    cc = np.asarray(base.mesh.cell_centers())
+    active = np.asarray(cache["limiter_active"], bool)
+    xs = np.unique(np.round(cc[:, 0], 12))
+    ys = np.unique(np.round(cc[:, 1], 12))
+    ix = np.searchsorted(xs, np.round(cc[:, 0], 12))
+    iy = np.searchsorted(ys, np.round(cc[:, 1], 12))
+    grid = np.zeros((ys.size, xs.size), bool)
+    grid[iy, ix] = active
+    x_star = xs / base.units.delta0
+    if hasattr(rec, "x"):
+        x_star = x_star + float(rec.x[0])
+    band = (np.abs(x_star) <= 5.0)[None, :] * np.ones_like(grid, bool)
+    frac_all = float(np.mean(grid))
+    frac_band = float(np.mean(grid[band])) if band.any() else float("nan")
+    fig, ax = plt.subplots(figsize=(9, 3))
+    ax.pcolormesh(x_star, ys / base.units.delta0, grid.astype(float),
+                  cmap="Reds", vmin=0, vmax=1, shading="auto")
+    ax.set_xlabel("x*")
+    ax.set_ylabel("y / delta0")
+    ax.set_ylim(0, 4)
+    ax.set_title(f"omega-production limiter activation (solver flag), {case} "
+                 f"(overall {frac_all:.3f}, |x*|<=5 band {frac_band:.3f})")
+    os.makedirs(os.path.join(RESULTS, "figures"), exist_ok=True)
+    fig.tight_layout()
+    fig.savefig(os.path.join(RESULTS, "figures",
+                             f"limiter_activation_{case}.png"), dpi=140)
+    plt.close(fig)
+    return {"fraction_overall": frac_all, "fraction_band_x5": frac_band,
+            "source": "solver-flag-exact"}
 
 
 def main():

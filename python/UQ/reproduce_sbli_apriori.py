@@ -39,12 +39,32 @@ sys.path.insert(0, os.path.join(_HERE, "..", "..", "build"))
 sys.path.insert(0, os.path.join(_HERE, ".."))
 
 from UQ import conformal
+from UQ import cache_fingerprint as cfp
 from UQ.datasets.sbli_interaction import SBLIInteractionDNS, SBLI_S_CASES
 from UQ.datasets.sbli_baseline import SBLIBaseline
 from UQ.datasets import sbli_apriori
 from UQ.datasets.sbli_apriori import SBLIAPriori, TEST_STRIDE
 
 DRIVER_SEED = 0
+# Physics schema token for every SBLI cache identity (the fingerprint
+# machinery of UQ.cache_fingerprint): bump exactly when the producing model
+# changes. v2 marks the honest adiabatic wall boundary condition and the
+# completed all-equation implicit convergence criterion; v1 (implicit, never
+# stamped) was the isothermal-convention, density-only-criterion round.
+SBLI_PHYSICS = "sbli-dbns-v2"
+
+
+def sbli_ident(kind, case, **extra):
+    """The cache identity every SBLI artifact carries: physics token, case,
+    and the production configuration that shaped the solve."""
+    ident = {"kind": kind, "physics": SBLI_PHYSICS, "case": case,
+             "config": {"nx": 480, "ny": 224, "x_hi": 14.0, "height": 8.0,
+                        "cfl": 300.0, "convergence_tol": 1e-6,
+                        "yplus_target": 0.05}}
+    ident.update(extra)
+    return ident
+
+
 GATE_A_CF = 2.56e-3        # measured incoming-layer skin friction (dataset)
 GATE_A_STATION = -7.65     # the incoming-profile station in x*
 ST_FLOOR = 1e-5            # pinned Stanton floor of the normalized score
@@ -83,8 +103,10 @@ def _wall_path(results_dir, case):
 
 
 def _save_wall(results_dir, case, w):
-    np.savez_compressed(_wall_path(results_dir, case), x_star=w["x_star"],
-                        Cf=w["Cf"], Cp=w["Cp"], qw=w["qw"], St=w["St"])
+    arrays = {"x_star": w["x_star"], "Cf": w["Cf"], "Cp": w["Cp"],
+              "qw": w["qw"], "St": w["St"]}
+    np.savez_compressed(_wall_path(results_dir, case),
+                        **cfp.attach(arrays, sbli_ident("sbli_wall", case)))
 
 
 def _fields_path(results_dir, case):
@@ -98,7 +120,16 @@ def _save_fields(results_dir, case, solver):
     f = solver.fields()
     prim = np.stack([np.asarray(f[k], dtype=float)
                      for k in ("rho", "u", "v", "p", "k", "omega")], axis=1)
-    np.savez_compressed(_fields_path(results_dir, case), primitive=prim)
+    arrays = {"primitive": prim}
+    if hasattr(solver, "limiter_active"):
+        # the solver's own omega-limiter branch record from the last residual
+        # evaluation of the converged solve: the EXACT activation map (the
+        # python recomputation stays as the approximate fallback for caches
+        # that predate this export)
+        arrays["limiter_active"] = np.asarray(solver.limiter_active(),
+                                              dtype=bool)
+    np.savez_compressed(_fields_path(results_dir, case),
+                        **cfp.attach(arrays, sbli_ident("sbli_fields", case)))
 
 
 def _gate_a_profile_metrics(base, record, cf_station):
@@ -201,12 +232,27 @@ def _warm_baseline(records, case, results_dir, quick, with_shock=True):
     return base
 
 
+def _npz_ident_ok(path, ident):
+    """True when the cache exists AND carries the matching identity; a
+    pre-fingerprint or mismatched cache is stale (path existence alone
+    authorized reuse of artifacts whose producing solver could not be
+    proven, the review's dependency-identity finding)."""
+    if not os.path.isfile(path):
+        return False
+    z = np.load(path, allow_pickle=True)
+    status, _ = cfp.check({k: z[k] for k in z.files}, ident)
+    return status == "match"
+
+
 def _case_cached(results_dir, case, history=True):
     strides = (TEST_STRIDE[case], sbli_apriori._train_stride(case))
     have = all(os.path.isfile(SBLIAPriori._cache_path(
         results_dir, case, st, history)) for st in strides)
-    return (have and os.path.isfile(_wall_path(results_dir, case))
-            and os.path.isfile(_fields_path(results_dir, case)))
+    return (have
+            and _npz_ident_ok(_wall_path(results_dir, case),
+                              sbli_ident("sbli_wall", case))
+            and _npz_ident_ok(_fields_path(results_dir, case),
+                              sbli_ident("sbli_fields", case)))
 
 
 def stage_baselines(records, results_dir, quick, regen):
