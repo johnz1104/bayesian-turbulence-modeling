@@ -100,9 +100,16 @@ def test_score_ensemble_coverage_and_landmarks():
     members = []
     for i in range(12):
         w = _synthetic_wall(x)
-        w["Cf"] = w["Cf"] * (1.0 + 0.05 * rng.normal())
-        w["Cp"] = w["Cp"] * (1.0 + 0.05 * rng.normal())
-        w["St"] = w["St"] * (1.0 + 0.05 * rng.normal())
+        # scale AND shift: a pure scaling leaves the logistic midpoint
+        # invariant, and under the unified sub-grid landmark rule twelve
+        # identical half-rises form a zero-width band (the old grid-index
+        # rule masked this by quantizing onto the truth's grid point); the
+        # streamwise shift gives the landmark ensemble genuine scatter
+        # around the truth, which is what the containment assertion tests
+        dxs = 0.15 * rng.normal()
+        w["Cf"] = np.interp(x - dxs, x, w["Cf"]) * (1.0 + 0.05 * rng.normal())
+        w["Cp"] = np.interp(x - dxs, x, w["Cp"]) * (1.0 + 0.05 * rng.normal())
+        w["St"] = np.interp(x - dxs, x, w["St"]) * (1.0 + 0.05 * rng.normal())
         members.append({"status": "EvaluationStatus.Converged",
                         "wall": w,
                         "landmarks": apo.landmarks_from_wall(w)})
