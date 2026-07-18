@@ -44,9 +44,11 @@ sys.path.insert(0, os.path.join(_HERE, ".."))
 from UQ.datasets.sbli_interaction import SBLIInteractionDNS
 from UQ.datasets.sbli_baseline import SBLIBaseline, SBLIUnits
 from UQ.datasets import sbli_apriori, sbli_aposteriori
+from UQ import evaluation
 from UQ.datasets.sbli_apriori import SBLIAPriori
 from UQ.datasets.sbli_aposteriori import (
     fold_models, cell_conditioning, member_targets, corner_targets,
+    five_state_targets,
     dq_to_solver_units, landmarks_from_wall, score_ensemble,
     N_MEMBERS, MEMBER_SEED, STATIONS)
 from UQ.reproduce_sbli_apriori import (
@@ -135,7 +137,7 @@ def stage_targets(records, results_dir, fold, quick, n_members, epochs):
     # interaction targets, conditioned on the fold's own converged baseline
     base, _ = _load_baseline(records, fold, results_dir, quick,
                              derived_probe=True)
-    feats, b_base, mask, basis_M = cell_conditioning(base, records[fold],
+    feats, b_base, mask, basis_M, strain = cell_conditioning(base, records[fold],
                                                      m_t_from_fields=True)
     meta["n_cells"] = int(len(feats))
     meta["mask_fraction"] = float(np.mean(mask))
@@ -151,6 +153,7 @@ def stage_targets(records, results_dir, fold, quick, n_members, epochs):
             np.linalg.norm((b_t - b_base[None])[:, mask], axis=(2, 3))))
         meta[f"{kind}_dq_abs_med"] = float(np.median(np.abs(dq)))
     corners = corner_targets(b_base, mask)
+    corners.update(five_state_targets(b_base, mask, strain))
     np.savez_compressed(
         _targets_path(results_dir, fold, "corners"),
         **{lab: b.astype(np.float32) for lab, b in corners.items()})
@@ -160,7 +163,7 @@ def stage_targets(records, results_dir, fold, quick, n_members, epochs):
     # no DNS record exists for this configuration)
     abase, _ = _load_baseline(records, "adiabatic", results_dir, quick,
                               with_shock=False, derived_probe=True)
-    afeats, ab_base, amask, abasis_M = cell_conditioning(
+    afeats, ab_base, amask, abasis_M, _astrain = cell_conditioning(
         abase, records["adiabatic"], m_t_from_fields=True)
     meta["attached_mask_fraction"] = float(np.mean(amask))
     for kind in KINDS:
@@ -193,7 +196,8 @@ def stage_targets_far(records, results_dir, quick, n_members, epochs):
     Y_tr = dq_tr[:, 0:2]
     base, _ = _load_baseline(records, "adiabatic", results_dir, quick,
                              derived_probe=True)
-    feats, b_base, mask, basis_M = cell_conditioning(base, records["adiabatic"])
+    feats, b_base, mask, basis_M, strain = cell_conditioning(base, records["adiabatic"],
+                                                     m_t_from_fields=True)
     meta = {"fold": "faradiab", "n_members": n_members, "epochs": epochs,
             "n_train": int(len(X_tr)), "n_cells": int(len(feats)),
             "mask_fraction": float(np.mean(mask))}
@@ -228,6 +232,8 @@ def stage_member(records, results_dir, fold, kind, index, quick,
     base, _ = _load_baseline(records, case, results_dir, quick,
                              with_shock=not attached, member_caps=True)
 
+    target_kind = kind[:-4] if (kind or "").endswith("_noq") else kind
+    energy_reach = not (kind or "").endswith("_noq")
     if corner is not None:
         tg = np.load(_targets_path(results_dir, fold, "corners"))
         b_t = np.asarray(tg[corner], dtype=float)
@@ -235,7 +241,7 @@ def stage_member(records, results_dir, fold, kind, index, quick,
         out_path = os.path.join(_apo_dir(results_dir),
                                 f"member_{fold}_corner_{corner}.npz")
     else:
-        tg = np.load(_targets_path(results_dir, fold, kind,
+        tg = np.load(_targets_path(results_dir, fold, target_kind,
                                    attached=attached))
         # dq-only target sets store a single shared anisotropy row (the
         # baseline itself); member rows index the heat-flux draws
@@ -248,7 +254,11 @@ def stage_member(records, results_dir, fold, kind, index, quick,
                                 attached=attached)
 
     t0 = time.time()
-    base.solver.set_target_correction(b_t, dq_dim, True)
+    if not energy_reach:
+        # the registered anisotropy-only diagnostic: identical targets, the
+        # energy-equation reach disabled, so the dq contribution is isolated
+        dq_dim = np.zeros_like(dq_dim)
+    base.solver.set_target_correction(b_t, dq_dim, energy_reach)
     rep = base.solver.solve()
     w = base.wall()
     lm = landmarks_from_wall(w)
@@ -302,53 +312,96 @@ def stage_score(records, results_dir, fold, n_members):
     for kind in KINDS:
         paths = [_member_path(results_dir, fold, kind, i)
                  for i in range(n_members)]
-        members = [_load_member(p) for p in paths if os.path.isfile(p)]
+        # a missing worker output is a NON-CONVERGED member for every
+        # denominator: the 18-of-24 instability rule reads against the
+        # REQUESTED count, never the found-file count
+        members = [(_load_member(p) if os.path.isfile(p)
+                    else {"status": "Missing(worker output absent)",
+                          "landmarks": {"x_s": None, "x_r": None,
+                                        "shock": None}})
+                   for p in paths]
+        n_found = sum(1 for p in paths if os.path.isfile(p))
         out[kind] = score_ensemble(members, record, baseline_wall=bwall)
-        out[kind]["n_solved"] = len(members)
-        if members:
-            # the pre-registered realizability-in-the-running-solve clause
+        out[kind]["n_requested"] = n_members
+        out[kind]["n_found"] = n_found
+        conv_m = [m for m in members if "Converged" in m["status"]]
+        if conv_m:
+            # the pre-registered realizability-in-the-running-solve clause,
+            # aggregated over CONVERGED members (a diverged member's
+            # diagnostics describe no admitted state)
             out[kind]["all_realizable_fraction"] = float(np.mean(
-                [m["all_realizable"] for m in members]))
+                [m["all_realizable"] for m in conv_m]))
             out[kind]["max_violation"] = float(np.max(
-                [m["max_violation"] for m in members]))
+                [m["max_violation"] for m in conv_m]))
         # the adiabatic-middle fold carries the independent campaign's wall
         # series as a second truth surface (the pre-registered pairing)
-        if fold == "s1.0" and "adiabatic" in records and members:
+        if fold == "s1.0" and "adiabatic" in records and n_found:
             out[kind]["second_surface"] = score_ensemble(
                 members, records["adiabatic"],
                 baseline_wall=_baseline_wall(results_dir, "adiabatic"))
 
-    # corner envelope: per-quantity [min, max] over the converged corners,
-    # containment of the truth at the pinned stations
-    corner_members = {}
-    for lab in ("1C_d1", "2C_d1", "3C_d1", "1C_d0.5", "2C_d0.5", "3C_d0.5"):
-        p = os.path.join(_apo_dir(results_dir),
-                         f"member_{fold}_corner_{lab}.npz")
-        if os.path.isfile(p):
-            corner_members[lab] = _load_member(p)
-    conv = {lab: m for lab, m in corner_members.items()
-            if "Converged" in m["status"]}
-    cout = {"n_corners": len(corner_members), "n_converged": len(conv),
-            "status": {lab: m["status"]
-                       for lab, m in corner_members.items()}}
+    # the registered anisotropy-only diagnostic: the flow targets propagated
+    # with the energy reach disabled, scored identically and labeled as the
+    # diagnostic it is (never a primary row)
+    noq_paths = [_member_path(results_dir, fold, "flow_noq", i)
+                 for i in range(n_members)]
+    noq = [(_load_member(p) if os.path.isfile(p)
+            else {"status": "Missing(worker output absent)",
+                  "landmarks": {"x_s": None, "x_r": None, "shock": None}})
+           for p in noq_paths]
+    if any(os.path.isfile(p) for p in noq_paths):
+        out["flow_energy_reach_disabled_diagnostic"] = score_ensemble(
+            noq, record, baseline_wall=bwall)
+
+    # eigenspace families: PER-AMPLITUDE envelopes over the converged
+    # members (never merged across amplitudes), the three-corner family and
+    # the documented five-state family separately, each with the EXACT
+    # discrete-forecast CRPS (the members ARE the forecast; the fair
+    # estimator applies to sampled predictives only)
     series = record.series
     xs = STATIONS[(STATIONS >= series.x[0]) & (STATIONS <= series.x[-1])]
-    if len(conv) >= 2:
-        truths = {"Cf": np.interp(xs, series.x, series.cf)}
-        if series.cp is not None:
-            truths["Cp"] = np.interp(xs, series.x, series.cp)
-        if series.St is not None and not np.all(np.isnan(series.St)):
-            truths["St"] = np.interp(xs, series.x, series.St)
-        for q, truth in truths.items():
-            ens = np.stack([np.interp(xs, m["wall"]["x_star"],
-                                      m["wall"][q])
-                            for m in conv.values()])
-            lo, hi = ens.min(axis=0), ens.max(axis=0)
-            cout[f"{q}_envelope_containment"] = float(np.mean(
-                (truth >= lo) & (truth <= hi)))
-            cout[f"{q}_envelope_halfwidth_median"] = float(
-                np.median(0.5 * (hi - lo)))
-    out["corners"] = cout
+    truths = {"Cf": np.interp(xs, series.x, series.cf)}
+    if series.cp is not None:
+        truths["Cp"] = np.interp(xs, series.x, series.cp)
+    if series.St is not None and not np.all(np.isnan(series.St)):
+        truths["St"] = np.interp(xs, series.x, series.St)
+
+    def _family_scores(labels):
+        fam = {}
+        for lab in labels:
+            p = os.path.join(_apo_dir(results_dir),
+                             f"member_{fold}_corner_{lab}.npz")
+            if os.path.isfile(p):
+                fam[lab] = _load_member(p)
+        conv = {lab: m for lab, m in fam.items()
+                if "Converged" in m["status"]}
+        rec_out = {"n_members": len(labels), "n_found": len(fam),
+                   "n_converged": len(conv),
+                   "status": {lab: m["status"] for lab, m in fam.items()}}
+        if len(conv) >= 2:
+            for q, truth in truths.items():
+                ens = np.stack([np.interp(xs, m["wall"]["x_star"],
+                                          m["wall"][q])
+                                for m in conv.values()])
+                lo, hi = ens.min(axis=0), ens.max(axis=0)
+                rec_out[f"{q}_envelope_containment"] = float(np.mean(
+                    (truth >= lo) & (truth <= hi)))
+                rec_out[f"{q}_envelope_halfwidth_median"] = float(
+                    np.median(0.5 * (hi - lo)))
+                rec_out[f"{q}_crps_exact_discrete"] = float(
+                    evaluation.crps_ensemble_biased(truth, ens.T))
+        return rec_out
+
+    out["corners"] = {
+        "d1.0": _family_scores(("1C_d1", "2C_d1", "3C_d1")),
+        "d0.5": _family_scores(("1C_d0.5", "2C_d0.5", "3C_d0.5")),
+    }
+    out["five_state"] = {
+        "d1.0": _family_scores(("1C_vmax_d1", "1C_vmin_d1", "2C_vmax_d1",
+                                "2C_vmin_d1", "3C_d1")),
+        "d0.5": _family_scores(("1C_vmax_d0.5", "1C_vmin_d0.5",
+                                "2C_vmax_d0.5", "2C_vmin_d0.5", "3C_d0.5")),
+    }
 
     # attached control: skin friction at the incoming-profile station per
     # member against the baseline's own value and the measured level
@@ -369,15 +422,19 @@ def stage_score(records, results_dir, fold, n_members):
             cfs.append(float(np.interp(GATE_A_STATION,
                                        m["wall"]["x_star"],
                                        m["wall"]["Cf"])))
+        base_err = abs(cf_base - GATE_A_CF)
         att[kind] = {
             "n_converged": n_conv,
             "cf_members": cfs,
-            "cf_shift_rel_median": (float(np.median(
-                np.abs(np.asarray(cfs) / cf_base - 1.0)))
+            # the REGISTERED criteria: member error to the MEASURED value,
+            # relative to the baseline's own error to it; and the 5-95 band
+            # HALF-width over the measured skin friction
+            "cf_error_over_baseline_error_median": (float(np.median(
+                np.abs(np.asarray(cfs) - GATE_A_CF)) / max(base_err, 1e-12))
                 if cfs else None),
-            "cf_band_over_baseline": (float(
-                (np.quantile(cfs, 0.95) - np.quantile(cfs, 0.05)) / cf_base)
-                if len(cfs) >= 2 else None),
+            "cf_band_halfwidth_over_data": (float(
+                0.5 * (np.quantile(cfs, 0.95) - np.quantile(cfs, 0.05))
+                / GATE_A_CF) if len(cfs) >= 2 else None),
         }
     out["attached_control"] = att
 
@@ -431,7 +488,11 @@ def stage_orchestrate(records, results_dir, quick, throttle, n_members,
                 jobs.append(j)
         if corners:
             for lab in ("1C_d1", "2C_d1", "3C_d1",
-                        "1C_d0.5", "2C_d0.5", "3C_d0.5"):
+                        "1C_d0.5", "2C_d0.5", "3C_d0.5",
+                        "1C_vmax_d1", "1C_vmin_d1", "2C_vmax_d1",
+                        "2C_vmin_d1",
+                        "1C_vmax_d0.5", "1C_vmin_d0.5", "2C_vmax_d0.5",
+                        "2C_vmin_d0.5"):
                 jobs.append(["--stage", "member", "--fold", fold,
                              "--corner", lab] + common)
         # cached members never re-solve: drop jobs whose output exists
@@ -439,11 +500,13 @@ def stage_orchestrate(records, results_dir, quick, throttle, n_members,
             results_dir, fold, j))]
 
     summary = {}
-    # phase 1: the interaction ensembles and corner families per fold (the
-    # primary clauses land first)
+    # phase 1: the interaction ensembles, the eigenspace families (three-
+    # corner and five-state) and the registered anisotropy-only diagnostic
+    # (the flow targets with the energy reach disabled) per fold
     for fold in folds:
         stage_targets(records, results_dir, fold, quick, n_members, epochs)
-        failed = _run_pool(_member_jobs(fold, corners=True), throttle,
+        failed = _run_pool(_member_jobs(fold, kinds=KINDS + ("flow_noq",),
+                                        corners=True), throttle,
                            log_path)
         print(f"[orchestrate {fold}] interaction members done, "
               f"{failed} worker failures")

@@ -38,6 +38,7 @@ Construction, exactly as pinned:
 import numpy as np
 
 from .. import discrepancy
+from .. import evaluation
 from .. import realizability
 from ..eigenspace import EigenspacePerturbation
 from ._common import _CMU
@@ -142,7 +143,7 @@ def cell_conditioning(baseline, record, m_t_from_fields=False):
     mask = ((y_star >= 0.05) & (y_star <= MASK_Y_MAX)
             & (k > MASK_K_FLOOR * float(np.max(k)))
             & (x_star >= record.x[0]) & (x_star <= record.x[-1]))
-    return features, b_base, mask, basis_M
+    return features, b_base, mask, basis_M, S_full
 
 
 def _db3_to_tensor(draws):
@@ -210,6 +211,23 @@ def corner_targets(b_base, mask, deltas=CORNER_DELTAS):
     return out
 
 
+def five_state_targets(b_base, mask, strain, deltas=CORNER_DELTAS):
+    """The documented 2017 five-state family as injection targets, exactly
+    the corner_targets conventions (projected base, masked reversion) with
+    the production-extremal eigenvector alignments built from the baseline
+    strain. Labels: {corner}_vmax/_vmin and 3C, suffixed _d<delta>."""
+    b_real, _ = realizability.project_anisotropy(b_base)
+    out = {}
+    for delta_b in deltas:
+        fam = EigenspacePerturbation.five_state_set(b_real, strain,
+                                                    delta_b=delta_b)
+        for label, b_t in fam.items():
+            b = np.array(b_t)
+            b[~mask] = b_base[~mask]
+            out[f"{label}_d{delta_b:g}"] = b
+    return out
+
+
 def dq_to_solver_units(dq, record, units):
     """(m, n, 2) correction in (u_tau_ref, T_w) units -> the solver's
     dimensional Favre flux <rho u_i'' T''>/<rho> in m/s K."""
@@ -220,10 +238,17 @@ def dq_to_solver_units(dq, record, units):
 
 def landmarks_from_wall(w):
     """Separation, reattachment and the wall-pressure half-rise of one wall
-    record, the gate-B rule applied to every solve alike."""
-    x = np.asarray(w["x_star"])
-    cf = np.asarray(w["Cf"])
-    cp = np.asarray(w["Cp"])
+    record, with the SAME smoothing and interpolated-crossing rule the DNS
+    records' landmark methods use (one rule for both sides, as registered):
+    the pressure series is moving-averaged at the records' width before the
+    half-rise level crossing, and every crossing (pressure half-rise, Cf
+    zero crossings) is linearly interpolated rather than read at a grid
+    index."""
+    from .sbli_interaction import _moving_average, _SMOOTH_WIDTH
+    x = np.asarray(w["x_star"], float)
+    cf = np.asarray(w["Cf"], float)
+    cp = _moving_average(np.asarray(w["Cp"], float), x, _SMOOTH_WIDTH)
+
     neg = cf < 0.0
     x_s = x_r = None
     if neg.any():
@@ -235,14 +260,28 @@ def landmarks_from_wall(w):
         if neg[-1]:
             ends.append(neg.size)
         i0, i1 = max(zip(starts, ends), key=lambda se: se[1] - se[0])
-        x_s = float(x[i0])
-        x_r = float(x[min(i1, x.size - 1)])
+        if i0 > 0:
+            f = cf[i0 - 1] / (cf[i0 - 1] - cf[i0])
+            x_s = float(x[i0 - 1] + f * (x[i0] - x[i0 - 1]))
+        else:
+            x_s = float(x[i0])
+        i1 = min(i1, x.size - 1)
+        if 0 < i1 < x.size and cf[i1 - 1] < 0.0 <= cf[i1]:
+            f = -cf[i1 - 1] / (cf[i1] - cf[i1 - 1])
+            x_r = float(x[i1 - 1] + f * (x[i1] - x[i1 - 1]))
+        else:
+            x_r = float(x[i1])
     plat_up = float(np.median(cp[x < x[0] + 3.0]))
     plat_dn = float(np.median(cp[x > x[-1] - 2.0]))
     level = 0.5 * (plat_up + plat_dn)
     above = cp >= level
-    idx = int(np.argmax(above)) if above.any() else -1
-    x_half = float(x[idx]) if idx > 0 else None
+    idx = int(np.argmax(above))
+    if not above.any() or idx == 0:
+        x_half = None
+    else:
+        x0, x1v = x[idx - 1], x[idx]
+        v0, v1 = cp[idx - 1], cp[idx]
+        x_half = float(x0 + (level - v0) * (x1v - x0) / max(v1 - v0, 1e-30))
     return {"x_s": x_s, "x_r": x_r, "shock": x_half}
 
 
@@ -275,6 +314,13 @@ def score_ensemble(members, record, stations=STATIONS, baseline_wall=None):
     truths = {"Cf": np.interp(xs, series.x, series.cf)}
     if series.cp is not None:
         truths["Cp"] = np.interp(xs, series.x, series.cp)
+    elif hasattr(record, "cp_from_field"):
+        # the s = 1.0 series' pressure column is the documented quantized
+        # quirk; the record provides the field-row Cp exactly for this case
+        xf, cpf = record.cp_from_field()
+        keep = (xs >= xf[0]) & (xs <= xf[-1])
+        if keep.any():
+            truths["Cp"] = np.interp(xs, xf, cpf)
     if series.St is not None and not np.all(np.isnan(series.St)):
         truths["St"] = np.interp(xs, series.x, series.St)
 
@@ -310,6 +356,13 @@ def score_ensemble(members, record, stations=STATIONS, baseline_wall=None):
                     out[f"{q}_coverage_{level}_{rname}"] = float(
                         np.mean(cover[rmask]))
         out[f"{q}_median_abs_error"] = float(np.median(np.abs(med - truth)))
+        # proper scores and calibration diagnostics at the pinned stations
+        # (fair estimators: the members are samples of the predictive)
+        out[f"{q}_crps_stations"] = float(
+            evaluation.crps_ensemble(truth, ens.T))
+        out[f"{q}_pit_randomized"] = [float(v) for v in
+                                      evaluation.pit_values_randomized(
+                                          truth, ens.T, seed=0)]
         for rname, rmask in regions.items():
             if rmask.any():
                 out[f"{q}_median_abs_error_{rname}"] = float(

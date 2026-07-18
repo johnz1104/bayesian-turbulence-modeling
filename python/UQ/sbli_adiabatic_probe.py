@@ -49,7 +49,7 @@ def main():
     # one warm baseline per member solve (independent, order-free)
     cond_base, _ = _load_baseline(records, "adiabatic", RESULTS, quick=False,
                                   member_caps=False, derived_probe=True)
-    _features, b_base, mask, _basis_M = cell_conditioning(cond_base, rec)
+    _features, b_base, mask, _basis_M, _S = cell_conditioning(cond_base, rec)
     targets = corner_targets(b_base, mask, deltas=(0.5,))
 
     w0 = cond_base.wall()
