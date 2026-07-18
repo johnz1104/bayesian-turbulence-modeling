@@ -59,9 +59,17 @@ def main():
     print(f"baseline half-rise {x0:.3f} vs DNS {dns0:.3f} (offset {off0:.3f})",
           flush=True)
 
+    budget = int(os.environ.get("QBTM_ADIA_PROBE_BUDGET", "0"))
     for label, b_t in targets.items():
-        base, _ = _load_baseline(records, "adiabatic", RESULTS, quick=False,
-                                 member_caps=True)
+        if budget > 0:
+            from UQ.reproduce_sbli_aposteriori import _configure, _fields_path
+            base = _configure(records["adiabatic"], False, with_shock=True,
+                              max_iterations=budget, convergence_tol=1e-3)
+            prim = np.load(_fields_path(RESULTS, "adiabatic"))["primitive"]
+            base.solver.init_field(prim)
+        else:
+            base, _ = _load_baseline(records, "adiabatic", RESULTS,
+                                     quick=False, member_caps=True)
         dq0 = np.zeros((b_t.shape[0], 2))
         t0 = time.time()
         base.solver.set_target_correction(np.asarray(b_t, float), dq0, True)
