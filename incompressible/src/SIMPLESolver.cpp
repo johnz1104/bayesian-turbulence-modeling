@@ -695,6 +695,11 @@ void SIMPLESolver::reportTimers() const {
 
 ConvergenceHistory SIMPLESolver::solve(FlowFields& f) { // input: FlowField object / flow variables
     momSeconds_ = pAssembleSeconds_ = pSolveSeconds_ = turbSeconds_ = 0.0;
+    // the AMG split shares the per-solve window (a reused solver object
+    // would otherwise print lifetime-accumulated setup/iterate times against
+    // per-solve phase times, an incomparable mix)
+    if (auto* amg = dynamic_cast<AMGSolver*>(pSolver_.get()))
+        amg->setupSeconds = amg->iterateSeconds = 0.0;
     ConvergenceHistory hist;
     // Reynolds-stress injection: fresh blend state and diagnostics per solve;
     // the explicit source is under-relaxed inside the outer loop (see
@@ -773,8 +778,6 @@ ConvergenceHistory SIMPLESolver::solve(FlowFields& f) { // input: FlowField obje
                                     settings_.innerTolerance);
             for (int ci = 0; ci < mesh_.nCells(); ++ci) f.U[ci].x = Ux[ci];
         }
-        momSeconds_ += std::chrono::duration<double>(
-            std::chrono::steady_clock::now() - tMom0).count();
         // store aP from Ux for corrections (diagonal dominance is similar for all components)
         std::vector<double> aPstore = aP_;              // relaxed — for velocity correction
         std::vector<double> aPrhie = aPunrelaxed_;      // unrelaxed — for pressure Laplacian
@@ -792,6 +795,8 @@ ConvergenceHistory SIMPLESolver::solve(FlowFields& f) { // input: FlowField obje
             resUz = mSolver_->solve(momSys, Uz, settings_.innerIterations, settings_.innerTolerance);
             for (int ci = 0; ci < mesh_.nCells(); ++ci) f.U[ci].z = Uz[ci];
         }
+        momSeconds_ += std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - tMom0).count();
         applyVelocityBC(f.U, mesh_, bcs_);
 
         // 3. Assemble + solve pressure correction
@@ -861,8 +866,7 @@ ConvergenceHistory SIMPLESolver::solve(FlowFields& f) { // input: FlowField obje
             std::vector<double> omVec = f.omega.data();
             resOm = tSolver_->solve(omSys, omVec, settings_.innerIterations,
                                     settings_.innerTolerance);
-            turbSeconds_ += std::chrono::duration<double>(
-                std::chrono::steady_clock::now() - tT0).count();
+
             for (int ci = 0; ci < mesh_.nCells(); ++ci) f.omega[ci] = omVec[ci];
             f.omega.clamp(settings_.omegaMin, 1e15);
             applyOmegaBC(f.omega, mesh_, bcs_, nu_, sst_.coeffs.beta1);
@@ -916,6 +920,10 @@ ConvergenceHistory SIMPLESolver::solve(FlowFields& f) { // input: FlowField obje
             omChangeNorm = omMaxDiff / omMaxVal;
             lastKChange  = kChangeNorm;
             lastOmChange = omChangeNorm;
+            // the turbulence phase ends here: solves, clamps, BCs, wall
+            // repinning and the change norms are all inside the account
+            turbSeconds_ += std::chrono::duration<double>(
+                std::chrono::steady_clock::now() - tT0).count();
         }
 
         // 6. Track residuals

@@ -36,3 +36,25 @@ def test_pool_matches_serial_bit_for_bit(rs):
     np.testing.assert_array_equal(c_pool.X, c_serial.X)
     np.testing.assert_array_equal(c_pool.loglik, c_serial.loglik)
     np.testing.assert_array_equal(c_pool.preds, c_serial.preds)
+
+
+def test_couette_pool_matches_serial(rs):
+    """The inherited pool machinery is bit-identical on the Couette subclass
+    too (its own forward map and spawn spec)."""
+    from UQ.datasets import CouetteDNS
+    from UQ.datasets.couette_forward import CouetteCalibration
+    if not CouetteDNS.is_available(507):
+        pytest.skip("couette DNS_data not present")
+    dns = CouetteDNS.load(507)
+    kw = dict(nu=1.0 / 20000.0, n_stations=8)
+
+    c_serial = CouetteCalibration(dns, **kw)
+    nv_serial = c_serial.run_ensemble(n=2, seed=0)
+
+    c_pool = CouetteCalibration(dns, **kw)
+    nv_pool = c_pool.run_ensemble(n=2, seed=0, n_workers=2)
+
+    assert nv_pool == nv_serial
+    np.testing.assert_array_equal(c_pool.X, c_serial.X)
+    np.testing.assert_array_equal(c_pool.loglik, c_serial.loglik)
+    np.testing.assert_array_equal(c_pool.preds, c_serial.preds)

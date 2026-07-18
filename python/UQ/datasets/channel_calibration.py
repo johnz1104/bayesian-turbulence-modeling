@@ -190,6 +190,15 @@ class ChannelCalibration:
             import multiprocessing as mp
             ctx = mp.get_context("spawn")
             done = 0
+            # BLAS pinning must be in the environment BEFORE the spawned
+            # interpreter imports numpy (thread counts are read at library
+            # load, so the initializer alone is too late); the parent sets
+            # the variables for the spawn and restores its own afterwards
+            _blas = ("OMP_NUM_THREADS", "VECLIB_MAXIMUM_THREADS",
+                     "OPENBLAS_NUM_THREADS")
+            _saved = {v: os.environ.get(v) for v in _blas}
+            for v in _blas:
+                os.environ[v] = "1"
             with ctx.Pool(min(n_workers, n), initializer=_member_pool_init,
                           initargs=(type(self), self._spawn_kwargs)) as pool:
                 jobs = [(i, X[i].tolist()) for i in range(n)]
@@ -204,6 +213,11 @@ class ChannelCalibration:
                     if verbose and done % 10 == 0:
                         print(f"  ensemble {done}/{n}  loglik={ll:.1f}",
                               flush=True)
+            for v, val in _saved.items():
+                if val is None:
+                    os.environ.pop(v, None)
+                else:
+                    os.environ[v] = val
             return self._finalize_ensemble(X, loglik, preds, converged)
         for i in range(n):
             # a FRESH forward model per member: every member solves COLD, so
