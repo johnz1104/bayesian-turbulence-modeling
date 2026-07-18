@@ -2040,9 +2040,9 @@
       ]
      },
      {
-      "separation": NaN,
-      "reattachment": NaN,
-      "bubble_length": NaN,
+      "separation": null,
+      "reattachment": null,
+      "bubble_length": null,
       "status": "DivergenceDetected",
       "iterations": 2593.0,
       "all_realizable": 1.0
@@ -2112,9 +2112,9 @@
       ]
      },
      {
-      "separation": NaN,
-      "reattachment": NaN,
-      "bubble_length": NaN,
+      "separation": null,
+      "reattachment": null,
+      "bubble_length": null,
       "status": "DivergenceDetected",
       "iterations": 6327.0,
       "all_realizable": 1.0
@@ -2248,17 +2248,17 @@
       ]
      },
      {
-      "separation": NaN,
-      "reattachment": NaN,
-      "bubble_length": NaN,
+      "separation": null,
+      "reattachment": null,
+      "bubble_length": null,
       "status": "DivergenceDetected",
       "iterations": 1897.0,
       "all_realizable": 1.0
      },
      {
-      "separation": NaN,
-      "reattachment": NaN,
-      "bubble_length": NaN,
+      "separation": null,
+      "reattachment": null,
+      "bubble_length": null,
       "status": "DivergenceDetected",
       "iterations": 1431.0,
       "all_realizable": 1.0
@@ -2296,9 +2296,9 @@
       ]
      },
      {
-      "separation": NaN,
-      "reattachment": NaN,
-      "bubble_length": NaN,
+      "separation": null,
+      "reattachment": null,
+      "bubble_length": null,
       "status": "DivergenceDetected",
       "iterations": 1140.0,
       "all_realizable": 1.0
@@ -2464,17 +2464,17 @@
       ]
      },
      {
-      "separation": NaN,
-      "reattachment": NaN,
-      "bubble_length": NaN,
+      "separation": null,
+      "reattachment": null,
+      "bubble_length": null,
       "status": "DivergenceDetected",
       "iterations": 2877.0,
       "all_realizable": 1.0
      },
      {
-      "separation": NaN,
-      "reattachment": NaN,
-      "bubble_length": NaN,
+      "separation": null,
+      "reattachment": null,
+      "bubble_length": null,
       "status": "DivergenceDetected",
       "iterations": 3760.0,
       "all_realizable": 1.0
@@ -3668,5 +3668,11 @@
     "energy_score": 0.15481562695025533
    }
   }
+ },
+ "provenance": {
+  "produced": "2026-07-17",
+  "producer_branch": "expA/corrected-reruns",
+  "trunk_base": "3443a8a",
+  "note": "hills corrected-solver regeneration (reproduce_separated_hills_aposteriori.py); non-finite member values are null, with the member status recording why (non-converged members carry no fields)"
  }
 }

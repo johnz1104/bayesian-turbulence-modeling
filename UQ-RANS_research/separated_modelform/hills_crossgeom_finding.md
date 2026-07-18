@@ -380,9 +380,15 @@ BFS, against DNS reattachment 6.28: the corrected baseline moves toward the data
 converged, mean 6.549, band [5.35, 7.42] CONTAINING the truth and the BEST
 reattachment CRPS (0.245 fair, versus the Gaussian's 0.268). The committed statements
 that the flow band misses the reattachment truth and that the flow does not beat the
-other methods on reattachment are therefore WITHDRAWN for this geometry: they were
-substantially artifacts of the omega-production misprint, whose excess production in
-the separated shear layer the flow's sampled corrections were compensating. What does
+other methods on reattachment are therefore WITHDRAWN for this geometry. The
+regeneration changed several things at once (the production limiter, the unclipped
+cross-diffusion, the completed stress operator, the honest convergence
+classification, and the clean member handling), so without a term-by-term ablation
+the defensible statement is that the committed result was NOT ROBUST to the
+integrated corrections; the production limiter, whose excess omega production in the
+separated shear layer the flow's sampled corrections were plausibly compensating, is
+the leading candidate mechanism, stated as a candidate rather than an established
+attribution. What does
 not move: station-Cf coverage stays far below nominal for every method (flow 0.4,
 Gaussian 0.4 at nominal 0.9), so the full pre-registered coverage clause still fails
 on the conjunction; the negative is now SCOPED to the wall-quantity block rather than
@@ -408,9 +414,12 @@ missing, CRPS 0.331). BFS-trained flow on the hills: mean 4.619 against truth 4.
 (mean error 0.065 where the Gaussian's is 1.92) with the honest caveats stated
 plainly: 7 of 24 members do not converge, and the containing band is very wide
 ([0.92, 7.45]), so the containment is dispersion-driven; the CRPS advantage over the
-Gaussian (0.882 versus 1.540 fair) is the defensible comparative statement. Probe
-velocity-field coverage remains poor for both methods in both directions (0.27), the
-field-level counterpart of the wall-quantity failure.
+Gaussian (0.882 versus 1.540 fair) is the defensible comparative statement. The
+coverage counterparts remain poor in each direction on that direction's own
+observable set: BFS-trained-on-hills velocity-probe coverage is 0.27 for either
+method, and hills-trained-on-BFS station-Cf coverage is 0.20 (the BFS leg carries
+wall stations, not velocity probes; the two directions are measured by different
+observables and are quoted separately).
 
 The five-state family contributes NO new converged envelope member on either geometry
 at either amplitude, for a structural reason worth recording: a Boussinesq-based
