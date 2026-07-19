@@ -90,7 +90,9 @@ def _configure(record, quick, with_shock=True, max_iterations=None,
     # as 1/y1^2 and at y1+ near one it is too weak to select the log-law
     # branch against the spurious near-wall equilibrium (the gate bring-up
     # measured the flip at matched conditions); growth stays near 1.04
+    verbose = os.environ.get("QBTM_SBLI_VERBOSE", "") == "1"
     return SBLIBaseline.configure(record, with_shock=with_shock,
+                                  verbose=verbose, report_interval=2000,
                                   nx=480, ny=224, x_hi=14.0, height=8.0,
                                   cfl=300.0,
                                   max_iterations=max_iterations or 250000,

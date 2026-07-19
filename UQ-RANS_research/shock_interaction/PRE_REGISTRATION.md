@@ -788,3 +788,22 @@ a-priori training or coupled propagation on the corrected implementation.
    (every live conservative equation's relative decay below tolerance plus
    a direct per-cell state validation), and non-converged solves never
    populate baseline caches.
+
+5. Dated criterion refinement (2026-07-18, before any corrected gate or
+   baseline result exists): a per-equation diagnostic on the attached
+   adiabatic configuration showed the all-equation reduction pool
+   degenerating through the omega equation, whose volume-scaled residual
+   RMS is dominated by wall-adjacent cells (omega scales as nu over y
+   squared and the wall rows are re-pinned every iteration), a reference
+   scale many orders above the mean flow; pooling it floors every other
+   equation into quiescence and reduces the criterion to an omega decay
+   unreachable from a wall-slaved scale. The criterion is refined to the
+   convention already adjudicated for the compressible SIMPLE solver in
+   the post-audit remediation: the four mean-flow conservative equations
+   gate on relative residual decay with the quiescent-direction floor
+   pooled over their commensurate scales, and the turbulence equations
+   gate on carried dimensionless field-change norms measured on the
+   accepted post-clamp state, all below the same tolerance, plus the
+   direct per-cell state validation. Every solved equation remains in the
+   criterion under stated semantics; no gate or baseline artifact
+   predating this note was produced under it.
