@@ -303,14 +303,14 @@ class SBLIAPriori:
         the test stride (the machinery check)."""
         cases = [c for c in self.test_sets
                  if self.test_sets[c]["dq"] is not None]
+        db_raw = leg == "db" and not self.db_gate()["all_pass"]
         X_tr = np.concatenate([
             self._features(self.train_sets[c], history) for c in cases])
         Y_tr = np.concatenate([
-            self._target(self.train_sets[c], leg,
-                         db_raw=leg == "db" and db_raw) for c in cases])
+            self._target(self.train_sets[c], leg, db_raw=db_raw)
+            for c in cases])
         X_te = np.concatenate([
             self._features(self.test_sets[c], history) for c in cases])
-        db_raw = leg == "db" and not self.db_gate()["all_pass"]
         if leg == "db":
             Y_te = np.concatenate([self.test_sets[c]["db_free"]
                                    for c in cases])

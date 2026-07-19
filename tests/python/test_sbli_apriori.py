@@ -133,6 +133,11 @@ def test_loso_smoke_epoch():
     # the joint leg carries the energy score
     res_j = study.insample("dq_joint", history=False, seeds=(0,), epochs=1)
     assert "energy_score" in res_j["models"]["flow"][0]
+    # the db leg exercises the feasibility gate and the basis component map
+    # on the in-sample split too (this path once referenced the reversion
+    # flag before computing it, a defect only this leg reaches)
+    res_db = study.insample("db", history=False, seeds=(0,), epochs=1)
+    assert set(res_db["models"]) == {"flow", "gauss", "pooled"}
 
 
 def test_seed_mean():
