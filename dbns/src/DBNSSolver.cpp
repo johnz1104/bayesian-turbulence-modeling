@@ -937,6 +937,9 @@ SolveReport DBNSSolver::solveImplicitSteady() {
     int nc = mesh_.nCells();
     double res0 = -1.0;
     std::array<double, NVAR> eqRes0{};
+    // carried turbulence field-change norms (never fresh zeros): a rejected
+    // step keeps the previous accepted step's values
+    double lastKChange = 1.0, lastOmChange = 1.0;
     if ((int)dW_.size() != nc) dW_.assign(nc, StateVec{});
 
     double betaMax = std::max(sstCoeffs_.beta1, sstCoeffs_.beta2);
@@ -1068,7 +1071,20 @@ SolveReport DBNSSolver::solveImplicitSteady() {
 
         const std::array<double, NVAR> rns = equationResidualNorms();
         double rn = rns[I_RHO];
-        const int nEq = settings_.turbulent ? NVAR : 4;
+        // Convergence judges EVERY solved equation, split by semantics as in
+        // the compressible SIMPLE criterion: the mean-flow equations
+        // (commensurate conservative scales) gate on relative residual decay,
+        // while k and omega gate on dimensionless field-change norms. The
+        // omega equation's volume-scaled residual RMS is dominated by
+        // wall-adjacent cells whose omega ~ nu / y^2 is re-pinned every
+        // iteration, a scale many orders above the mean flow; pooling it into
+        // the reduction references floors every other equation into
+        // quiescence and reduces the criterion to an omega decay it can never
+        // deliver from a wall-slaved scale. The field-change norm measures
+        // what a steady solve actually owes: the turbulence state stopped
+        // moving (the update through the destruction-stiff diagonal, and the
+        // re-pinned wall rows read exactly stationary).
+        const int nEq = 4;
         if (iter <= freezeIter || res0 < 0.0) {
             res0 = std::max(res0, std::max(rn, 1e-30));
             for (int v = 0; v < nEq; ++v)
@@ -1083,18 +1099,41 @@ SolveReport DBNSSolver::solveImplicitSteady() {
         for (int v = 0; v < nEq; ++v)
             relMax = std::max(relMax,
                               rns[v] / std::max(eqRes0[v], 1e-6 * eqRefMax));
-        if (settings_.verbose && (iter % settings_.reportInterval == 0))
+        if (settings_.turbulent) {
+            // ||W - Wsave||_inf / ||W||_inf on the conservative turbulence
+            // variables, measured on the ACCEPTED post-clamp state so the
+            // wall omega re-pin cannot masquerade as motion; carried between
+            // iterations by assignment (rejected steps skip this block)
+            double kVal = 1e-30, omVal = 1e-30, kDiff = 0.0, omDiff = 0.0;
+            for (int ci = 0; ci < nc; ++ci) {
+                kVal   = std::max(kVal,  std::abs(W_[ci][4]));
+                omVal  = std::max(omVal, std::abs(W_[ci][5]));
+                kDiff  = std::max(kDiff,  std::abs(W_[ci][4] - Wsave[ci][4]));
+                omDiff = std::max(omDiff, std::abs(W_[ci][5] - Wsave[ci][5]));
+            }
+            lastKChange  = kDiff / kVal;
+            lastOmChange = omDiff / omVal;
+        }
+        const double turbMax = settings_.turbulent
+            ? std::max(lastKChange, lastOmChange) : 0.0;
+        if (settings_.verbose && (iter % settings_.reportInterval == 0)) {
             std::printf("  [lusgs] iter %6d  cfl %.1f  res_rho %.3e (rel %.3e)"
-                        "  rel_max %.3e\n",
-                        iter, cfl, rn, rn / res0, relMax);
+                        "  rel_max %.3e  rel_eq", iter, cfl, rn, rn / res0,
+                        relMax);
+            for (int v = 0; v < nEq; ++v)
+                std::printf(" %.2e",
+                            rns[v] / std::max(eqRes0[v], 1e-6 * eqRefMax));
+            std::printf("  dk %.2e dom %.2e\n", lastKChange, lastOmChange);
+        }
         if (iter % settings_.reportInterval == 0)
             rep.residualHistory.push_back(rn);
         if (iter > freezeIter && !limiterFrozen && rn / res0 < 1e-2)
             limiterFrozen = true;
-        // convergence requires EVERY live equation's relative decay below the
-        // tolerance AND a directly validated state (the per-cell sweep; the
-        // acceptance logic alone cannot prove finiteness)
-        if (iter > freezeIter && relMax < settings_.convergenceTol) {
+        // convergence requires EVERY live equation below the tolerance under
+        // its own semantics AND a directly validated state (the per-cell
+        // sweep; the acceptance logic alone cannot prove finiteness)
+        if (iter > freezeIter
+            && std::max(relMax, turbMax) < settings_.convergenceTol) {
             if (stateIsValid()) {
                 rep.status = EvaluationStatus::Converged;
             } else {
@@ -1109,13 +1148,17 @@ SolveReport DBNSSolver::solveImplicitSteady() {
         rep.status = EvaluationStatus::Unconverged;
     rep.iterations = iter;
     {
+        // the recorded final residual mirrors the live criterion: mean-flow
+        // relative decay joined with the carried turbulence change norms
         const std::array<double, NVAR> rnsF = equationResidualNorms();
-        const int nEq = settings_.turbulent ? NVAR : 4;
+        const int nEq = 4;
         double eqRefMax = 1e-30, relMax = 0.0;
         for (int v = 0; v < nEq; ++v) eqRefMax = std::max(eqRefMax, eqRes0[v]);
         for (int v = 0; v < nEq; ++v)
             relMax = std::max(relMax,
                               rnsF[v] / std::max(eqRes0[v], 1e-6 * eqRefMax));
+        if (settings_.turbulent)
+            relMax = std::max(relMax, std::max(lastKChange, lastOmChange));
         rep.finalResidual = relMax;
     }
     return rep;
