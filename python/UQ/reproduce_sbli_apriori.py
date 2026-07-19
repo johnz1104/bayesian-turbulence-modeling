@@ -485,6 +485,12 @@ def main():
                     help="comma list restricting the baseline solves (e.g. "
                          "adiabatic,s0.5); partitions run in parallel and a "
                          "final unrestricted pass assembles the cached gates")
+    ap.add_argument("--legs", default="",
+                    help="comma list restricting a loso/insample stage to "
+                         "named target legs (dq_y, dq_joint, db, "
+                         "dq_y_history), one per-leg partial file each; the "
+                         "memory-bounded path on small machines is one leg "
+                         "per process, merged by the assemble stage")
     args = ap.parse_args()
 
     np.random.seed(DRIVER_SEED)
@@ -521,6 +527,21 @@ def main():
     def _part_path(stage):
         return os.path.join(args.results, f"apriori_{stage}{suffix}.json")
 
+    if args.legs and args.stage in ("loso", "insample"):
+        for leg in [l.strip() for l in args.legs.split(",") if l.strip()]:
+            history = leg.endswith("_history")
+            base = leg[:-8] if history else leg
+            if args.stage == "loso":
+                res = study.loso(base, history=history, seeds=seeds,
+                                 epochs=epochs)
+            else:
+                res = study.insample(base, history=history, seeds=seeds,
+                                     epochs=epochs)
+            path = os.path.join(
+                args.results, f"apriori_{args.stage}_{leg}{suffix}.json")
+            json.dump({leg: res}, open(path, "w"), indent=1)
+            print("wrote", path)
+        return
     if args.stage in ("loso", "insample", "far"):
         if args.stage == "loso":
             result = stage_loso(study, seeds, epochs)
@@ -551,6 +572,24 @@ def main():
         for stage in ("loso", "insample", "far"):
             if os.path.isfile(_part_path(stage)):
                 numbers[stage] = json.load(open(_part_path(stage)))[stage]
+                continue
+            # merge per-leg partials from the memory-bounded path; the
+            # stage enters the numbers only when every expected leg is
+            # present, so a partial sweep can never masquerade as complete
+            expected = (("dq_y", "dq_joint", "db", "dq_y_history")
+                        if stage == "loso"
+                        else ("dq_y", "dq_joint", "db"))
+            legs = {}
+            for leg in expected:
+                lp = os.path.join(
+                    args.results, f"apriori_{stage}_{leg}{suffix}.json")
+                if os.path.isfile(lp):
+                    legs[leg] = json.load(open(lp))[leg]
+            if len(legs) == len(expected):
+                numbers[stage] = legs
+            elif legs:
+                print(f"[assemble] {stage}: {len(legs)}/{len(expected)} "
+                      f"leg partials present; stage withheld")
 
     numbers["config"] = {
         "driver_seed": DRIVER_SEED, "seeds": list(seeds), "epochs": epochs,
