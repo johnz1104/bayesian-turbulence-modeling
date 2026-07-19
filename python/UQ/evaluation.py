@@ -102,15 +102,27 @@ def energy_score(y_true, samples):
     y_true = np.asarray(y_true, dtype=float)
     samples = np.asarray(samples, dtype=float)
     N, M, d = samples.shape
-    diff = samples - y_true[:, None, :]
-    term1 = np.mean(np.linalg.norm(diff, axis=2), axis=1)
     if M < 2:
-        return float(np.mean(term1))
-    # pairwise distances within the ensemble; diagonal is zero, so summing all
-    # M^2 entries and dividing by the M(M-1) off-diagonal count is the fair mean
-    pd = samples[:, :, None, :] - samples[:, None, :, :]
-    term2 = np.linalg.norm(pd, axis=3).sum(axis=(1, 2)) / (M * (M - 1))
-    return float(np.mean(term1 - 0.5 * term2))
+        diff = samples - y_true[:, None, :]
+        return float(np.mean(np.linalg.norm(diff, axis=2)))
+    # the pairwise block is (chunk, M, M, d); a single full-N allocation is
+    # N M^2 d doubles, tens of gigabytes for pooled test sets (1e5 rows at
+    # M = 128), so the observation axis is chunked to a bounded working
+    # set; per-observation terms are independent, so the chunked mean is
+    # the same estimator
+    chunk = max(1, int(3e8 // (M * M * d * 8)))
+    total = 0.0
+    for i in range(0, N, chunk):
+        s = samples[i:i + chunk]
+        diff = s - y_true[i:i + chunk, None, :]
+        term1 = np.mean(np.linalg.norm(diff, axis=2), axis=1)
+        # pairwise distances within the ensemble; diagonal is zero, so
+        # summing all M^2 entries and dividing by the M(M-1) off-diagonal
+        # count is the fair mean
+        pd = s[:, :, None, :] - s[:, None, :, :]
+        term2 = np.linalg.norm(pd, axis=3).sum(axis=(1, 2)) / (M * (M - 1))
+        total += float(np.sum(term1 - 0.5 * term2))
+    return total / N
 
 
 def energy_score_biased(y_true, samples):
