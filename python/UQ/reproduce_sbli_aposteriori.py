@@ -626,7 +626,8 @@ def main():
                     choices=("targets", "member", "score", "orchestrate"))
     ap.add_argument("--results", default="results/sbli")
     ap.add_argument("--fold", default=None)
-    ap.add_argument("--kind", default="flow", choices=("flow", "gauss"))
+    ap.add_argument("--kind", default="flow",
+                    choices=("flow", "gauss", "flow_noq"))
     ap.add_argument("--index", type=int, default=0)
     ap.add_argument("--attached", action="store_true")
     ap.add_argument("--corner", default=None)
