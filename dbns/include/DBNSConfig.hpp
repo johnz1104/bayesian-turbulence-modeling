@@ -60,6 +60,12 @@ struct DBNSSettings {
     // min(1, iter/injectionRampIters) so a warm perturbation solve reaches
     // the full force gradually; 0 applies the full force from iteration one
     int    injectionRampIters = 0;
+    // frozen-k correction scale: the injected stress difference uses the
+    // rho k captured when the targets were set (the baseline state) instead
+    // of the running rho k, removing the runaway feedback in which the
+    // force grows with the k it produces; default keeps the registered
+    // running-k form
+    bool   injectionFrozenK = false;
     bool   verbose    = false;
 
     double kFloor     = 1e-12;      // turbulence positivity floors

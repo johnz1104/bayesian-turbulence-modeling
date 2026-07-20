@@ -619,6 +619,11 @@ void DBNSSolver::setTargetCorrection(const std::vector<double>& b6,
     injectEnergyReach_ = energyReach;
     injDiag_ = InjectionDiagnostics{};
     injDiag_.active = true;
+    injRhoK0_.assign(nc, 0.0);
+    for (int ci = 0; ci < nc; ++ci) {
+        Primitive V = GasState::toPrimitive(W_[ci], eos_);
+        injRhoK0_[ci] = V.rho * std::max(V.k, 0.0);
+    }
     for (double v : bTarget6_)
         injDiag_.maxDb = std::max(injDiag_.maxDb, std::abs(v));
     for (double v : dqTarget2_)
@@ -677,7 +682,17 @@ void DBNSSolver::addInjectionFluxes() {
         Primitive V = GasState::toPrimitive(W_[ci], eos_);
         double rho = V.rho;
         double k = std::max(V.k, 0.0);
-        double muT = muT_[ci];
+        // frozen-k: the injected DIFFERENCE 2 rho k (b_t - b_B) rides the
+        // baseline rho k so the force cannot amplify the k it produces. The
+        // Boussinesq term therefore carries the SAME scale through the
+        // bounded coefficient mu_T/(rho k): the zero-correction cancellation
+        // stays exact at any running state, and the form reduces to the
+        // registered running-k one when the state equals the baseline.
+        double rhok = settings_.injectionFrozenK
+            ? injRhoK0_[ci] : rho * k;
+        double muT = settings_.injectionFrozenK
+            ? injRhoK0_[ci] * (muT_[ci] / std::max(rho * k, 1e-30))
+            : muT_[ci];
         double dudx = grad_[ci][G_U].x, dudy = grad_[ci][G_U].y;
         double dvdx = grad_[ci][G_V].x, dvdy = grad_[ci][G_V].y;
         double div3 = (dudx + dvdy) / 3.0;      // trace/3 of the 2-D strain
@@ -686,9 +701,9 @@ void DBNSSolver::addInjectionFluxes() {
         double Sxy = 0.5 * (dudy + dvdx);
         const double* bt = bTarget6_.data() + 6 * ci;
         // b ordered xx, yy, zz, xy, xz, yz; only xx, yy, xy enter the fluxes
-        txx[ci] = -(2.0 * rho * k * bt[0] + 2.0 * muT * devSxx);
-        tyy[ci] = -(2.0 * rho * k * bt[1] + 2.0 * muT * devSyy);
-        txy[ci] = -(2.0 * rho * k * bt[3] + 2.0 * muT * Sxy);
+        txx[ci] = -(2.0 * rhok * bt[0] + 2.0 * muT * devSxx);
+        tyy[ci] = -(2.0 * rhok * bt[1] + 2.0 * muT * devSyy);
+        txy[ci] = -(2.0 * rhok * bt[3] + 2.0 * muT * Sxy);
         if (withHeat) {
             qx[ci] = rho * cp * dqTarget2_[2 * ci];
             qy[ci] = rho * cp * dqTarget2_[2 * ci + 1];

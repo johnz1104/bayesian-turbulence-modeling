@@ -203,6 +203,7 @@ private:
     std::vector<double>   bTarget6_;         // nCells x 6 target anisotropy
     std::vector<std::uint8_t> injMask_;      // per-cell injection activity
     double injRampScale_ = 1.0;              // current ramp factor on the fluxes
+    std::vector<double> injRhoK0_;           // rho k at target-set time (frozen-k)
     std::vector<std::uint8_t> limiterActive_;  // omega-limiter branch record
     std::vector<double>   dqTarget2_;        // nCells x 2 heat-flux correction
     bool                  injectEnergyReach_ = true;

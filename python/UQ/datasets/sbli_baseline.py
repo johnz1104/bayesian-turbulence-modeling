@@ -236,7 +236,7 @@ class SBLIBaseline:
                   max_iterations=60000, convergence_tol=1e-6,
                   yplus_target=1.0, verbose=False, report_interval=1000,
                   early_abort_iter=0, early_abort_rel_max=0.0,
-                  injection_ramp_iters=0):
+                  injection_ramp_iters=0, injection_frozen_k=False):
         """Build the configuration for one record.
 
         The domain spans [x_lo, x_hi] x [0, height] reference lengths, x_lo
@@ -337,6 +337,7 @@ class SBLIBaseline:
         st.early_abort_iter = early_abort_iter
         st.early_abort_rel_max = early_abort_rel_max
         st.injection_ramp_iters = injection_ramp_iters
+        st.injection_frozen_k = injection_frozen_k
         st.time_mode = rans.TimeMode.Steady
         st.implicit_steady = True
         st.cfl_implicit = cfl

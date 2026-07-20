@@ -79,7 +79,8 @@ def _all_records(root=None):
 
 def _configure(record, quick, with_shock=True, max_iterations=None,
                convergence_tol=None, early_abort_iter=0,
-               early_abort_rel_max=0.0, injection_ramp_iters=0):
+               early_abort_rel_max=0.0, injection_ramp_iters=0,
+               injection_frozen_k=False):
     if quick:
         return SBLIBaseline.configure(record, with_shock=with_shock,
                                       nx=160, ny=112, x_hi=6.0, height=6.0,
@@ -90,6 +91,7 @@ def _configure(record, quick, with_shock=True, max_iterations=None,
                                       early_abort_iter=early_abort_iter,
                                       early_abort_rel_max=early_abort_rel_max,
                                       injection_ramp_iters=injection_ramp_iters,
+                                      injection_frozen_k=injection_frozen_k,
                                       yplus_target=0.05)
     # the resolved first cell is load-bearing: the omega wall anchor scales
     # as 1/y1^2 and at y1+ near one it is too weak to select the log-law
@@ -105,6 +107,7 @@ def _configure(record, quick, with_shock=True, max_iterations=None,
                                   early_abort_iter=early_abort_iter,
                                   early_abort_rel_max=early_abort_rel_max,
                                   injection_ramp_iters=injection_ramp_iters,
+                                  injection_frozen_k=injection_frozen_k,
                                   yplus_target=0.05)
 
 
