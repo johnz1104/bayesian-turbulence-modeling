@@ -1132,6 +1132,15 @@ SolveReport DBNSSolver::solveImplicitSteady() {
         // convergence requires EVERY live equation below the tolerance under
         // its own semantics AND a directly validated state (the per-cell
         // sweep; the acceptance logic alone cannot prove finiteness)
+        // fail genuinely non-settling solves fast: past earlyAbortIter a
+        // response still above earlyAbortRelMax is classified Unconverged
+        // without burning the remaining budget (the measured separation:
+        // settling members pass through order 1e-2 there, stuck ones sit
+        // at order one and above)
+        if (settings_.earlyAbortIter > 0 && iter >= settings_.earlyAbortIter
+            && iter > freezeIter
+            && std::max(relMax, turbMax) > settings_.earlyAbortRelMax)
+            break;
         if (iter > freezeIter
             && std::max(relMax, turbMax) < settings_.convergenceTol) {
             if (stateIsValid()) {

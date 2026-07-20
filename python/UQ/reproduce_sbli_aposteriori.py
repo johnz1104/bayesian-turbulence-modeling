@@ -44,6 +44,7 @@ sys.path.insert(0, os.path.join(_HERE, ".."))
 from UQ.datasets.sbli_interaction import SBLIInteractionDNS
 from UQ.datasets.sbli_baseline import SBLIBaseline, SBLIUnits
 from UQ.datasets import sbli_apriori, sbli_aposteriori
+from UQ import cache_fingerprint as cfp
 from UQ import evaluation
 from UQ.datasets.sbli_apriori import SBLIAPriori
 from UQ.datasets.sbli_aposteriori import (
@@ -52,17 +53,25 @@ from UQ.datasets.sbli_aposteriori import (
     dq_to_solver_units, landmarks_from_wall, score_ensemble,
     N_MEMBERS, MEMBER_SEED, STATIONS)
 from UQ.reproduce_sbli_apriori import (
-    _all_records, _configure, _fields_path, GATE_A_CF, GATE_A_STATION)
+    _all_records, _configure, _fields_path, sbli_ident, GATE_A_CF,
+    GATE_A_STATION)
 
 FOLDS = ("s0.5", "s1.0", "s1.9")
 KINDS = ("flow", "gauss")
 # members are warm-started perturbation solves: convergence is a thousand
-# fold decay OF THE INJECTION RESPONSE (the first-iteration residual), and
-# the cap fails genuinely non-settling members fast instead of burning the
-# ensemble budget (the quick smoke measured settled members plateauing at
-# 2e-4 to 6e-4 against the old 1e-4, and non-settling ones at order one)
-MEMBER_MAX_ITER = 15000
+# fold decay OF THE INJECTION RESPONSE (the first-iteration residual). The
+# budget is sized to the MEASURED corrected-solver cost (the adiabatic
+# corner probe's settling member converged at 43631 iterations; the old
+# 15000 cap was calibrated on the pre-correction smoke and recorded every
+# corrected-era member Unconverged), and the solver-side early abort fails
+# genuinely non-settling members fast instead of burning the budget: the
+# measured separation at 15000 iterations is settling members at order
+# 1e-2 and below versus stuck members at 0.8 and above, so the 0.3
+# threshold sits inside the empty gap
+MEMBER_MAX_ITER = 45000
 MEMBER_TOL = 1e-3
+MEMBER_ABORT_ITER = 15000
+MEMBER_ABORT_RELMAX = 0.3
 
 
 def _apo_dir(results_dir):
@@ -81,6 +90,25 @@ def _member_path(results_dir, fold, kind, index, attached=False):
     tag = "attached_" if attached else ""
     return os.path.join(_apo_dir(results_dir),
                         f"member_{tag}{fold}_{kind}_{index}.npz")
+
+
+def _member_config():
+    """The member-cache identity: physics token, production configuration
+    and the member solve budget. An existence-only reuse check once admitted
+    pre-audit member records into a corrected-era fold; identity-mismatched
+    or unfingerprinted member files are treated as absent and re-solved."""
+    return sbli_ident("apo-member", "all-cases", member={
+        "max_iter": MEMBER_MAX_ITER, "tol": MEMBER_TOL,
+        "abort_iter": MEMBER_ABORT_ITER,
+        "abort_rel_max": MEMBER_ABORT_RELMAX,
+        "n_members": N_MEMBERS, "seed": MEMBER_SEED})
+
+
+def _member_current(path):
+    if not os.path.isfile(path):
+        return False
+    status, _reason = cfp.check(np.load(path), _member_config())
+    return status == "match"
 
 
 def _job_output(results_dir, fold, argv):
@@ -110,7 +138,9 @@ def _load_baseline(records, case, results_dir, quick, with_shock=True,
     kw = {}
     if member_caps:
         kw = {"max_iterations": MEMBER_MAX_ITER,
-              "convergence_tol": MEMBER_TOL}
+              "convergence_tol": MEMBER_TOL,
+              "early_abort_iter": MEMBER_ABORT_ITER,
+              "early_abort_rel_max": MEMBER_ABORT_RELMAX}
     if derived_probe:
         kw = {"max_iterations": 1, "convergence_tol": 1e-30}
     base = _configure(records[case], quick, with_shock=with_shock, **kw)
@@ -275,7 +305,8 @@ def stage_member(records, results_dir, fold, kind, index, quick,
     lm = landmarks_from_wall(w)
     diag = base.solver.injection_diagnostics()
     np.savez_compressed(
-        out_path, x_star=w["x_star"], Cf=w["Cf"], Cp=w["Cp"],
+        out_path, **cfp.attach(dict(
+        x_star=w["x_star"], Cf=w["Cf"], Cp=w["Cp"],
         qw=w["qw"], St=w["St"],
         status=np.bytes_(str(rep.status).encode()),
         iterations=np.int64(rep.iterations),
@@ -287,7 +318,8 @@ def stage_member(records, results_dir, fold, kind, index, quick,
         max_violation=np.float64(diag["max_violation"]),
         max_db=np.float64(diag["max_db"]),
         max_dq=np.float64(diag["max_dq"]),
-        wall_time_s=np.float64(round(time.time() - t0, 1)))
+        wall_time_s=np.float64(round(time.time() - t0, 1))),
+        _member_config()))
     print(f"[member] {os.path.basename(out_path)} {rep.status} "
           f"iters {rep.iterations} {round(time.time() - t0, 1)}s")
 
@@ -326,12 +358,13 @@ def stage_score(records, results_dir, fold, n_members):
         # a missing worker output is a NON-CONVERGED member for every
         # denominator: the 18-of-24 instability rule reads against the
         # REQUESTED count, never the found-file count
-        members = [(_load_member(p) if os.path.isfile(p)
-                    else {"status": "Missing(worker output absent)",
+        members = [(_load_member(p) if _member_current(p)
+                    else {"status": "Missing(worker output absent or "
+                                    "stale identity)",
                           "landmarks": {"x_s": None, "x_r": None,
                                         "shock": None}})
                    for p in paths]
-        n_found = sum(1 for p in paths if os.path.isfile(p))
+        n_found = sum(1 for p in paths if _member_current(p))
         out[kind] = score_ensemble(members, record, baseline_wall=bwall)
         out[kind]["n_requested"] = n_members
         out[kind]["n_found"] = n_found
@@ -356,11 +389,12 @@ def stage_score(records, results_dir, fold, n_members):
     # diagnostic it is (never a primary row)
     noq_paths = [_member_path(results_dir, fold, "flow_noq", i)
                  for i in range(n_members)]
-    noq = [(_load_member(p) if os.path.isfile(p)
-            else {"status": "Missing(worker output absent)",
+    noq = [(_load_member(p) if _member_current(p)
+            else {"status": "Missing(worker output absent or "
+                            "stale identity)",
                   "landmarks": {"x_s": None, "x_r": None, "shock": None}})
            for p in noq_paths]
-    if any(os.path.isfile(p) for p in noq_paths):
+    if any(_member_current(p) for p in noq_paths):
         out["flow_energy_reach_disabled_diagnostic"] = score_ensemble(
             noq, record, baseline_wall=bwall)
 
@@ -382,7 +416,7 @@ def stage_score(records, results_dir, fold, n_members):
         for lab in labels:
             p = os.path.join(_apo_dir(results_dir),
                              f"member_{fold}_corner_{lab}.npz")
-            if os.path.isfile(p):
+            if _member_current(p):
                 fam[lab] = _load_member(p)
         conv = {lab: m for lab, m in fam.items()
                 if "Converged" in m["status"]}
@@ -424,7 +458,7 @@ def stage_score(records, results_dir, fold, n_members):
         n_conv = 0
         for i in range(n_members):
             p = _member_path(results_dir, fold, kind, i, attached=True)
-            if not os.path.isfile(p):
+            if not _member_current(p):
                 continue
             m = _load_member(p)
             if "Converged" not in m["status"]:
@@ -507,7 +541,7 @@ def stage_orchestrate(records, results_dir, quick, throttle, n_members,
                 jobs.append(["--stage", "member", "--fold", fold,
                              "--corner", lab] + common)
         # cached members never re-solve: drop jobs whose output exists
-        return [j for j in jobs if not os.path.isfile(_job_output(
+        return [j for j in jobs if not _member_current(_job_output(
             results_dir, fold, j))]
 
     summary = {}

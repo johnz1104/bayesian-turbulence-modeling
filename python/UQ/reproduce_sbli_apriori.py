@@ -78,14 +78,18 @@ def _all_records(root=None):
 
 
 def _configure(record, quick, with_shock=True, max_iterations=None,
-               convergence_tol=None):
+               convergence_tol=None, early_abort_iter=0,
+               early_abort_rel_max=0.0):
     if quick:
         return SBLIBaseline.configure(record, with_shock=with_shock,
                                       nx=160, ny=112, x_hi=6.0, height=6.0,
                                       cfl=100.0,
                                       max_iterations=max_iterations or 30000,
                                       convergence_tol=convergence_tol
-                                      or 3e-6, yplus_target=0.05)
+                                      or 3e-6,
+                                      early_abort_iter=early_abort_iter,
+                                      early_abort_rel_max=early_abort_rel_max,
+                                      yplus_target=0.05)
     # the resolved first cell is load-bearing: the omega wall anchor scales
     # as 1/y1^2 and at y1+ near one it is too weak to select the log-law
     # branch against the spurious near-wall equilibrium (the gate bring-up
@@ -97,6 +101,8 @@ def _configure(record, quick, with_shock=True, max_iterations=None,
                                   cfl=300.0,
                                   max_iterations=max_iterations or 250000,
                                   convergence_tol=convergence_tol or 1e-6,
+                                  early_abort_iter=early_abort_iter,
+                                  early_abort_rel_max=early_abort_rel_max,
                                   yplus_target=0.05)
 
 

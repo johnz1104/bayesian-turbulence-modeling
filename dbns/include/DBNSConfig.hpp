@@ -51,6 +51,11 @@ struct DBNSSettings {
 
     int    rkStages   = 3;          // SSP-RK stages (3 = SSP-RK3)
     int    reportInterval = 1000;
+    // fail-fast for warm perturbation solves: when > 0, a solve whose joint
+    // convergence measure still exceeds earlyAbortRelMax at earlyAbortIter
+    // returns Unconverged immediately instead of burning the full budget
+    int    earlyAbortIter = 0;
+    double earlyAbortRelMax = 0.0;
     bool   verbose    = false;
 
     double kFloor     = 1e-12;      // turbulence positivity floors
