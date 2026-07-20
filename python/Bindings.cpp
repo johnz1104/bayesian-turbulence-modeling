@@ -723,6 +723,7 @@ PYBIND11_MODULE(rans_sst_py, m) {
         .def_readwrite("report_interval", &DBNSSettings::reportInterval)
         .def_readwrite("early_abort_iter", &DBNSSettings::earlyAbortIter)
         .def_readwrite("early_abort_rel_max", &DBNSSettings::earlyAbortRelMax)
+        .def_readwrite("injection_ramp_iters", &DBNSSettings::injectionRampIters)
         .def_readwrite("implicit_steady", &DBNSSettings::implicitSteady)
         .def_readwrite("cfl_implicit", &DBNSSettings::cflImplicit)
         .def_readwrite("cfl_ramp_start", &DBNSSettings::cflRampStart)

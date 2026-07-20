@@ -728,8 +728,10 @@ void DBNSSolver::addInjectionFluxes() {
             }
         }
         for (int i = 0; i < NVAR; ++i) {
-            res_[P][i] -= Fv[i] * A;    // same sign convention as the viscous flux
-            res_[N][i] += Fv[i] * A;
+            // same sign convention as the viscous flux; the ramp factor
+            // scales the whole correction during the configured window
+            res_[P][i] -= injRampScale_ * Fv[i] * A;
+            res_[N][i] += injRampScale_ * Fv[i] * A;
         }
     }
 }
@@ -975,11 +977,15 @@ SolveReport DBNSSolver::solveImplicitSteady() {
     // restored) and the CFL scaled down; it recovers multiplicatively on
     // success. Persistent rejection classifies as Diverged.
     double cflScale = 1.0;
+    int rejectCount = 0;
     int consecutiveRejects = 0;
     // the uniform initial state has a machine-zero density residual, so the
     // relative-convergence normalizer is the residual maximum over the ramp
     // (frozen afterwards), not the first iterate
-    int freezeIter = std::max(settings_.cflRampIters, 50);
+    // the reference window covers BOTH ramps so the frozen injection
+    // response is the full-force response, not a partially ramped one
+    int freezeIter = std::max({settings_.cflRampIters,
+                               settings_.injectionRampIters, 50});
     // the hard (eps = 0) Venkatakrishnan limiter chatters at steady state and
     // stalls deep convergence; freezing it once the residual has dropped two
     // orders is the standard remedy and changes no converged answer
@@ -996,6 +1002,9 @@ SolveReport DBNSSolver::solveImplicitSteady() {
         computeTimeStep(cfl, false);   // convective step; viscosity in the diagonal
         computeGradients();
         if (!limiterFrozen) computeLimiters();
+        injRampScale_ = (settings_.injectionRampIters > 0)
+            ? std::min(1.0, double(iter + 1) / settings_.injectionRampIters)
+            : 1.0;
         computeResidual();
         computeFaceSpectralRadii();
 
@@ -1053,9 +1062,24 @@ SolveReport DBNSSolver::solveImplicitSteady() {
             for (int i = 0; i < NVAR; ++i) W_[ci][i] += dW_[ci][i];
 
         bool admissible = true;
+        int badCell = -1;
         for (int ci = 0; ci < nc; ++ci)
-            if (!GasState::admissible(W_[ci], eos_)) { admissible = false; break; }
+            if (!GasState::admissible(W_[ci], eos_)) {
+                admissible = false;
+                badCell = ci;
+                break;
+            }
         if (!admissible) {
+            if (settings_.verbose && (rejectCount % 500 == 0)) {
+                const Primitive Vb = GasState::toPrimitive(Wsave[badCell],
+                                                           eos_);
+                const auto& c = mesh_.cell(badCell).center;
+                std::printf("  [reject %d] iter %d cell %d (x %.4g, y %.4g)"
+                            "  pre-step rho %.3e p %.3e k %.3e\n",
+                            rejectCount, iter, badCell, c.x, c.y,
+                            Vb.rho, Vb.p, Vb.k);
+            }
+            ++rejectCount;
             W_ = Wsave;                     // reject the step, back the CFL off
             cflScale *= 0.5;
             if (++consecutiveRejects > 20) {

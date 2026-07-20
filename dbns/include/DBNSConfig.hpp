@@ -56,6 +56,10 @@ struct DBNSSettings {
     // returns Unconverged immediately instead of burning the full budget
     int    earlyAbortIter = 0;
     double earlyAbortRelMax = 0.0;
+    // injected-correction ramp: the deferred-correction fluxes scale by
+    // min(1, iter/injectionRampIters) so a warm perturbation solve reaches
+    // the full force gradually; 0 applies the full force from iteration one
+    int    injectionRampIters = 0;
     bool   verbose    = false;
 
     double kFloor     = 1e-12;      // turbulence positivity floors
