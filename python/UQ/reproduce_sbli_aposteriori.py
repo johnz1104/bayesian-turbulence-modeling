@@ -77,6 +77,10 @@ MEMBER_ABORT_RELMAX = 0.3
 # versioned constants (they are part of the member cache identity)
 MEMBER_FROZEN_K = False
 MEMBER_RAMP_ITERS = 0
+# the corner family converges more slowly than the sampled members (two
+# independent measurements at 43631 and past 45000 iterations), so its
+# budget is sized separately; the early abort thresholds are shared
+CORNER_MAX_ITER = 60000
 
 
 def _apo_dir(results_dir):
@@ -109,6 +113,7 @@ def _member_config():
         "max_iter": MEMBER_MAX_ITER, "tol": MEMBER_TOL,
         "abort_iter": MEMBER_ABORT_ITER,
         "abort_rel_max": MEMBER_ABORT_RELMAX,
+        "corner_max_iter": CORNER_MAX_ITER,
         "n_members": N_MEMBERS, "seed": MEMBER_SEED})
 
 
@@ -133,7 +138,7 @@ def _job_output(results_dir, fold, argv):
 
 
 def _load_baseline(records, case, results_dir, quick, with_shock=True,
-                   member_caps=False, derived_probe=False):
+                   member_caps=False, corner_caps=False, derived_probe=False):
     """Configure the case and warm the solver with the cached converged
     primitive state. member_caps swaps in the member iteration budget (a
     warm-started perturbation solve, not a cold start). derived_probe runs
@@ -145,7 +150,8 @@ def _load_baseline(records, case, results_dir, quick, with_shock=True,
     converged state drifts it by the order of the converged residual."""
     kw = {}
     if member_caps:
-        kw = {"max_iterations": MEMBER_MAX_ITER,
+        kw = {"max_iterations": CORNER_MAX_ITER if corner_caps
+              else MEMBER_MAX_ITER,
               "convergence_tol": MEMBER_TOL,
               "early_abort_iter": MEMBER_ABORT_ITER,
               "early_abort_rel_max": MEMBER_ABORT_RELMAX,
@@ -277,7 +283,8 @@ def stage_member(records, results_dir, fold, kind, index, quick,
     case = "adiabatic" if (attached or fold == "faradiab") else fold
     record = records[case]
     base, _ = _load_baseline(records, case, results_dir, quick,
-                             with_shock=not attached, member_caps=True)
+                             with_shock=not attached, member_caps=True,
+                             corner_caps=corner is not None)
 
     target_kind = kind[:-4] if (kind or "").endswith("_noq") else kind
     energy_reach = not (kind or "").endswith("_noq")
