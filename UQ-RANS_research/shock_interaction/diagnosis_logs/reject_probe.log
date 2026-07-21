@@ -1,0 +1,11 @@
+  Plate mesh: Re=16750 y+_target=0.05 y1_target=6.15504e-08 growth=1.03294
+Plate2D mesh: 480x224 (107520 cells, 215744 faces)
+  [lusgs] iter      0  cfl 1.0  res_rho 2.324e+04 (rel 1.000e+00)  rel_max 1.000e+00  rel_eq 1.00e+00 1.00e+00 1.00e+00 1.00e+00  dk 2.02e-03 dom 3.10e-08
+  [reject 0] iter 404 cell 35706 (x 0.003543, y 1.903e-05)  pre-step rho 9.690e-01 p 1.047e+04 k 2.604e+05
+  [reject 500] iter 1711 cell 36186 (x 0.003543, y 1.972e-05)  pre-step rho 9.076e-01 p 2.662e-01 k 3.020e+05
+  [lusgs] iter   2000  cfl 0.0  res_rho 7.127e+05 (rel 9.658e-01)  rel_max 1.000e+00  rel_eq 9.66e-01 1.00e+00 9.73e-01 9.92e-01  dk 1.01e-06 dom 6.01e-07
+  [reject 1000] iter 3066 cell 36186 (x 0.003543, y 1.972e-05)  pre-step rho 9.075e-01 p 2.662e-01 k 3.023e+05
+  [lusgs] iter   4000  cfl 0.0  res_rho 7.129e+05 (rel 9.660e-01)  rel_max 1.000e+00  rel_eq 9.66e-01 1.00e+00 9.73e-01 9.92e-01  dk 1.15e-06 dom 6.97e-07
+  [reject 1500] iter 4421 cell 36186 (x 0.003543, y 1.972e-05)  pre-step rho 9.075e-01 p 2.662e-01 k 3.025e+05
+  [reject 2000] iter 5776 cell 36186 (x 0.003543, y 1.972e-05)  pre-step rho 9.074e-01 p 2.662e-01 k 3.028e+05
+RESULT EvaluationStatus.Unconverged iters 6000 rel 1.000e+00 286s

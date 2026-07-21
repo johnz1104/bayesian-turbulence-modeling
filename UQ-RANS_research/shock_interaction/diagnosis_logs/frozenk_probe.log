@@ -1,0 +1,26 @@
+  Plate mesh: Re=16750 y+_target=0.05 y1_target=6.15504e-08 growth=1.03294
+Plate2D mesh: 480x224 (107520 cells, 215744 faces)
+  [lusgs] iter      0  cfl 1.0  res_rho 2.324e+04 (rel 1.000e+00)  rel_max 1.000e+00  rel_eq 1.00e+00 1.00e+00 1.00e+00 1.00e+00  dk 2.02e-03 dom 3.10e-08
+  [lusgs] iter   2000  cfl 300.0  res_rho 5.207e+04 (rel 7.079e-02)  rel_max 1.149e-01  rel_eq 7.08e-02 1.15e-01 2.15e-02 6.88e-02  dk 1.99e-04 dom 3.59e-07
+  [lusgs] iter   4000  cfl 300.0  res_rho 4.748e+04 (rel 6.455e-02)  rel_max 4.940e-01  rel_eq 6.45e-02 4.94e-01 1.14e-01 8.17e-02  dk 9.08e-04 dom 3.68e-07
+  [lusgs] iter   6000  cfl 300.0  res_rho 2.222e+04 (rel 3.021e-02)  rel_max 6.675e-02  rel_eq 3.02e-02 6.67e-02 1.58e-02 3.00e-02  dk 4.29e-04 dom 5.71e-07
+  [lusgs] iter   8000  cfl 300.0  res_rho 1.454e+04 (rel 1.977e-02)  rel_max 6.576e-02  rel_eq 1.98e-02 6.58e-02 9.51e-03 1.96e-02  dk 3.68e-04 dom 6.57e-07
+  [lusgs] iter  10000  cfl 300.0  res_rho 9.392e+03 (rel 1.277e-02)  rel_max 7.678e-02  rel_eq 1.28e-02 7.68e-02 5.97e-03 1.26e-02  dk 2.62e-04 dom 2.92e-07
+  [lusgs] iter  12000  cfl 300.0  res_rho 6.961e+03 (rel 9.464e-03)  rel_max 6.136e-02  rel_eq 9.46e-03 6.14e-02 6.71e-03 9.54e-03  dk 2.80e-04 dom 5.65e-07
+  [lusgs] iter  14000  cfl 300.0  res_rho 6.941e+03 (rel 9.436e-03)  rel_max 6.009e-02  rel_eq 9.44e-03 6.01e-02 6.71e-03 9.55e-03  dk 2.94e-04 dom 5.01e-07
+  [lusgs] iter  16000  cfl 300.0  res_rho 8.100e+03 (rel 1.101e-02)  rel_max 6.917e-02  rel_eq 1.10e-02 6.92e-02 6.92e-03 1.10e-02  dk 2.25e-04 dom 5.72e-07
+  [lusgs] iter  18000  cfl 300.0  res_rho 7.487e+03 (rel 1.018e-02)  rel_max 6.453e-02  rel_eq 1.02e-02 6.45e-02 6.91e-03 1.05e-02  dk 3.64e-04 dom 6.66e-07
+  [lusgs] iter  20000  cfl 300.0  res_rho 9.218e+03 (rel 1.253e-02)  rel_max 5.273e-02  rel_eq 1.25e-02 5.27e-02 5.34e-03 1.26e-02  dk 2.22e-04 dom 3.92e-07
+  [lusgs] iter  22000  cfl 300.0  res_rho 7.215e+03 (rel 9.809e-03)  rel_max 6.571e-02  rel_eq 9.81e-03 6.57e-02 6.64e-03 9.82e-03  dk 2.45e-04 dom 5.04e-07
+  [lusgs] iter  24000  cfl 300.0  res_rho 6.150e+03 (rel 8.362e-03)  rel_max 6.385e-02  rel_eq 8.36e-03 6.38e-02 7.10e-03 8.56e-03  dk 3.95e-04 dom 5.71e-07
+  [lusgs] iter  26000  cfl 300.0  res_rho 7.319e+03 (rel 9.950e-03)  rel_max 5.306e-02  rel_eq 9.95e-03 5.31e-02 6.84e-03 1.02e-02  dk 2.83e-04 dom 6.54e-07
+  [lusgs] iter  28000  cfl 300.0  res_rho 9.037e+03 (rel 1.229e-02)  rel_max 6.452e-02  rel_eq 1.23e-02 6.45e-02 5.79e-03 1.24e-02  dk 2.09e-04 dom 4.25e-07
+  [lusgs] iter  30000  cfl 300.0  res_rho 9.142e+03 (rel 1.243e-02)  rel_max 5.241e-02  rel_eq 1.24e-02 5.24e-02 5.33e-03 1.25e-02  dk 2.24e-04 dom 3.84e-07
+  [lusgs] iter  32000  cfl 300.0  res_rho 7.865e+03 (rel 1.069e-02)  rel_max 6.651e-02  rel_eq 1.07e-02 6.65e-02 6.59e-03 1.07e-02  dk 2.17e-04 dom 5.52e-07
+  [lusgs] iter  34000  cfl 300.0  res_rho 6.771e+03 (rel 9.205e-03)  rel_max 5.990e-02  rel_eq 9.21e-03 5.99e-02 6.55e-03 9.17e-03  dk 3.62e-04 dom 3.98e-07
+  [lusgs] iter  36000  cfl 300.0  res_rho 6.639e+03 (rel 9.026e-03)  rel_max 5.934e-02  rel_eq 9.03e-03 5.93e-02 6.40e-03 9.13e-03  dk 2.59e-04 dom 4.33e-07
+  [lusgs] iter  38000  cfl 300.0  res_rho 6.936e+03 (rel 9.430e-03)  rel_max 6.218e-02  rel_eq 9.43e-03 6.22e-02 6.73e-03 9.73e-03  dk 3.77e-04 dom 6.12e-07
+  [lusgs] iter  40000  cfl 300.0  res_rho 7.817e+03 (rel 1.063e-02)  rel_max 5.268e-02  rel_eq 1.06e-02 5.27e-02 6.63e-03 1.09e-02  dk 2.70e-04 dom 6.75e-07
+  [lusgs] iter  42000  cfl 300.0  res_rho 9.054e+03 (rel 1.231e-02)  rel_max 6.510e-02  rel_eq 1.23e-02 6.51e-02 5.88e-03 1.24e-02  dk 2.07e-04 dom 4.01e-07
+  [lusgs] iter  44000  cfl 300.0  res_rho 9.039e+03 (rel 1.229e-02)  rel_max 5.260e-02  rel_eq 1.23e-02 5.26e-02 5.41e-03 1.23e-02  dk 2.21e-04 dom 3.79e-07
+RESULT EvaluationStatus.Unconverged iters 45000 rel 5.542e-02 2083s

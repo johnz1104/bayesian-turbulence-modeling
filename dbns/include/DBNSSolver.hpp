@@ -97,7 +97,8 @@ public:
     // projects b into the realizable set first; the solver re-checks the
     // barycentric margin every residual evaluation and records violations in
     // the diagnostics rather than silently projecting.
-    void setTargetCorrection(const std::vector<double>& b6,
+    void setTargetCorrection(const std::vector<double>& db6,
+                             const std::vector<double>& bDiag6,
                              const std::vector<double>& dq2,
                              bool energyReach = true,
                              const std::vector<std::uint8_t>& mask = {});
@@ -200,7 +201,8 @@ private:
 
     // model-form injection state (values owned by the solver)
     void addInjectionFluxes();               // internal-face deferred correction
-    std::vector<double>   bTarget6_;         // nCells x 6 target anisotropy
+    std::vector<double>   dbTarget6_;        // nCells x 6 stored discrepancy
+    std::vector<double>   bTarget6_;         // nCells x 6 target anisotropy (diagnostics)
     std::vector<std::uint8_t> injMask_;      // per-cell injection activity
     double injRampScale_ = 1.0;              // current ramp factor on the fluxes
     std::vector<double> injRhoK0_;           // rho k at target-set time (frozen-k)

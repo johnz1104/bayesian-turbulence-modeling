@@ -755,20 +755,37 @@ PYBIND11_MODULE(rans_sst_py, m) {
         .def("primitive", &DBNSSolver::primitive, py::arg("cell"))
         .def("fields", &dbnsFields)
         .def("set_target_correction",
-             [](DBNSSolver& s, py::array_t<double> b, py::array_t<double> dq,
-                bool energy_reach, py::array_t<bool> mask) {
-                 // b: (n_cells, 3, 3) symmetric target anisotropy; dq:
-                 // (n_cells, 2) or (0,) turbulent heat-flux correction in
-                 // solver units (<rho u_i''T''>/<rho>, m/s K). Values are
-                 // copied into the solver (no lifetime coupling, unlike the
-                 // incompressible forward model's reference semantics).
+             [](DBNSSolver& s, py::array_t<double> db, py::array_t<double> b,
+                py::array_t<double> dq, bool energy_reach,
+                py::array_t<bool> mask) {
+                 // db: (n_cells, 3, 3) STORED anisotropy discrepancy, the
+                 // operative injection input (db = 0 is exactly zero flux,
+                 // the discrete zero-correction contract); b: (n_cells, 3, 3)
+                 // absolute target anisotropy, used only for the running
+                 // realizability diagnostics; dq: (n_cells, 2) or (0,)
+                 // turbulent heat-flux correction in solver units
+                 // (<rho u_i''T''>/<rho>, m/s K). Values are copied into the
+                 // solver (no lifetime coupling, unlike the incompressible
+                 // forward model's reference semantics).
+                 auto adb = db.unchecked<3>();
                  auto ab = b.unchecked<3>();
-                 if (ab.shape(1) != 3 || ab.shape(2) != 3)
+                 if (adb.shape(1) != 3 || adb.shape(2) != 3)
                      throw std::runtime_error(
-                         "set_target_correction: b must be (n_cells, 3, 3)");
-                 int nc = (int)ab.shape(0);
-                 std::vector<double> b6(6 * nc);
+                         "set_target_correction: db must be (n_cells, 3, 3)");
+                 if (ab.shape(0) != adb.shape(0) || ab.shape(1) != 3
+                     || ab.shape(2) != 3)
+                     throw std::runtime_error(
+                         "set_target_correction: b must match db "
+                         "(n_cells, 3, 3)");
+                 int nc = (int)adb.shape(0);
+                 std::vector<double> db6(6 * nc), b6(6 * nc);
                  for (int ci = 0; ci < nc; ++ci) {
+                     db6[6 * ci + 0] = adb(ci, 0, 0);
+                     db6[6 * ci + 1] = adb(ci, 1, 1);
+                     db6[6 * ci + 2] = adb(ci, 2, 2);
+                     db6[6 * ci + 3] = adb(ci, 0, 1);
+                     db6[6 * ci + 4] = adb(ci, 0, 2);
+                     db6[6 * ci + 5] = adb(ci, 1, 2);
                      b6[6 * ci + 0] = ab(ci, 0, 0);
                      b6[6 * ci + 1] = ab(ci, 1, 1);
                      b6[6 * ci + 2] = ab(ci, 2, 2);
@@ -797,9 +814,10 @@ PYBIND11_MODULE(rans_sst_py, m) {
                      m8.resize(nc);
                      for (int ci = 0; ci < nc; ++ci) m8[ci] = am(ci) ? 1 : 0;
                  }
-                 s.setTargetCorrection(b6, dq2, energy_reach, m8);
+                 s.setTargetCorrection(db6, b6, dq2, energy_reach, m8);
              },
-             py::arg("b"), py::arg("dq"), py::arg("energy_reach") = true,
+             py::arg("db"), py::arg("b"), py::arg("dq"),
+             py::arg("energy_reach") = true,
              py::arg("mask") = py::array_t<bool>())
         .def("clear_target_correction", &DBNSSolver::clearTargetCorrection)
         .def("limiter_active",

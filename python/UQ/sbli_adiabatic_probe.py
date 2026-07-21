@@ -71,8 +71,10 @@ def main():
             base, _ = _load_baseline(records, "adiabatic", RESULTS,
                                      quick=False, member_caps=True)
         dq0 = np.zeros((b_t.shape[0], 2))
+        db_t = np.asarray(b_t, float) - np.asarray(b_base, float)
         t0 = time.time()
-        base.solver.set_target_correction(np.asarray(b_t, float), dq0, True)
+        base.solver.set_target_correction(db_t, np.asarray(b_t, float),
+                                          dq0, True)
         rep = base.solver.solve()
         w = base.wall()
         off, x_half, _ = _impingement_offset(w, rec)

@@ -44,16 +44,16 @@ def test_set_target_correction_shapes():
     n = mesh.n_cells()
     b = np.zeros((n, 3, 3))
     dq = np.zeros((n, 2))
-    solver.set_target_correction(b, dq)
+    solver.set_target_correction(np.zeros_like(b), b, dq)
     d = solver.injection_diagnostics()
     assert d["active"] is True
     assert d["all_realizable"] is True
     assert d["max_db"] == 0.0 and d["max_dq"] == 0.0
 
     with pytest.raises(RuntimeError):
-        solver.set_target_correction(np.zeros((n, 2, 3)), dq)
+        solver.set_target_correction(np.zeros((n, 2, 3)), np.zeros((n, 2, 3)), dq)
     with pytest.raises(RuntimeError):
-        solver.set_target_correction(b, np.zeros((n, 3)))
+        solver.set_target_correction(np.zeros_like(b), b, np.zeros((n, 3)))
 
     solver.clear_target_correction()
     assert solver.injection_diagnostics()["active"] is False
@@ -64,7 +64,7 @@ def test_zero_correction_identity_smoke():
     rep_b = base.solve()
     mesh2, inj = _laminar_channel()
     n = mesh2.n_cells()
-    inj.set_target_correction(np.zeros((n, 3, 3)), np.zeros((n, 2)))
+    inj.set_target_correction(np.zeros((n, 3, 3)), np.zeros((n, 3, 3)), np.zeros((n, 2)))
     rep_i = inj.solve()
     fb, fi = base.fields(), inj.fields()
     for key in ("rho", "u", "p"):
@@ -80,12 +80,17 @@ def test_diagnostics_record_violation():
     b[:, 0, 0] = 0.9          # beyond the one-component corner (2/3)
     b[:, 1, 1] = -0.45
     b[:, 2, 2] = -0.45
-    solver.set_target_correction(b, np.zeros((0,)))
+    # the absolute target carries the violation for the realizability
+    # recording; max_db now measures the OPERATIVE stored discrepancy (the
+    # injected magnitude), so it is exercised through db, not b
+    db = np.zeros_like(b)
+    db[:, 0, 1] = db[:, 1, 0] = 1e-6
+    solver.set_target_correction(db, b, np.zeros((0,)))
     solver.solve()
     d = solver.injection_diagnostics()
     assert d["all_realizable"] is False
     assert d["max_violation"] > 0.0
-    assert d["max_db"] == pytest.approx(0.9)
+    assert d["max_db"] == pytest.approx(1e-6)
 
 
 def test_boundary_profile_constant_matches_uniform():

@@ -1,10 +1,13 @@
 // Model-form injection verification for the density-based solver: the
 // deferred-correction coupling with the heat-flux (energy-equation) reach.
 //
-//   1. Zero-correction identity: with a zero target anisotropy on a laminar
-//      flow (mu_t = 0, k = 0) the injected stress difference vanishes
-//      identically, so the injected solve must reproduce the baseline fields
-//      exactly (the plumbing adds nothing when it should add nothing).
+//   1. Zero-correction identity: a zero STORED discrepancy must reproduce
+//      the baseline fields exactly, laminar AND turbulent. The turbulent
+//      case is the discriminating one: the 2026-07-20 review measured that
+//      a target-minus-solver-Boussinesq formulation broke this identity at
+//      any nonzero mu_t through the operator difference between the
+//      conditioning-side gradients and the solver's Green-Gauss ones; the
+//      stored-discrepancy form makes db = 0 exactly zero flux at any state.
 //   2. Heat-flux reach directionality: a constant positive wall-normal
 //      heat-flux correction transports energy upward, so the converged
 //      temperature field must become asymmetric (upper half warmer than the
@@ -94,7 +97,7 @@ static void test_zero_correction_identity() {
     inj.initUniform({c.rho0, 0.0, 0.0, c.p0, 0.0, 0.0});
     int nc = c.mesh.nCells();
     std::vector<double> b6(6 * nc, 0.0), dq2(2 * nc, 0.0);
-    inj.setTargetCorrection(b6, dq2, true);
+    inj.setTargetCorrection(b6, b6, dq2, true);
     SolveReport ri = inj.solve();
     REQUIRE(ri.status == EvaluationStatus::Converged, "injected converges");
 
@@ -136,7 +139,7 @@ static void test_heat_flux_reach_direction() {
         double y = c.mesh.cell(ci).center.y;
         dq2[2 * ci + 1] = 1.0 * std::sin(M_PI * y / c.H);    // dq_y [m/s K]
     }
-    inj.setTargetCorrection(b6, dq2, true);
+    inj.setTargetCorrection(b6, b6, dq2, true);
     REQUIRE(inj.solve().status == EvaluationStatus::Converged,
             "injected converges");
     double asymInj = thermalAsymmetry(inj, c);
@@ -153,7 +156,7 @@ static void test_heat_flux_reach_direction() {
     // on this laminar case (the stress part is identically zero)
     DBNSSolver noReach(c.mesh, c.eos, SSTCoefficients{}, c.bcs, c.st);
     noReach.initUniform({c.rho0, 0.0, 0.0, c.p0, 0.0, 0.0});
-    noReach.setTargetCorrection(b6, dq2, false);
+    noReach.setTargetCorrection(b6, b6, dq2, false);
     REQUIRE(noReach.solve().status == EvaluationStatus::Converged,
             "anisotropy-only variant converges");
     double asymOff = thermalAsymmetry(noReach, c);
@@ -172,7 +175,10 @@ static void test_realizability_recording() {
     std::vector<double> b6(6 * nc, 0.0), dq2;
     b6[0] = 0.9;                   // b_xx beyond the one-component corner
     b6[1] = -0.45; b6[2] = -0.45;
-    s.setTargetCorrection(b6, dq2, true);
+    // the absolute target carries the violation; the operative discrepancy
+    // stays zero so the recording is exercised without a destabilizing flux
+    std::vector<double> db6(6 * nc, 0.0);
+    s.setTargetCorrection(db6, b6, dq2, true);
     s.solve();
     const InjectionDiagnostics& d = s.injectionDiagnostics();
     std::printf("  [realizability] checked %d iters, all realizable %d, "
@@ -186,9 +192,49 @@ static void test_realizability_recording() {
     REQUIRE(!s.injectionDiagnostics().active, "clear resets the diagnostics");
 }
 
+static void test_turbulent_zero_discrepancy_identity() {
+    // SST active (k, mu_t nonzero): the laminar identity can never catch a
+    // Boussinesq-subtraction operator mismatch, this one exists to
+    CouetteCase c;
+    c.st.turbulent = true;
+    c.st.maxIterations = 400;      // a short march discriminates fully
+    c.st.convergenceTol = 1e-30;
+    auto init = [&](DBNSSolver& s) {
+        s.initUniform({c.rho0, 0.5 * c.Uw, 0.0, c.p0,
+                       1.0, 50.0});    // nonzero k, omega
+    };
+    DBNSSolver base(c.mesh, c.eos, SSTCoefficients{}, c.bcs, c.st);
+    init(base);
+    base.solve();
+
+    DBNSSolver inj(c.mesh, c.eos, SSTCoefficients{}, c.bcs, c.st);
+    init(inj);
+    int nc = c.mesh.nCells();
+    std::vector<double> db6(6 * nc, 0.0), bDiag(6 * nc, 0.0), dq2;
+    // a NONZERO diagnostic target: only the stored discrepancy may act
+    for (int ci = 0; ci < nc; ++ci) bDiag[6 * ci + 3] = -0.15;
+    inj.setTargetCorrection(db6, bDiag, dq2, true);
+    inj.solve();
+
+    double maxDiff = 0.0;
+    for (int ci = 0; ci < nc; ++ci) {
+        Primitive Vb = base.primitive(ci), Vi = inj.primitive(ci);
+        maxDiff = std::max({maxDiff, std::abs(Vb.u - Vi.u),
+                            std::abs(Vb.v - Vi.v), std::abs(Vb.p - Vi.p),
+                            std::abs(Vb.k - Vi.k),
+                            std::abs(Vb.omega - Vi.omega)});
+    }
+    std::printf("  [turbulent identity] max primitive difference %.3e\n",
+                maxDiff);
+    REQUIRE(maxDiff == 0.0,
+            "zero stored discrepancy is bit-identical at a turbulent state");
+}
+
 int main() {
     std::printf("[dbns injection] zero-correction identity\n");
     test_zero_correction_identity();
+    std::printf("[dbns injection] turbulent zero-discrepancy identity\n");
+    test_turbulent_zero_discrepancy_identity();
     std::printf("[dbns injection] heat-flux reach directionality\n");
     test_heat_flux_reach_direction();
     std::printf("[dbns injection] realizability recording\n");

@@ -590,7 +590,7 @@ void DBNSSolver::computeResidual() {
     for (int fi = nIF; fi < mesh_.nFaces(); ++fi)
         addBoundaryFlux(fi, mesh_.face(fi).patchID);
 
-    if (!bTarget6_.empty()) addInjectionFluxes();
+    if (!dbTarget6_.empty()) addInjectionFluxes();
 
     addTurbulenceSources();
 
@@ -603,18 +603,30 @@ void DBNSSolver::computeResidual() {
 }
 
 // --- model-form injection (the deferred-correction coupling) -----------------
-void DBNSSolver::setTargetCorrection(const std::vector<double>& b6,
+void DBNSSolver::setTargetCorrection(const std::vector<double>& db6,
+                                     const std::vector<double>& bDiag6,
                                      const std::vector<double>& dq2,
                                      bool energyReach,
                                      const std::vector<std::uint8_t>& mask) {
     injMask_ = mask;
     int nc = mesh_.nCells();
-    if ((int)b6.size() != 6 * nc)
-        throw std::runtime_error("setTargetCorrection: b6 must be nCells*6");
+    // the STORED discrepancy is the operative input: the injected flux is
+    // -div(2 rho k db) with db fixed at conditioning time, so the
+    // zero-correction case (db = 0) is exact BY CONSTRUCTION regardless of
+    // any operator difference between the conditioning-side gradients and
+    // this solver's Green-Gauss reconstruction (the turbulent identity
+    // defect the 2026-07-20 review measured). The absolute target enters
+    // only the realizability diagnostics.
+    if ((int)db6.size() != 6 * nc)
+        throw std::runtime_error("setTargetCorrection: db6 must be nCells*6");
+    if ((int)bDiag6.size() != 6 * nc)
+        throw std::runtime_error("setTargetCorrection: bDiag6 must be "
+                                 "nCells*6");
     if (!dq2.empty() && (int)dq2.size() != 2 * nc)
         throw std::runtime_error("setTargetCorrection: dq2 must be nCells*2 "
                                  "or empty");
-    bTarget6_ = b6;
+    dbTarget6_ = db6;
+    bTarget6_ = bDiag6;
     dqTarget2_ = dq2;
     injectEnergyReach_ = energyReach;
     injDiag_ = InjectionDiagnostics{};
@@ -624,16 +636,18 @@ void DBNSSolver::setTargetCorrection(const std::vector<double>& b6,
         Primitive V = GasState::toPrimitive(W_[ci], eos_);
         injRhoK0_[ci] = V.rho * std::max(V.k, 0.0);
     }
-    for (double v : bTarget6_)
+    for (double v : dbTarget6_)
         injDiag_.maxDb = std::max(injDiag_.maxDb, std::abs(v));
     for (double v : dqTarget2_)
         injDiag_.maxDq = std::max(injDiag_.maxDq, std::abs(v));
 }
 
 void DBNSSolver::clearTargetCorrection() {
+    dbTarget6_.clear();
     bTarget6_.clear();
     dqTarget2_.clear();
     injMask_.clear();
+    injRhoK0_.clear();
     injDiag_ = InjectionDiagnostics{};
 }
 
@@ -682,28 +696,18 @@ void DBNSSolver::addInjectionFluxes() {
         Primitive V = GasState::toPrimitive(W_[ci], eos_);
         double rho = V.rho;
         double k = std::max(V.k, 0.0);
-        // frozen-k: the injected DIFFERENCE 2 rho k (b_t - b_B) rides the
-        // baseline rho k so the force cannot amplify the k it produces. The
-        // Boussinesq term therefore carries the SAME scale through the
-        // bounded coefficient mu_T/(rho k): the zero-correction cancellation
-        // stays exact at any running state, and the form reduces to the
-        // registered running-k one when the state equals the baseline.
+        // the injected stress difference is 2 rho k db with the STORED
+        // discrepancy: db = 0 gives exactly zero flux at every state (the
+        // discrete zero-correction contract), the registered form rides the
+        // running rho k, and the frozen-k variant is the pure difference
+        // 2 (rho k)_0 db with the conditioning-time scale
         double rhok = settings_.injectionFrozenK
             ? injRhoK0_[ci] : rho * k;
-        double muT = settings_.injectionFrozenK
-            ? injRhoK0_[ci] * (muT_[ci] / std::max(rho * k, 1e-30))
-            : muT_[ci];
-        double dudx = grad_[ci][G_U].x, dudy = grad_[ci][G_U].y;
-        double dvdx = grad_[ci][G_V].x, dvdy = grad_[ci][G_V].y;
-        double div3 = (dudx + dvdy) / 3.0;      // trace/3 of the 2-D strain
-        double devSxx = dudx - div3;
-        double devSyy = dvdy - div3;
-        double Sxy = 0.5 * (dudy + dvdx);
-        const double* bt = bTarget6_.data() + 6 * ci;
-        // b ordered xx, yy, zz, xy, xz, yz; only xx, yy, xy enter the fluxes
-        txx[ci] = -(2.0 * rhok * bt[0] + 2.0 * muT * devSxx);
-        tyy[ci] = -(2.0 * rhok * bt[1] + 2.0 * muT * devSyy);
-        txy[ci] = -(2.0 * rhok * bt[3] + 2.0 * muT * Sxy);
+        const double* db = dbTarget6_.data() + 6 * ci;
+        // db ordered xx, yy, zz, xy, xz, yz; only xx, yy, xy enter the fluxes
+        txx[ci] = -2.0 * rhok * db[0];
+        tyy[ci] = -2.0 * rhok * db[1];
+        txy[ci] = -2.0 * rhok * db[3];
         if (withHeat) {
             qx[ci] = rho * cp * dqTarget2_[2 * ci];
             qy[ci] = rho * cp * dqTarget2_[2 * ci + 1];
@@ -993,6 +997,7 @@ SolveReport DBNSSolver::solveImplicitSteady() {
     // success. Persistent rejection classifies as Diverged.
     double cflScale = 1.0;
     int rejectCount = 0;
+    double lastCriterion = 1.0;
     int consecutiveRejects = 0;
     // the uniform initial state has a machine-zero density residual, so the
     // relative-convergence normalizer is the residual maximum over the ramp
@@ -1086,13 +1091,45 @@ SolveReport DBNSSolver::solveImplicitSteady() {
             }
         if (!admissible) {
             if (settings_.verbose && (rejectCount % 500 == 0)) {
+                // the failing cell's turbulence and energy budget: the
+                // limiter branch, the specific production against its cap,
+                // destruction, and the internal-energy margin the runaway
+                // hypothesis says the k growth is bankrupting
                 const Primitive Vb = GasState::toPrimitive(Wsave[badCell],
                                                            eos_);
                 const auto& c = mesh_.cell(badCell).center;
+                double dudx = grad_[badCell][G_U].x;
+                double dudy = grad_[badCell][G_U].y;
+                double dvdx = grad_[badCell][G_V].x;
+                double dvdy = grad_[badCell][G_V].y;
+                double S12 = 0.5 * (dudy + dvdx);
+                double S2 = 2.0 * (dudx * dudx + dvdy * dvdy)
+                          + 4.0 * S12 * S12;
+                double kk = std::max(Vb.k, 0.0);
+                double ww = std::max(Vb.omega, 1e-30);
+                double Pk = std::min(muT_[badCell] * S2,
+                                     10.0 * 0.09 * Vb.rho * kk * ww);
+                double Dk = 0.09 * Vb.rho * kk * ww;
+                double eInt = Wsave[badCell][I_RHOE]
+                    - 0.5 * Vb.rho * (Vb.u * Vb.u + Vb.v * Vb.v)
+                    - Vb.rho * kk;
+                double tauInj = 0.0;
+                if (!dbTarget6_.empty()) {
+                    const double* dbc = dbTarget6_.data() + 6 * badCell;
+                    double rk = settings_.injectionFrozenK
+                        ? injRhoK0_[badCell] : Vb.rho * kk;
+                    tauInj = 2.0 * rk * std::max({std::abs(dbc[0]),
+                                                  std::abs(dbc[1]),
+                                                  std::abs(dbc[3])});
+                }
+                int lim = (badCell < (int)limiterActive_.size())
+                    ? limiterActive_[badCell] : -1;
                 std::printf("  [reject %d] iter %d cell %d (x %.4g, y %.4g)"
-                            "  pre-step rho %.3e p %.3e k %.3e\n",
+                            "  rho %.3e p %.3e k %.3e om %.3e lim %d"
+                            "  Pk %.3e Dk %.3e eInt %.3e tauInj %.3e\n",
                             rejectCount, iter, badCell, c.x, c.y,
-                            Vb.rho, Vb.p, Vb.k);
+                            Vb.rho, Vb.p, Vb.k, Vb.omega, lim,
+                            Pk, Dk, eInt, tauInj);
             }
             ++rejectCount;
             W_ = Wsave;                     // reject the step, back the CFL off
@@ -1100,6 +1137,9 @@ SolveReport DBNSSolver::solveImplicitSteady() {
             if (++consecutiveRejects > 20) {
                 rep.status = EvaluationStatus::Diverged;
                 rep.iterations = iter;
+                // the last accepted step's criterion value: a divergence
+                // record must not carry a falsely excellent default zero
+                rep.finalResidual = lastCriterion;
                 return rep;
             }
             continue;
@@ -1155,6 +1195,7 @@ SolveReport DBNSSolver::solveImplicitSteady() {
         }
         const double turbMax = settings_.turbulent
             ? std::max(lastKChange, lastOmChange) : 0.0;
+        lastCriterion = std::max(relMax, turbMax);
         if (settings_.verbose && (iter % settings_.reportInterval == 0)) {
             std::printf("  [lusgs] iter %6d  cfl %.1f  res_rho %.3e (rel %.3e)"
                         "  rel_max %.3e  rel_eq", iter, cfl, rn, rn / res0,
@@ -1187,6 +1228,7 @@ SolveReport DBNSSolver::solveImplicitSteady() {
             } else {
                 rep.status = EvaluationStatus::Diverged;
                 rep.iterations = iter;
+                rep.finalResidual = lastCriterion;
                 return rep;
             }
             break;

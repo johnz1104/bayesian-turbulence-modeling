@@ -72,6 +72,11 @@ MEMBER_MAX_ITER = 45000
 MEMBER_TOL = 1e-3
 MEMBER_ABORT_ITER = 15000
 MEMBER_ABORT_RELMAX = 0.3
+# the registered coupled leg runs the running-k stored-discrepancy form;
+# a frozen-k or ramped variant is a dated amendment that flips these
+# versioned constants (they are part of the member cache identity)
+MEMBER_FROZEN_K = False
+MEMBER_RAMP_ITERS = 0
 
 
 def _apo_dir(results_dir):
@@ -98,6 +103,9 @@ def _member_config():
     pre-audit member records into a corrected-era fold; identity-mismatched
     or unfingerprinted member files are treated as absent and re-solved."""
     return sbli_ident("apo-member", "all-cases", member={
+        "physics": "sbli-member-dbns-v3",
+        "injection_form": "stored-discrepancy",
+        "frozen_k": MEMBER_FROZEN_K, "ramp_iters": MEMBER_RAMP_ITERS,
         "max_iter": MEMBER_MAX_ITER, "tol": MEMBER_TOL,
         "abort_iter": MEMBER_ABORT_ITER,
         "abort_rel_max": MEMBER_ABORT_RELMAX,
@@ -140,7 +148,9 @@ def _load_baseline(records, case, results_dir, quick, with_shock=True,
         kw = {"max_iterations": MEMBER_MAX_ITER,
               "convergence_tol": MEMBER_TOL,
               "early_abort_iter": MEMBER_ABORT_ITER,
-              "early_abort_rel_max": MEMBER_ABORT_RELMAX}
+              "early_abort_rel_max": MEMBER_ABORT_RELMAX,
+              "injection_frozen_k": MEMBER_FROZEN_K,
+              "injection_ramp_iters": MEMBER_RAMP_ITERS}
     if derived_probe:
         kw = {"max_iterations": 1, "convergence_tol": 1e-30}
     base = _configure(records[case], quick, with_shock=with_shock, **kw)
@@ -182,7 +192,7 @@ def stage_targets(records, results_dir, fold, quick, n_members, epochs):
         np.savez_compressed(
             _targets_path(results_dir, fold, kind),
             b=b_t.astype(np.float32), dq=dq.astype(np.float32),
-            mask=mask)
+            b_base=b_base.astype(np.float32), mask=mask)
         meta[f"{kind}_db_fro_med_masked"] = float(np.median(
             np.linalg.norm((b_t - b_base[None])[:, mask], axis=(2, 3))))
         meta[f"{kind}_dq_abs_med"] = float(np.median(np.abs(dq)))
@@ -190,7 +200,7 @@ def stage_targets(records, results_dir, fold, quick, n_members, epochs):
     corners.update(five_state_targets(b_base, mask, strain))
     np.savez_compressed(
         _targets_path(results_dir, fold, "corners"),
-        mask=mask,
+        mask=mask, b_base=b_base.astype(np.float32),
         **{lab: b.astype(np.float32) for lab, b in corners.items()})
 
     # attached-control targets: the same fold models conditioned on the
@@ -208,7 +218,7 @@ def stage_targets(records, results_dir, fold, quick, n_members, epochs):
         np.savez_compressed(
             _targets_path(results_dir, fold, kind, attached=True),
             b=b_t.astype(np.float32), dq=dq.astype(np.float32),
-            mask=amask)
+            b_base=ab_base.astype(np.float32), mask=amask)
 
     meta["wall_time_s"] = round(time.time() - t0, 1)
     json.dump(meta, open(os.path.join(
@@ -249,6 +259,7 @@ def stage_targets_far(records, results_dir, quick, n_members, epochs):
         np.savez_compressed(
             _targets_path(results_dir, "faradiab", kind),
             b=b_base[None].astype(np.float32),
+            b_base=b_base.astype(np.float32),
             dq=dq.transpose(1, 0, 2).astype(np.float32))
     meta["wall_time_s"] = round(time.time() - t0, 1)
     json.dump(meta, open(os.path.join(
@@ -273,6 +284,7 @@ def stage_member(records, results_dir, fold, kind, index, quick,
     if corner is not None:
         tg = np.load(_targets_path(results_dir, fold, "corners"))
         b_t = np.asarray(tg[corner], dtype=float)
+        db_t = b_t - np.asarray(tg["b_base"], dtype=float)
         dq_dim = np.zeros((b_t.shape[0], 2))
         inj_mask = (np.asarray(tg["mask"], bool) if "mask" in tg.files
                     else np.array([], dtype=bool))
@@ -286,6 +298,7 @@ def stage_member(records, results_dir, fold, kind, index, quick,
         b_all = tg["b"]
         b_t = np.asarray(b_all[index if b_all.shape[0] > 1 else 0],
                          dtype=float)
+        db_t = b_t - np.asarray(tg["b_base"], dtype=float)
         dq = np.asarray(tg["dq"][index], dtype=float)
         dq_dim = dq_to_solver_units(dq[None], record, base.units)[0]
         inj_mask = (np.asarray(tg["mask"], bool) if "mask" in tg.files
@@ -298,7 +311,10 @@ def stage_member(records, results_dir, fold, kind, index, quick,
         # the registered anisotropy-only diagnostic: identical targets, the
         # energy-equation reach disabled, so the dq contribution is isolated
         dq_dim = np.zeros_like(dq_dim)
-    base.solver.set_target_correction(b_t, dq_dim, energy_reach,
+    # the STORED discrepancy is the operative injection input (the discrete
+    # zero-correction contract); the absolute target rides along only for
+    # the running realizability diagnostics
+    base.solver.set_target_correction(db_t, b_t, dq_dim, energy_reach,
                                       mask=inj_mask)
     rep = base.solver.solve()
     w = base.wall()

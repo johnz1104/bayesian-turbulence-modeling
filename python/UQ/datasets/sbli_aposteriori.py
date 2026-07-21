@@ -23,7 +23,7 @@ Construction, exactly as pinned:
   the extraction's interior mask) the target reverts to the baseline
   anisotropy and zero heat-flux correction, so the injection acts only where
   the model was trained to speak;
-- injection: set_target_correction(b_target, dq_target, energy_reach) with
+- injection: set_target_correction(db, b_target, dq_target, energy_reach) with
   dq converted from the record's (u_tau_ref, T_w) units to the solver's
   dimensional Favre flux; every member solve initializes FROM THE CONVERGED
   BASELINE FIELDS (init_field), a perturbation solve, not a cold start;
