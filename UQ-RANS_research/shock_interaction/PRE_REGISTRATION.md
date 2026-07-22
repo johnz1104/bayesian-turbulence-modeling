@@ -807,3 +807,94 @@ a-priori training or coupled propagation on the corrected implementation.
    direct per-cell state validation. Every solved equation remains in the
    criterion under stated semantics; no gate or baseline artifact
    predating this note was produced under it.
+
+## Dated addendum (2026-07-21): seed-resolved ensembles, lineage, and repair conventions, fixed before any corrected-lineage result
+
+Recorded after the reviewer's ten-finding provenance review invalidated the
+first corrected-era a-priori extractions, targets, and coupled rounds
+(quarantined, never quoted), and BEFORE any extraction, trained model,
+target, ensemble, or score exists on the repaired lineage. No success band,
+null shape, fold definition, or clause threshold changes.
+
+1. Seed-resolved ensemble protocol (the estimand made precise). Model
+   seeds {0, 1, 2} train separately; the sampling seed stays at the
+   registered 0 and is distinct from the model seed; both appear in every
+   cache path and record. Each probabilistic method propagates 24 coherent
+   members per fold PER MODEL SEED; each 24-member ensemble is scored
+   separately; per-seed values are reported with the seed mean and the
+   min-max range; every criterion is evaluated on the seed mean. The
+   18-of-24 convergence rule applies independently per seed with no
+   borrowing of converged members across seeds, and an aggregate is
+   labeled propagation-unstable if ANY constituent seed falls below 18 of
+   24, with all per-seed counts retained. The 72 members of one method and
+   fold are never pooled into one forecast (pooling would change coverage,
+   the proper scores, and the registered estimand). Deterministic
+   zero-discrepancy controls, eigenspace corners, and five-state baselines
+   run once per physical fold, not per seed.
+
+2. Transitive content-hash lineage. Every cache carries a configuration
+   fingerprint whose configuration embeds the exact content hash of every
+   upstream cache it was built from: converged fields into extractions,
+   extractions and conditioning fields into targets, the exact target file
+   into each member, targets and members into the fold score. A mutated,
+   regenerated, or absent parent therefore invalidates every descendant
+   automatically (the stale-extraction failure mode of the review cannot
+   recur silently). All cache writes are atomic (temp file and rename).
+   This extends amendment 6; it changes no estimator or threshold.
+
+3. Effective running realizability, diagnostic only. The per-iteration
+   realizability re-check of the coupled solve is evaluated on the
+   EFFECTIVE running anisotropy b_eff(W) = b_B(W) + db_stored, where b_B
+   is the solver's own Boussinesq anisotropy at the current state and
+   db_stored the injected discrepancy, replacing the frozen absolute-target
+   check the review flagged (which measured the pre-projected target, not
+   the anisotropy the momentum equation carries). The worst margin and the
+   largest violation are recorded with their iteration and cell; b_eff is
+   never projected or clipped during the run. Clause 5 of the a-posteriori
+   leg reads this diagnostic.
+
+4. Wall transport coefficients at resolved walls are molecular. The
+   density-based solver's no-slip wall fluxes (momentum shear, isothermal
+   heat flux, k and omega wall diffusion) and the wall observation
+   operator previously used the owner-cell eddy viscosity; at the resolved
+   first cell (y+ 0.05) the measured eddy-to-molecular ratio is order
+   1e-15 to 1e-12, so the change is numerically immaterial and is made for
+   correctness, with the physics schema token bumped and an equivalence
+   audit (saved-state observation deltas, warm-reconverged fields and gate
+   metrics against pinned records) run per configuration before any
+   downstream stage.
+
+5. The frozen-mean fallback made concrete. The registered gate-B fallback
+   (the DNS Favre mean held fixed, k and omega transport marched to
+   steadiness with the same implicit driver) is implemented as a solver
+   mode and applied EXACTLY where the 2026-07-18 per-case ruling assigns
+   it: the adiabatic 2011 campaign's a-priori surface. Its extraction
+   parent is the frozen-mean march, never the gate-failing free-running
+   solve; the s = 1.0 fold remains fully eligible; and the s = 1.0 fold's
+   second-truth-surface baseline comparison line is the s = 1.0 baseline
+   scored on the 2011 series (the excluded adiabatic solve supplies no
+   claim-bearing reference). The attached-to-adiabatic far-transfer
+   propagation lives in an exploratory results namespace that the formal
+   assembler structurally cannot consume, and runs only under an explicit
+   opt-in flag.
+
+6. Far-transfer db pool verified and the conformal roles made disjoint.
+   The registered db pool (the channel matrix plus the twelve attached
+   boundary-layer cases, with the plates' ready-made anisotropy as a
+   labeled sensitivity variant) is implemented as registered; the twelve
+   staged boundary-layer cases were verified against the data section
+   (M2 at eight friction Reynolds numbers, M3 and M4 at two each) with no
+   discrepancy. The wall-flux-normalized conformal line's roles are fixed
+   at WHOLE-CASE level before any result: the attached channel cases split
+   into disjoint fit and calibration sets by a frozen within-Mach-family
+   alternation, the conformal predictor trains on the fit cases only, the
+   quantile calibrates on the held-out calibration cases, and no
+   calibration-case row enters the predictor's training. The far
+   deployment mask is saved and fingerprinted with the targets it masks.
+
+7. Early abort retired for formal members. The 15000-iteration / 0.3
+   fail-fast rule was calibrated on the confounded pre-repair round, so
+   every formal member solve runs abort-off at the full budget. Any
+   production re-enablement requires an independent full-budget diagnostic
+   panel and a dated amendment fixing the thresholds, before any member it
+   governs is scored.
