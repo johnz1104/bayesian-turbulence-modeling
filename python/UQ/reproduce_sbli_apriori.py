@@ -268,6 +268,39 @@ def _case_cached(results_dir, case, history=True):
                               sbli_ident("sbli_fields", case)))
 
 
+def ensure_frozen_mean_adiabatic(records, results_dir, quick, regen=False):
+    """March the frozen-mean adiabatic transport baseline (the registered
+    gate-B fallback of the adiabatic a-priori surface) if its fields cache
+    is not identity-current: the primitive mean pinned to the record's own
+    Favre mean, k and omega marched to steadiness. A non-converged march is
+    a stop-and-report state (the registered fallback route itself would be
+    unavailable)."""
+    fm_path = _fields_path(results_dir, "adiabatic_frozenmean")
+    fm_ident = sbli_ident("sbli_fields", "adiabatic_frozenmean")
+    if not regen and _npz_ident_ok(fm_path, fm_ident):
+        return
+    t0 = time.time()
+    fm = _configure(records["adiabatic"], quick, with_shock=True,
+                    frozen_mean=True)
+    fm.init_from_record_mean()
+    rep = fm.solve()
+    entry = {"status": str(rep.status),
+             "iterations": rep.iterations,
+             "final_residual": float(rep.final_residual),
+             "wall_time_s": round(time.time() - t0, 1)}
+    os.makedirs(results_dir, exist_ok=True)
+    cfp.json_atomic(os.path.join(results_dir,
+                                 "frozen_mean_adiabatic.json"), entry)
+    print(f"[frozen-mean adiabatic] {rep.status} iters {rep.iterations}")
+    if str(rep.status).endswith("Converged"):
+        _save_fields(results_dir, "adiabatic_frozenmean", fm.solver)
+    else:
+        print("[frozen-mean adiabatic] NOT converged: cache withheld; the "
+              "registered fallback route is unavailable, stopping (report "
+              "before any downstream stage)")
+        sys.exit(1)
+
+
 def stage_baselines(records, results_dir, quick, regen):
     """Solve the baselines where their caches are missing, measure the
     gates, and build the extraction caches. Cached cases never re-solve
@@ -320,32 +353,7 @@ def stage_baselines(records, results_dir, quick, regen):
     # exploratory legs). Prepared before the gate-B loop so any
     # extraction-regeneration warm load finds the cache in place.
     if "adiabatic" in records:
-        fm_path = _fields_path(results_dir, "adiabatic_frozenmean")
-        fm_ident = sbli_ident("sbli_fields", "adiabatic_frozenmean")
-        if regen or not _npz_ident_ok(fm_path, fm_ident):
-            t0 = time.time()
-            fm = _configure(records["adiabatic"], quick, with_shock=True,
-                            frozen_mean=True)
-            fm.init_from_record_mean()
-            rep = fm.solve()
-            entry = {"status": str(rep.status),
-                     "iterations": rep.iterations,
-                     "final_residual": float(rep.final_residual),
-                     "wall_time_s": round(time.time() - t0, 1)}
-            os.makedirs(results_dir, exist_ok=True)
-            cfp.json_atomic(os.path.join(results_dir,
-                                         "frozen_mean_adiabatic.json"),
-                            entry)
-            print(f"[frozen-mean adiabatic] {rep.status} iters "
-                  f"{rep.iterations}")
-            if str(rep.status).endswith("Converged"):
-                _save_fields(results_dir, "adiabatic_frozenmean", fm.solver)
-            else:
-                print("[frozen-mean adiabatic] NOT converged: cache "
-                      "withheld; the registered fallback route is "
-                      "unavailable, stopping (report before any downstream "
-                      "stage)")
-                sys.exit(1)
+        ensure_frozen_mean_adiabatic(records, results_dir, quick, regen)
 
     # gate B: the interaction configuration per record, solve-once cached
     for case, record in records.items():
@@ -582,6 +590,13 @@ def stage_reconverge(records, results_dir, quick, cases):
         old = np.load(old_path)
         prim_old = np.asarray(old["primitive"], dtype=float)
         audit = {"case": case}
+        # preserve the pre-migration gate record inside the audit before
+        # the rewrite (the cold-solve history stays quotable)
+        gate_file = ("gate_a.json" if case == "gate_a_attached"
+                     else f"gate_b_{case}.json")
+        gp = os.path.join(results_dir, gate_file)
+        if os.path.isfile(gp):
+            audit["gate_pre_migration"] = json.load(open(gp))
 
         # (1) the direct physics delta on the saved state
         base = _configure(record, quick, with_shock=with_shock)
