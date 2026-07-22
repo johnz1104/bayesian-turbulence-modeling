@@ -24,8 +24,11 @@ sys.path.insert(0, os.path.join(_HERE, ".."))
 
 from UQ.reproduce_sbli_apriori import (_all_records, _wall_path,
                                        GATE_A_CF, GATE_A_STATION)
-from UQ.reproduce_sbli_aposteriori import (_member_path, _apo_dir,
-                                           _load_member, KINDS, FOLDS)
+from UQ.reproduce_sbli_aposteriori import (_member_path, _member_config,
+                                           _member_current,
+                                           _corner_member_path,
+                                           _load_member, KINDS, FOLDS,
+                                           MODEL_SEEDS)
 from UQ.datasets.sbli_aposteriori import STATIONS
 
 KIND_COLORS = {"flow": "tab:blue", "gauss": "tab:orange",
@@ -174,22 +177,30 @@ def fig_bands(records, results_dir, fold, n_members, out):
     if rec is None:
         print(f"skip fig5 {fold} (no record)")
         return
+    # per-seed ensembles, identity-gated (stale or unfingerprinted member
+    # caches never render), drawn per model seed and never pooled across
+    # seeds (the seed-resolved protocol)
     ensembles = {}
     for kind in KINDS:
-        members = []
-        for i in range(n_members):
-            p = _member_path(results_dir, fold, kind, i)
-            if os.path.isfile(p):
-                m = _load_member(p)
-                if "Converged" in m["status"]:
-                    members.append(m)
-        if len(members) >= 2:
-            ensembles[kind] = members
+        per_seed = {}
+        for ms in MODEL_SEEDS:
+            members = []
+            for i in range(n_members):
+                p = _member_path(results_dir, fold, kind, i, model_seed=ms)
+                c = _member_config(results_dir, fold, kind=kind, index=i,
+                                   model_seed=ms)
+                if _member_current(p, c):
+                    m = _load_member(p)
+                    if "Converged" in m["status"]:
+                        members.append(m)
+            if len(members) >= 2:
+                per_seed[ms] = members
+        if per_seed:
+            ensembles[kind] = per_seed
     corners = []
     for lab in ("1C_d1", "2C_d1", "3C_d1", "1C_d0.5", "2C_d0.5", "3C_d0.5"):
-        p = os.path.join(_apo_dir(results_dir),
-                         f"member_{fold}_corner_{lab}.npz")
-        if os.path.isfile(p):
+        p = _corner_member_path(results_dir, fold, lab)
+        if _member_current(p, _member_config(results_dir, fold, corner=lab)):
             m = _load_member(p)
             if "Converged" in m["status"]:
                 corners.append(m)
@@ -207,14 +218,20 @@ def fig_bands(records, results_dir, fold, n_members, out):
     for j, (q, truth, fac, lab) in enumerate(quantities):
         ax = axes[0][j]
         xg = np.linspace(series.x[0], series.x[-1], 300)
-        for kind, members in ensembles.items():
-            ens = np.stack([np.interp(xg, m["wall"]["x_star"],
-                                      m["wall"][q]) for m in members])
-            lo = np.quantile(ens, 0.05, axis=0)
-            hi = np.quantile(ens, 0.95, axis=0)
-            ax.fill_between(xg, fac * lo, fac * hi, alpha=0.25,
-                            color=KIND_COLORS[kind],
-                            label=f"{kind} 5-95 ({len(members)})")
+        for kind, per_seed in ensembles.items():
+            counts = ",".join(str(len(per_seed[ms]))
+                              for ms in sorted(per_seed))
+            for j_ms, ms in enumerate(sorted(per_seed)):
+                ens = np.stack([np.interp(xg, m["wall"]["x_star"],
+                                          m["wall"][q])
+                                for m in per_seed[ms]])
+                lo = np.quantile(ens, 0.05, axis=0)
+                hi = np.quantile(ens, 0.95, axis=0)
+                ax.fill_between(xg, fac * lo, fac * hi,
+                                alpha=0.25 / max(1, len(per_seed)) * 2,
+                                color=KIND_COLORS[kind],
+                                label=(f"{kind} 5-95 per seed ({counts})"
+                                       if j_ms == 0 else None))
         if len(corners) >= 2:
             ens = np.stack([np.interp(xg, m["wall"]["x_star"],
                                       m["wall"][q]) for m in corners])
@@ -240,13 +257,16 @@ def fig_attached(apo_numbers, out):
     for fold, block in folds.items():
         att = block.get("attached_control", {})
         for kind in KINDS:
-            if kind in att and att[kind].get("cf_members"):
-                rows.append((fold, kind, att[kind]["cf_members"],
-                             att.get("cf_baseline")))
+            per_seed = att.get(kind, {}).get("per_seed", {})
+            for ms in sorted(per_seed):
+                if per_seed[ms].get("cf_members"):
+                    rows.append((f"{fold} ms{ms}", kind,
+                                 per_seed[ms]["cf_members"],
+                                 att.get("cf_baseline")))
     if not rows:
         print("skip fig6 (no attached-control members)")
         return
-    fig, ax = plt.subplots(figsize=(1.6 * len(rows) + 2.5, 4))
+    fig, ax = plt.subplots(figsize=(1.1 * len(rows) + 2.5, 4))
     for i, (fold, kind, cfs, cf_base) in enumerate(rows):
         x = np.full(len(cfs), i, dtype=float)
         x += np.linspace(-0.15, 0.15, len(cfs))
@@ -258,7 +278,7 @@ def fig_attached(apo_numbers, out):
     ax.axhline(1e3 * GATE_A_CF, color="tab:red", lw=1.0, ls="--",
                label="measured")
     ax.set_xticks(np.arange(len(rows)))
-    ax.set_xticklabels([f"{f}\n{k}" for f, k, _, _ in rows], fontsize=8)
+    ax.set_xticklabels([f"{f}\n{k}" for f, k, _, _ in rows], fontsize=7)
     ax.set_ylabel(r"$10^3\, C_f$ at $x^*=-7.65$")
     ax.set_title("preserve-attached control")
     ax.legend(fontsize=8)
