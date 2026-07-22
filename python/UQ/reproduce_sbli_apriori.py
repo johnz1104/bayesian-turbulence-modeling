@@ -43,26 +43,12 @@ from UQ import cache_fingerprint as cfp
 from UQ.datasets.sbli_interaction import SBLIInteractionDNS, SBLI_S_CASES
 from UQ.datasets.sbli_baseline import SBLIBaseline
 from UQ.datasets import sbli_apriori
-from UQ.datasets.sbli_apriori import SBLIAPriori, TEST_STRIDE
+from UQ.datasets.sbli_apriori import (SBLIAPriori, TEST_STRIDE, SBLI_PHYSICS,
+                                      sbli_ident, extraction_ident,
+                                      extraction_fields_path,
+                                      conformal_case_split)
 
 DRIVER_SEED = 0
-# Physics schema token for every SBLI cache identity (the fingerprint
-# machinery of UQ.cache_fingerprint): bump exactly when the producing model
-# changes. v2 marks the honest adiabatic wall boundary condition and the
-# completed all-equation implicit convergence criterion; v1 (implicit, never
-# stamped) was the isothermal-convention, density-only-criterion round.
-SBLI_PHYSICS = "sbli-dbns-v2"
-
-
-def sbli_ident(kind, case, **extra):
-    """The cache identity every SBLI artifact carries: physics token, case,
-    and the production configuration that shaped the solve."""
-    ident = {"kind": kind, "physics": SBLI_PHYSICS, "case": case,
-             "config": {"nx": 480, "ny": 224, "x_hi": 14.0, "height": 8.0,
-                        "cfl": 300.0, "convergence_tol": 1e-6,
-                        "yplus_target": 0.05}}
-    ident.update(extra)
-    return ident
 
 
 GATE_A_CF = 2.56e-3        # measured incoming-layer skin friction (dataset)
@@ -80,7 +66,7 @@ def _all_records(root=None):
 def _configure(record, quick, with_shock=True, max_iterations=None,
                convergence_tol=None, early_abort_iter=0,
                early_abort_rel_max=0.0, injection_ramp_iters=0,
-               injection_frozen_k=False):
+               injection_frozen_k=False, frozen_mean=False):
     if quick:
         return SBLIBaseline.configure(record, with_shock=with_shock,
                                       nx=160, ny=112, x_hi=6.0, height=6.0,
@@ -92,6 +78,7 @@ def _configure(record, quick, with_shock=True, max_iterations=None,
                                       early_abort_rel_max=early_abort_rel_max,
                                       injection_ramp_iters=injection_ramp_iters,
                                       injection_frozen_k=injection_frozen_k,
+                                      frozen_mean=frozen_mean,
                                       yplus_target=0.05)
     # the resolved first cell is load-bearing: the omega wall anchor scales
     # as 1/y1^2 and at y1+ near one it is too weak to select the log-law
@@ -108,6 +95,7 @@ def _configure(record, quick, with_shock=True, max_iterations=None,
                                   early_abort_rel_max=early_abort_rel_max,
                                   injection_ramp_iters=injection_ramp_iters,
                                   injection_frozen_k=injection_frozen_k,
+                                  frozen_mean=frozen_mean,
                                   yplus_target=0.05)
 
 
@@ -118,8 +106,8 @@ def _wall_path(results_dir, case):
 def _save_wall(results_dir, case, w):
     arrays = {"x_star": w["x_star"], "Cf": w["Cf"], "Cp": w["Cp"],
               "qw": w["qw"], "St": w["St"]}
-    np.savez_compressed(_wall_path(results_dir, case),
-                        **cfp.attach(arrays, sbli_ident("sbli_wall", case)))
+    cfp.savez_atomic(_wall_path(results_dir, case),
+                     cfp.attach(arrays, sbli_ident("sbli_wall", case)))
 
 
 def _fields_path(results_dir, case):
@@ -129,7 +117,9 @@ def _fields_path(results_dir, case):
 def _save_fields(results_dir, case, solver):
     """Persist the converged primitive state (n_cells, 6): the a-posteriori
     members warm-start from it (init_field) so each is a perturbation solve,
-    and the fold targets condition on the same converged baseline."""
+    and the fold targets condition on the same converged baseline. `case`
+    is the cache tag (the frozen-mean adiabatic march saves under
+    adiabatic_frozenmean, its own identity)."""
     f = solver.fields()
     prim = np.stack([np.asarray(f[k], dtype=float)
                      for k in ("rho", "u", "v", "p", "k", "omega")], axis=1)
@@ -141,8 +131,8 @@ def _save_fields(results_dir, case, solver):
         # that predate this export)
         arrays["limiter_active"] = np.asarray(solver.limiter_active(),
                                               dtype=bool)
-    np.savez_compressed(_fields_path(results_dir, case),
-                        **cfp.attach(arrays, sbli_ident("sbli_fields", case)))
+    cfp.savez_atomic(_fields_path(results_dir, case),
+                     cfp.attach(arrays, sbli_ident("sbli_fields", case)))
 
 
 def _gate_a_profile_metrics(base, record, cf_station):
@@ -219,27 +209,37 @@ def _impingement_offset(w, record):
 
 
 def _extraction_current(results_dir, case, history=True):
-    """True when every extraction cache for the case carries the
-    objective-basis keys (the amendment's representation); a stale-format
-    cache regenerates from the CACHED converged fields through a warm-loaded
-    baseline, never a re-solve."""
+    """True when every extraction cache for the case matches its full
+    identity, including the transitive lineage edge to the current
+    converged-fields cache; a stale cache regenerates from the CACHED
+    converged fields through a warm-loaded baseline, never a re-solve."""
     strides = (TEST_STRIDE[case], sbli_apriori._train_stride(case))
     for st in strides:
         path = SBLIAPriori._cache_path(results_dir, case, st, history)
         if not os.path.isfile(path):
             return False
-        if "g_basis" not in np.load(path, allow_pickle=True).files:
+        z = np.load(path, allow_pickle=True)
+        status, _ = cfp.check({k: z[k] for k in z.files},
+                              extraction_ident(case, st, history,
+                                               results_dir))
+        if status != "match":
             return False
     return True
 
 
 def _warm_baseline(records, case, results_dir, quick, with_shock=True):
     """Rebuild the case and warm it with the cached converged primitive
-    state; one sweep populates the derived fields the extraction samples."""
+    state; one sweep populates the derived fields the extraction samples.
+    The adiabatic case warms its FROZEN-MEAN state (the registered gate-B
+    fallback route of its a-priori role)."""
+    frozen = case == "adiabatic"
     base = _configure(records[case], quick, with_shock=with_shock,
-                      max_iterations=1, convergence_tol=1e-30)
-    prim = np.load(_fields_path(
-        results_dir, case if with_shock else "gate_a_attached"))["primitive"]
+                      max_iterations=1, convergence_tol=1e-30,
+                      frozen_mean=frozen)
+    tag = case if with_shock else "gate_a_attached"
+    if frozen:
+        tag = "adiabatic_frozenmean"
+    prim = np.load(_fields_path(results_dir, tag))["primitive"]
     base.solver.init_field(prim)
     base.solver.solve()
     return base
@@ -307,10 +307,45 @@ def stage_baselines(records, results_dir, quick, regen):
             _save_fields(results_dir, "gate_a_attached", gate_a.solver)
         else:
             print("[gate A] NOT converged: caches withheld")
-        json.dump(out["gates"]["A"], open(gate_a_path, "w"), indent=1)
+        cfp.json_atomic(gate_a_path, out["gates"]["A"])
         print(f"[gate A] {rep.status} iters {rep.iterations} "
               f"cf {cf_station:.3e} vs {GATE_A_CF:.3e} "
               f"({out['gates']['A']['cf_rel_error']*100:.1f} percent)")
+
+    # the adiabatic 2011 campaign's a-priori role takes the registered
+    # frozen-mean fallback (the reviewer's per-case gate-B ruling): its
+    # extraction parent is the frozen-mean transport march at the record's
+    # own Favre mean, never the gate-failing free-running interaction solve
+    # (which stays cached only for the gate record and the labeled
+    # exploratory legs). Prepared before the gate-B loop so any
+    # extraction-regeneration warm load finds the cache in place.
+    if "adiabatic" in records:
+        fm_path = _fields_path(results_dir, "adiabatic_frozenmean")
+        fm_ident = sbli_ident("sbli_fields", "adiabatic_frozenmean")
+        if regen or not _npz_ident_ok(fm_path, fm_ident):
+            t0 = time.time()
+            fm = _configure(records["adiabatic"], quick, with_shock=True,
+                            frozen_mean=True)
+            fm.init_from_record_mean()
+            rep = fm.solve()
+            entry = {"status": str(rep.status),
+                     "iterations": rep.iterations,
+                     "final_residual": float(rep.final_residual),
+                     "wall_time_s": round(time.time() - t0, 1)}
+            os.makedirs(results_dir, exist_ok=True)
+            cfp.json_atomic(os.path.join(results_dir,
+                                         "frozen_mean_adiabatic.json"),
+                            entry)
+            print(f"[frozen-mean adiabatic] {rep.status} iters "
+                  f"{rep.iterations}")
+            if str(rep.status).endswith("Converged"):
+                _save_fields(results_dir, "adiabatic_frozenmean", fm.solver)
+            else:
+                print("[frozen-mean adiabatic] NOT converged: cache "
+                      "withheld; the registered fallback route is "
+                      "unavailable, stopping (report before any downstream "
+                      "stage)")
+                sys.exit(1)
 
     # gate B: the interaction configuration per record, solve-once cached
     for case, record in records.items():
@@ -349,7 +384,7 @@ def stage_baselines(records, results_dir, quick, regen):
             _save_fields(results_dir, case, base.solver)
         else:
             print(f"[gate B {case}] NOT converged: caches withheld")
-        json.dump(entry, open(gate_path, "w"), indent=1)
+        cfp.json_atomic(gate_path, entry)
         print(f"[gate B {case}] {rep.status} iters {rep.iterations} "
               f"offset {offset}")
         baselines[case] = base
@@ -370,9 +405,8 @@ def stage_baselines(records, results_dir, quick, regen):
         "gate_b_fail_cases": sorted(c for c, e in out["gates"]["B"].items()
                                     if not e.get("pass")),
     }
-    json.dump(adjud, open(os.path.join(results_dir,
-                                       "gates_adjudication.json"), "w"),
-              indent=1)
+    cfp.json_atomic(os.path.join(results_dir, "gates_adjudication.json"),
+                    adjud)
     if not adjud["gate_a_pass"]:
         print("[gates] GATE A FAILED: stopping before any downstream stage "
               "(solver-capability null; see the pre-registration)")
@@ -382,6 +416,14 @@ def stage_baselines(records, results_dir, quick, regen):
               f"excluded from claim-bearing coupled legs per the recorded "
               f"ruling; passing cases {adjud['gate_b_pass_cases']}")
 
+    # the adiabatic extraction baseline is the frozen-mean state regardless
+    # of what the gate-B loop assigned (its free-running solve serves the
+    # gate record only)
+    if "adiabatic" in records:
+        baselines["adiabatic"] = (
+            None if _extraction_current(results_dir, "adiabatic")
+            else _warm_baseline(records, "adiabatic", results_dir, quick))
+
     # extraction caches at both strides (with the history feature); cached
     # cases pass baseline None and are never touched
     study = SBLIAPriori.build(records, baselines, results_dir, history=True)
@@ -390,6 +432,15 @@ def stage_baselines(records, results_dir, quick, regen):
             "n_test_rows": int(ext["meta"]["n_points"]),
             "realizable_fraction": float(ext["realizable_fraction"]),
         }
+
+    # the deployed-path basis-feasibility record (the standalone divergent
+    # config is retired): the same per-fold gate the training legs consult,
+    # persisted as the evidence artifact
+    heated = {c: e for c, e in study.test_sets.items()
+              if e["dq"] is not None}
+    if heated:
+        cfp.json_atomic(os.path.join(results_dir, "basis_feasibility.json"),
+                        study.db_gate())
     return out, study
 
 
@@ -437,34 +488,53 @@ def _st_scale(study, case, record):
 
 def stage_far(study, seeds, epochs, records):
     out = {"transfer": {}, "control": {}, "conformal": {}}
-    for leg in ("dq_y", "dq_joint"):
+    for leg in ("dq_y", "dq_joint", "db"):
         out["transfer"][leg] = study.far_transfer(leg, seeds=seeds,
                                                   epochs=epochs)
+    # the labeled ZDC-anisotropy sensitivity variant of the registered db
+    # pool (the pre-registration's plates clause), never a primary row
+    out["transfer"]["db_plates_sensitivity"] = study.far_transfer(
+        "db", seeds=seeds, epochs=epochs, plates_sensitivity=True)
     out["control"]["dq_y"] = study.attached_control("dq_y", seeds=seeds,
                                                     epochs=epochs)
 
     # the Stanton-normalized conformal line (the established first-line
-    # thermal correction) against the absolute-score control, identical path:
-    # the Gaussian conditional's far-transfer median prediction, calibrated
-    # on its own training-pool residuals, evaluated on each record's dq_y
-    X_tr, dq_tr = study._attached_dq_pool()
-    Y_tr = dq_tr[:, 1:2]
-    model = study._make("gauss", X_tr.shape[1], 1, DRIVER_SEED)
-    model.fit(X_tr, Y_tr, epochs=epochs, lr=1e-3, batch=256)
+    # thermal correction) against the absolute-score control. REDESIGNED
+    # roles (the review's fit-equals-calibration finding): the attached
+    # channel cases split at WHOLE-CASE level into disjoint fit and
+    # calibration sets (the frozen within-Mach-family alternation), the
+    # conformal predictor trains on the fit cases only, and the score
+    # quantile calibrates on the held-out calibration cases; no
+    # calibration-case row ever enters the predictor's training.
+    fit_tags, cal_tags = conformal_case_split(study.attached.gv)
+    X_fit, dq_fit = study._attached_dq_pool(fit_tags)
+    Y_fit = dq_fit[:, 1:2]
+    model = study._make("gauss", X_fit.shape[1], 1, DRIVER_SEED)
+    model.fit(X_fit, Y_fit, epochs=epochs, lr=1e-3, batch=256)
     import torch
+    X_cal, dq_cal = study._attached_dq_pool(cal_tags)
+    Y_cal = dq_cal[:, 1:2]
     torch.manual_seed(DRIVER_SEED)
-    S_cal = np.asarray(model.sample(X_tr, n_per=128))
+    S_cal = np.asarray(model.sample(X_cal, n_per=128))
     m_cal = np.median(S_cal[:, :, 0], axis=1)
-    resid_cal = np.abs(Y_tr[:, 0] - m_cal)
-    # attached calibration scales: the case's own baseline wall flux
+    resid_cal = np.abs(Y_cal[:, 0] - m_cal)
+    # calibration scales: each calibration case's own baseline wall flux
     scale_cal = []
-    for tag in study.attached.gv:
+    for tag in cal_tags:
         rec = study.attached.cases[tag]
         scale_cal.append(np.full(rec["n"],
                                  max(abs(rec["b_q_base"]), 1e-4)))
     scale_cal = np.concatenate(scale_cal)
     q_abs = conformal.conformal_quantile(resid_cal, alpha=0.10)
     q_norm = conformal.conformal_quantile(resid_cal / scale_cal, alpha=0.10)
+    out["conformal"]["roles"] = {
+        "fit_cases": list(fit_tags),
+        "calibration_cases": list(cal_tags),
+        "disjoint": not (set(fit_tags) & set(cal_tags)),
+        "rule": "whole-case within-Mach-family alternation, frozen before "
+                "any corrected-lineage result",
+        "n_calibration_scores": int(resid_cal.size),
+    }
 
     for case, ext in study.test_sets.items():
         if ext["dq"] is None:
@@ -484,11 +554,137 @@ def stage_far(study, seeds, epochs, records):
     return out
 
 
+RECONVERGE_CASES = ("gate_a_attached", "adiabatic", "s0.5", "s0.75",
+                    "s1.0", "s1.4", "s1.9")
+
+
+def stage_reconverge(records, results_dir, quick, cases):
+    """The wall-transport equivalence audit and schema migration. Per cached
+    converged baseline: (1) measure the direct physics delta of the
+    molecular-wall convention on the SAVED state (the eddy-to-molecular
+    viscosity ratio at the wall-adjacent row, which bounds the relative
+    wall-flux change); (2) regenerate the wall observables from the saved
+    fields under the corrected observation operator and compare; (3)
+    warm-reconverge the solve under the corrected solver to the production
+    criterion; (4) compare the reconverged state and gate metrics against
+    the saved ones; (5) rewrite the fields/wall/gate caches under the
+    current physics schema. The pre-migration caches are the migration
+    INPUT, loaded explicitly rather than identity-reused. Re-running the
+    baselines stage afterwards refreshes gates_adjudication.json from the
+    rewritten per-case gate records."""
+    for case in cases:
+        with_shock = case != "gate_a_attached"
+        record = records["adiabatic" if case == "gate_a_attached" else case]
+        old_path = _fields_path(results_dir, case)
+        if not os.path.isfile(old_path):
+            print(f"[reconverge {case}] no fields cache; skipped")
+            continue
+        old = np.load(old_path)
+        prim_old = np.asarray(old["primitive"], dtype=float)
+        audit = {"case": case}
+
+        # (1) the direct physics delta on the saved state
+        base = _configure(record, quick, with_shock=with_shock)
+        base.solver.init_field(prim_old)
+        base.solver.prepare_properties()
+        u = base.units
+        cc = np.asarray(base.mesh.cell_centers())
+        xs_wall = np.unique(np.round(cc[:, 0], 12))
+        y1_star = float(cc[:, 1].min()) / u.delta0
+        s = base.sample_fields(xs_wall / u.delta0 + base.meta["x_lo"],
+                               np.full(xs_wall.size, y1_star))
+        T_dim = np.asarray(s["T"], float) * u.T_inf
+        mu_lam = np.array([u.eos.viscosity(t) for t in T_dim])
+        nu_lam_hat = mu_lam / (np.asarray(s["rho"], float) * u.rho_inf) \
+            / (u.U_inf * u.delta0)
+        ratio = np.asarray(s["nu_t"], float) / np.maximum(nu_lam_hat, 1e-300)
+        audit["wall_row_mut_over_mu"] = {
+            "median": float(np.median(ratio)), "max": float(np.max(ratio))}
+
+        # (2) wall observables from the saved state under the corrected
+        # observation operator, against the stored wall cache
+        w_frozen = base.wall()
+        wall_path = _wall_path(results_dir, case)
+        if os.path.isfile(wall_path):
+            wz = np.load(wall_path)
+            deltas = {}
+            for q in ("Cf", "Cp", "qw", "St"):
+                a = np.asarray(w_frozen[q], float)
+                b = np.asarray(wz[q], float)
+                scale = np.max(np.abs(b)) or 1.0
+                deltas[q] = float(np.max(np.abs(a - b)) / scale)
+            audit["wall_obs_max_rel_delta_saved_state"] = deltas
+
+        # (3) warm-reconverge under the corrected solver
+        t0 = time.time()
+        solve = _configure(record, quick, with_shock=with_shock)
+        solve.solver.init_field(prim_old)
+        rep = solve.solve()
+        audit["reconverge"] = {
+            "status": str(rep.status), "iterations": rep.iterations,
+            "final_residual": float(rep.final_residual),
+            "wall_time_s": round(time.time() - t0, 1)}
+        print(f"[reconverge {case}] {rep.status} iters {rep.iterations} "
+              f"({audit['reconverge']['wall_time_s']}s)")
+        if not str(rep.status).endswith("Converged"):
+            cfp.json_atomic(os.path.join(results_dir,
+                                         f"reconverge_{case}.json"), audit)
+            print(f"[reconverge {case}] NOT converged: caches NOT "
+                  f"rewritten; adjudicate before proceeding")
+            continue
+
+        # (4) state drift and gate metrics against the saved record
+        f = solve.solver.fields()
+        prim_new = np.stack([np.asarray(f[k], dtype=float)
+                             for k in ("rho", "u", "v", "p", "k", "omega")],
+                            axis=1)
+        drift = {}
+        for j, name in enumerate(("rho", "u", "v", "p", "k", "omega")):
+            scale = np.max(np.abs(prim_old[:, j])) or 1.0
+            drift[name] = float(np.max(np.abs(prim_new[:, j]
+                                              - prim_old[:, j])) / scale)
+        audit["field_drift_max_rel"] = drift
+        w = solve.wall()
+        if case == "gate_a_attached":
+            cf_station = float(np.interp(GATE_A_STATION, w["x_star"],
+                                         w["Cf"]))
+            entry = {
+                "status": str(rep.status), "iterations": rep.iterations,
+                "final_residual": float(rep.final_residual),
+                "cf_at_station": cf_station, "cf_data": GATE_A_CF,
+                "cf_rel_error": float(abs(cf_station / GATE_A_CF - 1.0)),
+                "warm_reconverge": True,
+            }
+            entry.update(_gate_a_profile_metrics(solve, record, cf_station))
+            entry["pass"] = bool(entry["cf_rel_error"] <= 0.10
+                                 and entry["vd_log_rms"] <= 0.05)
+            cfp.json_atomic(os.path.join(results_dir, "gate_a.json"), entry)
+            audit["gate"] = entry
+        else:
+            offset, x_half, dns_half = _impingement_offset(w, record)
+            entry = {
+                "status": str(rep.status), "iterations": rep.iterations,
+                "final_residual": float(rep.final_residual),
+                "impingement_solve": x_half, "impingement_dns": dns_half,
+                "offset": offset, "warm_reconverge": True,
+            }
+            entry["pass"] = bool(offset is not None and abs(offset) <= 1.0)
+            cfp.json_atomic(os.path.join(results_dir,
+                                         f"gate_b_{case}.json"), entry)
+            audit["gate"] = entry
+
+        # (5) rewrite the caches under the current schema
+        _save_wall(results_dir, case, w)
+        _save_fields(results_dir, case, solve.solver)
+        cfp.json_atomic(os.path.join(results_dir,
+                                     f"reconverge_{case}.json"), audit)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--stage", default="all",
                     choices=("baselines", "loso", "insample", "far",
-                             "assemble", "all"))
+                             "assemble", "reconverge", "all"))
     ap.add_argument("--results", default="results/sbli")
     ap.add_argument("--quick", action="store_true")
     ap.add_argument("--regen", action="store_true")
@@ -521,6 +717,13 @@ def main():
         numbers = json.load(open(numbers_path))
 
     records = _all_records()
+    if args.stage == "reconverge":
+        # --cases here names the RECONVERGE list (fields-cache tags, e.g.
+        # gate_a_attached), not a record partition; default is every case
+        cases = ([c.strip() for c in args.cases.split(",") if c.strip()]
+                 or list(RECONVERGE_CASES))
+        stage_reconverge(records, args.results, args.quick, cases)
+        return
     if args.cases:
         keep = [c.strip() for c in args.cases.split(",") if c.strip()]
         records = {k: v for k, v in records.items() if k in keep}

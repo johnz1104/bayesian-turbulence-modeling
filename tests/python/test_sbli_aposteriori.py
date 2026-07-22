@@ -142,12 +142,17 @@ def test_job_output_mapping(tmp_path):
     from UQ import reproduce_sbli_aposteriori as rep
     d = str(tmp_path)
     j1 = ["--stage", "member", "--fold", "s1.0", "--kind", "flow",
-          "--index", "3", "--results", d]
+          "--index", "3", "--model-seed", "1", "--results", d]
     assert rep._job_output(d, "s1.0", j1).endswith(
-        "member_s1.0_flow_3.npz")
+        "member_s1.0_flow_ms1_3.npz")
     j2 = j1 + ["--attached"]
     assert rep._job_output(d, "s1.0", j2).endswith(
-        "member_attached_s1.0_flow_3.npz")
+        "member_attached_s1.0_flow_ms1_3.npz")
     j3 = ["--stage", "member", "--fold", "s1.0", "--corner", "2C_d0.5"]
     assert rep._job_output(d, "s1.0", j3).endswith(
         "member_s1.0_corner_2C_d0.5.npz")
+    # the exploratory fold's outputs land in the exploratory namespace
+    j4 = ["--stage", "member", "--fold", "faradiab", "--kind", "flow",
+          "--index", "0", "--model-seed", "0", "--results", d]
+    p4 = rep._job_output(d, "faradiab", j4)
+    assert os.sep + "exploratory" + os.sep in p4

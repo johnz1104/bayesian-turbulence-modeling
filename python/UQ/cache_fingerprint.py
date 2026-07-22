@@ -109,6 +109,45 @@ def attach(arrays, config):
     return out
 
 
+def file_sha(path):
+    """Content hash of a cache file: the transitive-lineage edge.
+
+    A downstream cache records the file_sha of every upstream cache it was
+    built from inside its own configuration, so the fingerprint match is
+    transitive: mutating a parent file changes its hash, the expected child
+    configuration no longer matches the stored one, and the child is refused
+    and regenerated. Returns None when the file is absent, which a caller
+    embeds as-is so the mismatch is explicit (fail-closed, never a crash).
+    """
+    if not os.path.isfile(path):
+        return None
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()[:16]
+
+
+def savez_atomic(path, arrays):
+    """np.savez_compressed through a temp file and an atomic rename, so a
+    crashed writer can never leave a half-written cache that a later run
+    would load (writes go to <path>.tmp in the same directory, then
+    os.replace)."""
+    tmp = path + ".tmp"
+    with open(tmp, "wb") as f:
+        np.savez_compressed(f, **arrays)
+    os.replace(tmp, path)
+
+
+def json_atomic(path, obj, indent=1):
+    """json.dump through a temp file and an atomic rename (same contract as
+    savez_atomic for the JSON records)."""
+    tmp = path + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(obj, f, indent=indent)
+    os.replace(tmp, path)
+
+
 def check(loaded, config):
     """Classify a loaded cache dict against the expected configuration.
 

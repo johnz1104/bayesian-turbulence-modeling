@@ -30,16 +30,39 @@ import os
 
 import numpy as np
 
+from .. import discrepancy
 from .. import evaluation
+from .. import cache_fingerprint as cfp
 from ..generative import GenerativeDiscrepancyModel
 from ..gaussian_modelform import GaussianDiscrepancyModel
 from .heatflux_apriori import HeatFluxAPriori, PooledGaussianDiagnostic, \
     mach_family
-from .sbli_discrepancy import interaction_study
+from .sbli_discrepancy import interaction_study, objective_basis
 
 EPOCHS = 400
 SAMPLES_PER_POINT = 128
 SEEDS = (0, 1, 2)
+
+# Physics schema token for every SBLI cache identity (the fingerprint
+# machinery of UQ.cache_fingerprint): bump exactly when the producing model
+# changes. v3 marks the molecular wall-transport convention of the
+# density-based solver and observation operator (the audit's wall-viscosity
+# note) and the transitive content-hash lineage; v2 was the honest adiabatic
+# wall and completed convergence criterion; v1 (implicit, never stamped) the
+# isothermal-convention density-only round.
+SBLI_PHYSICS = "sbli-dbns-v3"
+
+
+def sbli_ident(kind, case, **extra):
+    """The cache identity every SBLI artifact carries: physics token, case,
+    and the production configuration that shaped the solve."""
+    ident = {"kind": kind, "physics": SBLI_PHYSICS, "case": case,
+             "config": {"nx": 480, "ny": 224, "x_hi": 14.0, "height": 8.0,
+                        "cfl": 300.0, "convergence_tol": 1e-6,
+                        "yplus_target": 0.05}}
+    ident.update(extra)
+    return ident
+
 
 # pre-registered strides per grid family (test; train is twice each direction)
 TEST_STRIDE = {"s0.5": (8, 4), "s0.75": (8, 4),
@@ -50,6 +73,45 @@ TEST_STRIDE = {"s0.5": (8, 4), "s0.75": (8, 4),
 def _train_stride(case):
     sx, sy = TEST_STRIDE[case]
     return (2 * sx, 2 * sy)
+
+
+def extraction_fields_path(results_dir, case):
+    """The converged-fields cache an extraction is built from: the gate-B
+    interaction fields per case, EXCEPT the adiabatic 2011 campaign, whose
+    a-priori role takes the registered frozen-mean fallback (the reviewer's
+    per-case gate-B ruling): its extraction parent is the frozen-mean
+    transport march, never the gate-failing free-running solve."""
+    tag = "adiabatic_frozenmean" if case == "adiabatic" else case
+    return os.path.join(results_dir, f"fields_{tag}.npz")
+
+
+def extraction_ident(case, stride, history, results_dir):
+    """Extraction cache identity: physics token, case, stride, history flag,
+    the baseline route, and the transitive lineage edge to the exact content
+    of the converged-fields cache it was built from (a mutated or
+    regenerated fields file invalidates the extraction)."""
+    return sbli_ident("sbli_extract", case, extract={
+        "stride": list(stride), "history": bool(history),
+        "route": "frozen-mean" if case == "adiabatic" else "free-running",
+        "lineage": {"fields": cfp.file_sha(
+            extraction_fields_path(results_dir, case))}})
+
+
+def conformal_case_split(tags):
+    """The frozen whole-case fit/calibration split of the far-transfer
+    conformal line: within each Mach family (tags sorted), alternate fit,
+    calibration, fit, ... so both roles span the Mach axis. Fixed before any
+    corrected-lineage result exists; the calibration cases never enter the
+    conformal predictor's training (the redesigned-conformal
+    role-disjointness convention)."""
+    fams = {}
+    for t in sorted(tags):
+        fams.setdefault(mach_family(t), []).append(t)
+    fit, cal = [], []
+    for fam in sorted(fams):
+        for i, t in enumerate(fams[fam]):
+            (fit if i % 2 == 0 else cal).append(t)
+    return tuple(fit), tuple(cal)
 
 
 class SBLIAPriori:
@@ -74,23 +136,26 @@ class SBLIAPriori:
     def _extract_cached(record, baseline, stride, history, results_dir):
         path = SBLIAPriori._cache_path(results_dir, record.case, stride,
                                        history)
+        ident = extraction_ident(record.case, stride, history, results_dir)
         if os.path.isfile(path):
             z = np.load(path, allow_pickle=True)
-            if "g_basis" in z.files:
-                out = {k: z[k] for k in z.files if k != "meta"}
+            status, _reason = cfp.check({k: z[k] for k in z.files}, ident)
+            if status == "match":
+                skip = ("meta", cfp.FINGERPRINT_KEY, cfp.CONFIG_KEY,
+                        cfp.CODE_REV_KEY)
+                out = {k: z[k] for k in z.files if k not in skip}
                 out["meta"] = json.loads(str(z["meta"]))
                 out["dq"] = None if out["dq"].size == 0 else out["dq"]
                 out["region"] = out["region"].astype(object)
                 return out
-            # pre-basis cache (no objective-representation keys): stale under
-            # the amendment; regenerate from the cached converged baseline
-            print(f"  [extract] {os.path.basename(path)} predates the "
-                  f"objective-basis representation; regenerating")
+            # stale identity (pre-lineage cache, mutated parent fields, or a
+            # physics-token bump): regenerate from the converged baseline
+            print(f"  [extract] {os.path.basename(path)} stale identity "
+                  f"({status}); regenerating")
         study = interaction_study(record, baseline, stride=stride,
                                   history=history)
         os.makedirs(results_dir, exist_ok=True)
-        np.savez_compressed(
-            path,
+        cfp.savez_atomic(path, cfp.attach(dict(
             features=study["features"], db=study["db"],
             db_free=study["db_free"],
             g_basis=study["g_basis"],
@@ -99,7 +164,7 @@ class SBLIAPriori:
             x=study["x"], y=study["y"],
             region=np.asarray(study["region"], dtype=str),
             realizable_fraction=study["realizable_fraction"],
-            meta=json.dumps(study["meta"]))
+            meta=json.dumps(study["meta"])), ident))
         return study
 
     @staticmethod
@@ -332,43 +397,147 @@ class SBLIAPriori:
 
     # ---- attached far-transfer pools ----------------------------------------------
 
-    def _attached_dq_pool(self):
+    def _attached_dq_pool(self, tags=None):
         """The committed channel-matrix rows (features, dq): the dq
         far-transfer training pool (the only attached source with the full
-        flux vector)."""
+        flux vector). tags restricts to a whole-case subset (the conformal
+        fit/calibration split); default is every converged channel case."""
         X, Y = [], []
-        for tag in self.attached.gv:
+        for tag in (self.attached.gv if tags is None else tags):
             rec = self.attached.cases[tag]
             X.append(rec["features"])
             Y.append(rec["dq"])
         return np.concatenate(X), np.concatenate(Y)
 
-    def far_transfer(self, leg, history=False, seeds=SEEDS, epochs=EPOCHS):
+    @staticmethod
+    def _attached_db_rows(dns, study):
+        """(features, db_free, g, basis_M) rows of one attached case under
+        the committed interior mask (y+ > 30, y/delta < 0.9) and the finite
+        guard, in the deployed objective-basis representation built from the
+        case's own strain, rotation and baseline timescale (the same
+        construction the interaction extraction deploys)."""
+        mask = (dns.yplus > 30.0) & (dns.y_outer < 0.9)
+        feats = np.asarray(study["features"], float)
+        db = np.asarray(study["db"], float)
+        db_free = np.stack([db[:, 0, 0], db[:, 1, 1], db[:, 0, 1]], axis=1)
+        grad_u = dns.velocity_gradient()
+        ts = np.asarray(study["baseline"]["timescale_plus"], float)
+        S, W = discrepancy.strain_rotation(grad_u, ts)
+        g, M = objective_basis(S, W, db_free)
+        finite = (np.all(np.isfinite(feats), axis=1)
+                  & np.all(np.isfinite(db_free), axis=1)
+                  & np.all(np.isfinite(g), axis=1))
+        keep = mask & finite
+        return feats[keep], db_free[keep], g[keep], M[keep]
+
+    def _attached_db_pool(self, root=None, plates_sensitivity=False):
+        """The registered far-transfer db training pool: the channel matrix
+        plus the twelve attached supersonic boundary layers (the flow-type
+        match to the interaction boundary layer, dnsm2 M2 x8 / M3 x2 /
+        M4 x2), each against its committed baseline route (the 1-D
+        compressible SST solve for the channels, the frozen-mean plate
+        reconstruction for the boundary layers). plates_sensitivity=True
+        appends the ZDC plates' ready-made anisotropy, the labeled
+        sensitivity variant of the pre-registration. Returns
+        (X, db_free, g, meta): meta records the case roster, the expected
+        and found boundary-layer counts (the twelve-case verification), and
+        any skipped case with its classification."""
+        from .compressible_baseline import FlatPlateFrozenSST
+        from .compressible_discrepancy import (channel_study, flatplate_study,
+                                               _extract)
+        from .gv_channel import GVChannelDNS, GV_CASES
+        from .supersonic_tbl import SupersonicTBLDNS, TBL_CASES
+        from .zdc_flatplate import FlatPlateDNS, ZDC_CASES
+        X, F, G = [], [], []
+        cases, skipped = [], {}
+
+        def add(tag, dns, study):
+            if study["status"] != "converged":
+                skipped[tag] = study["status"]
+                return
+            feats, db_free, g, _M = self._attached_db_rows(dns, study)
+            X.append(feats)
+            F.append(db_free)
+            G.append(g)
+            cases.append(tag)
+
+        for tag in GV_CASES:
+            if not GVChannelDNS.is_available(tag, root):
+                skipped[tag] = "data_missing"
+                continue
+            dns = GVChannelDNS.load(tag, root)
+            add(tag, dns, channel_study(dns))
+        n_bl = 0
+        for tag in TBL_CASES:
+            if not SupersonicTBLDNS.is_available(tag, root):
+                skipped[tag] = "data_missing"
+                continue
+            dns = SupersonicTBLDNS.load(tag, root)
+            rec = FlatPlateFrozenSST(dns).closure()
+            base = {"nu_t_plus": rec["nu_t_plus"],
+                    "timescale_plus": rec["timescale_plus"], "k_plus": None}
+            study = _extract(dns, base, extra_meta={
+                "baseline": "frozen_mean_sst_reconstruction"})
+            n_before = len(cases)
+            add(tag, dns, study)
+            n_bl += len(cases) - n_before
+        if plates_sensitivity:
+            for tag in ZDC_CASES:
+                if not FlatPlateDNS.is_available(tag, root):
+                    skipped[tag] = "data_missing"
+                    continue
+                dns = FlatPlateDNS.load(tag, root)
+                add(tag, dns, flatplate_study(dns))
+        meta = {"cases": cases, "skipped": skipped,
+                "n_boundary_layers_expected": len(TBL_CASES),
+                "n_boundary_layers_found": n_bl,
+                "plates_sensitivity": bool(plates_sensitivity)}
+        return (np.concatenate(X), np.concatenate(F), np.concatenate(G),
+                meta)
+
+    def far_transfer(self, leg, history=False, seeds=SEEDS, epochs=EPOCHS,
+                     plates_sensitivity=False):
         """Train on the attached pool, score every interaction record.
 
         The attached rows carry no history feature, so this axis always runs
-        on the six local features (stated in the numbers JSON); dq legs use
-        the channel matrix, the db leg is out of scope for this loop until a
-        matched attached-db assembly exists and raises if requested."""
-        if leg not in ("dq_y", "dq_joint"):
-            raise ValueError("far transfer is pinned to the dq legs; the "
-                             "attached db pool rides the stress sensitivity")
-        X_tr, dq_tr = self._attached_dq_pool()
-        cols = [1] if leg == "dq_y" else [0, 1]
-        Y_tr = dq_tr[:, cols]
+        on the six local features (stated in the numbers JSON). dq legs use
+        the channel matrix; the db leg uses the registered pool (channel
+        matrix plus the twelve attached boundary layers), with
+        plates_sensitivity=True the labeled ZDC-anisotropy variant. The db
+        representation follows the deployed feasibility gate exactly as in
+        the within-interaction legs (one convention for the whole leg)."""
+        if leg not in ("dq_y", "dq_joint", "db"):
+            raise ValueError(f"unknown far-transfer leg '{leg}'")
+        pool_meta = None
+        if leg == "db":
+            X_tr, dbf_tr, g_tr, pool_meta = self._attached_db_pool(
+                plates_sensitivity=plates_sensitivity)
+            db_raw = not self.db_gate()["all_pass"]
+            Y_tr = dbf_tr if db_raw else g_tr
+        else:
+            X_tr, dq_tr = self._attached_dq_pool()
+            cols = [1] if leg == "dq_y" else [0, 1]
+            Y_tr = dq_tr[:, cols]
+            db_raw = None
         results = {}
         for case, ext in self.test_sets.items():
             if ext["dq"] is None:
                 continue
             X_te = self._features(ext, history=False)
-            Y_te = self._target(ext, leg)
+            if leg == "db":
+                Y_te = ext["db_free"]
+                cmap = None if db_raw else ext["basis_M"]
+            else:
+                Y_te = self._target(ext, leg)
+                cmap = None
             regions = ext["region"]
             per_model = {}
             for kind in ("flow", "gauss", "pooled"):
                 per_seed = []
                 for seed in seeds:
                     scores, S = self._fit_and_score(
-                        kind, X_tr, Y_tr, X_te, Y_te, seed, epochs)
+                        kind, X_tr, Y_tr, X_te, Y_te, seed, epochs,
+                        component_map=cmap)
                     scores["region_coverage_0.9"] = self._region_coverage(
                         Y_te, S, regions)
                     per_seed.append(scores)
@@ -376,6 +545,11 @@ class SBLIAPriori:
             results[case] = {"n_train": int(len(X_tr)),
                              "n_test": int(len(X_te)),
                              "models": per_model}
+        if pool_meta is not None:
+            results["pool"] = pool_meta
+            results["representation"] = ("raw-components (registered "
+                                         "feasibility reversion)" if db_raw
+                                         else "objective-basis")
         return results
 
     def attached_control(self, leg="dq_y", seeds=SEEDS, epochs=EPOCHS):

@@ -236,7 +236,8 @@ class SBLIBaseline:
                   max_iterations=60000, convergence_tol=1e-6,
                   yplus_target=1.0, verbose=False, report_interval=1000,
                   early_abort_iter=0, early_abort_rel_max=0.0,
-                  injection_ramp_iters=0, injection_frozen_k=False):
+                  injection_ramp_iters=0, injection_frozen_k=False,
+                  frozen_mean=False):
         """Build the configuration for one record.
 
         The domain spans [x_lo, x_hi] x [0, height] reference lengths, x_lo
@@ -338,6 +339,10 @@ class SBLIBaseline:
         st.early_abort_rel_max = early_abort_rel_max
         st.injection_ramp_iters = injection_ramp_iters
         st.injection_frozen_k = injection_frozen_k
+        # the registered gate-B fallback: the primitive mean is pinned every
+        # iteration and only k and omega transport march (the caller
+        # initializes from the record's own Favre mean)
+        st.frozen_mean_flow = frozen_mean
         st.time_mode = rans.TimeMode.Steady
         st.implicit_steady = True
         st.cfl_implicit = cfl
@@ -357,6 +362,48 @@ class SBLIBaseline:
                             with_shock, meta)
 
     # ---- run and read ---------------------------------------------------------
+
+    def init_from_record_mean(self, k_floor_hat=1e-8, nu_t_cap_hat=2e-3):
+        """Initialize the solver state from the record's own Favre mean at
+        the cell centers (the frozen-mean fallback baseline): rho, u, v and
+        the ideal-gas pressure from the record's mean fields, k from the
+        record's stresses, omega from the shear-consistent construction
+        (nu_t = -R_xy / (dU/dy), floored and capped exactly as the inflow
+        table). Nearest-record-point sampling, the extraction's own
+        convention; the DNS grid is finer than the solver grid everywhere
+        the fields are consumed."""
+        rec = self.record
+        u = self.units
+        cc = np.asarray(self.mesh.cell_centers())
+        x_star = cc[:, 0] / u.delta0 + self.meta["x_lo"]
+        y_star = cc[:, 1] / u.delta0
+        ix = _nearest_index(rec.x, np.clip(x_star, rec.x[0], rec.x[-1]))
+        iy = _nearest_index(rec.y, np.clip(y_star, rec.y[0], rec.y[-1]))
+
+        rho_hat = rec.rho[ix, iy]
+        u_hat = rec.U[ix, iy]
+        v_hat = rec.V[ix, iy]
+        T_hat = np.maximum(rec.T[ix, iy], 1e-6)
+        R = rec.R[ix, iy]
+        k_hat = np.maximum(0.5 * (R[:, 0, 0] + R[:, 1, 1] + R[:, 2, 2]),
+                           k_floor_hat)
+        dUdy = np.gradient(rec.U, rec.y, axis=1)[ix, iy]
+        nu_t_hat = -R[:, 0, 1] / np.where(np.abs(dUdy) > 1e-8, dUdy, 1e-8)
+        nu_t_hat = np.clip(nu_t_hat, 1e-9, nu_t_cap_hat)
+        omega_hat = k_hat / nu_t_hat
+        ambient = k_hat < 10.0 * k_floor_hat
+        k_hat = np.where(ambient, k_floor_hat, k_hat)
+        omega_hat = np.where(ambient, 5.0, omega_hat)
+
+        prim = np.stack([
+            u.density(rho_hat),
+            u.velocity(u_hat),
+            u.velocity(v_hat),
+            u.pressure_from(rho_hat, T_hat),
+            k_hat * u.U_inf ** 2,
+            omega_hat * u.U_inf / u.delta0,
+        ], axis=1)
+        self.solver.init_field(prim)
 
     def solve(self):
         self.report = self.solver.solve()
