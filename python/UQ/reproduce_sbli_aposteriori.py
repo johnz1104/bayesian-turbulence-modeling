@@ -225,6 +225,11 @@ def _member_config(results_dir, fold, kind=None, corner=None, index=None,
         target_kind = kind[:-4] if (kind or "").endswith("_noq") else kind
         tpath = _targets_path(results_dir, fold, target_kind,
                               attached=attached, model_seed=model_seed)
+    # the warm-start fields are bound DIRECTLY (not only through the
+    # targets' own lineage): a member must never record a valid identity
+    # after warm-starting from fields newer than the targets it propagated
+    warm_case = ("gate_a_attached" if attached
+                 else ("adiabatic" if _is_exploratory(fold) else fold))
     return sbli_ident("apo-member", fold, member={
         "injection_form": "stored-discrepancy",
         "frozen_k": MEMBER_FROZEN_K, "ramp_iters": MEMBER_RAMP_ITERS,
@@ -237,7 +242,9 @@ def _member_config(results_dir, fold, kind=None, corner=None, index=None,
                  "index": index, "attached": bool(attached),
                  "model_seed": model_seed,
                  "sample_seed": None if corner is not None else SAMPLE_SEED},
-        "lineage": {"targets": cfp.file_sha(tpath)}})
+        "lineage": {"targets": cfp.file_sha(tpath),
+                    "fields": cfp.file_sha(
+                        _fields_path(results_dir, warm_case))}})
 
 
 def _member_current(path, config):
@@ -681,13 +688,17 @@ def stage_score(records, results_dir, fold, n_members):
         key = ("flow_energy_reach_disabled_diagnostic"
                if kind == "flow_noq" else kind)
         out[key] = entry
-    # target-file lineage for every seed and kind
+    # target-file lineage for every seed and kind, plus the baseline wall
+    # and gate records the comparisons consume
     for kind in KINDS:
         for ms in MODEL_SEEDS:
             p = _targets_path(results_dir, fold, kind, model_seed=ms)
             lineage[os.path.basename(p)] = cfp.file_sha(p)
     p = _targets_path(results_dir, fold, "corners")
     lineage[os.path.basename(p)] = cfp.file_sha(p)
+    for name in (f"wall_{fold}.npz", "gate_a.json",
+                 "gates_adjudication.json"):
+        lineage[name] = cfp.file_sha(os.path.join(results_dir, name))
 
     # the exact zero-discrepancy control (once per fold): status and the
     # wall drift against the fold baseline (the contract's field check)
