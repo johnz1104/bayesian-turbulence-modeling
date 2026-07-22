@@ -432,8 +432,15 @@ void DBNSSolver::addBoundaryFlux(int faceId, int patchIdx) {
         if (spec.kind == BoundaryKind::SlipWall) return;
 
         // No-slip viscous wall flux from one-sided near-wall gradients.
+        // Transport coefficients at a resolved wall face are MOLECULAR: the
+        // eddy viscosity vanishes at the wall, and the owner-cell muT (the
+        // previous coefficient) overestimates the wall shear and heat flux.
+        // Measured immaterial on the production meshes (muT/mu at the wall
+        // owners is order 1e-15 to 1e-12 at y+ 0.05); fixed for correctness
+        // per the audit's wall-viscosity note, same convention as the
+        // pressure-based solvers' resolved-wall momentum diffusion.
         double delta = std::max(f.delta, 1e-12);
-        double muEff = muLam_[P] + muT_[P];
+        double muWall = muLam_[P];
         // velocity gradient along the OUTWARD normal (cell value to wall
         // value over delta), matching the energy line's dTdn convention;
         // tau.n_out is then the force per area the wall exerts on the cell:
@@ -444,13 +451,13 @@ void DBNSSolver::addBoundaryFlux(int faceId, int patchIdx) {
         Vec3 Uw = spec.wallVelocity;
         Vec3 dUdn{(Uw.x - VP.u) / delta, (Uw.y - VP.v) / delta, 0.0};
         double dUdn_n = dUdn.dot(f.normal);
-        // tau.n = mu_eff [ dU/dn + 1/3 (dU/dn . n) n ]
-        Vec3 taun = (dUdn + f.normal * (dUdn_n / 3.0)) * muEff;
+        // tau.n = mu_wall [ dU/dn + 1/3 (dU/dn . n) n ]
+        Vec3 taun = (dUdn + f.normal * (dUdn_n / 3.0)) * muWall;
         res_[P][I_RHOU] -= taun.x * A;
         res_[P][I_RHOV] -= taun.y * A;
         // wall heat flux: q.n = -lambda dT/dn ; adiabatic -> 0
         if (spec.kind == BoundaryKind::NoSlipIsothermal) {
-            double lamEff = eos_.Cp() * (muLam_[P] / eos_.Pr + muT_[P] / eos_.Pr_T);
+            double lamWall = eos_.Cp() * muWall / eos_.Pr;
             double Tin = GasState::temperature(VP, eos_);
             double Tw = spec.wallTemp;
             if (!spec.wallTempProfile.empty()) {
@@ -459,7 +466,7 @@ void DBNSSolver::addBoundaryFlux(int faceId, int patchIdx) {
                     Tw = spec.wallTempProfile[j];
             }
             double dTdn = (Tw - Tin) / delta;   // (T_wall - T_cell)/delta
-            double qn = -lamEff * dTdn;
+            double qn = -lamWall * dTdn;
             res_[P][I_RHOE] -= -qn * A;   // energy viscous flux contribution
         }
         // turbulent transport wall fluxes (previously absent entirely, which
@@ -468,15 +475,16 @@ void DBNSSolver::addBoundaryFlux(int faceId, int patchIdx) {
         // there). One-sided diffusion with k_wall = 0 and the Menter omega
         // wall value omega_w = 60 nu_w / (beta1 dy1^2), dy1 = 2 delta (the
         // first-cell height); together with the sublayer cell floor this is
-        // the standard low-Reynolds omega wall treatment.
+        // the standard low-Reynolds omega wall treatment. The diffusion
+        // coefficients are molecular at the resolved wall face (same
+        // convention and same immateriality measurement as the momentum and
+        // heat fluxes above).
         if (settings_.turbulent) {
-            double sk = sstCoeffs_.sigma_k1, sw = sstCoeffs_.sigma_w1;
             double nuW = muLam_[P] / VP.rho;
             double dy1 = 2.0 * delta;
             double omegaWall = 60.0 * nuW / (sstCoeffs_.beta1 * dy1 * dy1);
-            double fluxK = (muLam_[P] + sk * muT_[P]) * (0.0 - VP.k) / delta;
-            double fluxW = (muLam_[P] + sw * muT_[P])
-                           * (omegaWall - VP.omega) / delta;
+            double fluxK = muLam_[P] * (0.0 - VP.k) / delta;
+            double fluxW = muLam_[P] * (omegaWall - VP.omega) / delta;
             res_[P][I_RHOK] -= fluxK * A;
             res_[P][I_RHOW] -= fluxW * A;
         }
@@ -675,15 +683,44 @@ void DBNSSolver::addInjectionFluxes() {
     injDiag_.checkedIters += 1;
     const bool masked = (int)injMask_.size() == nc;
     for (int ci = 0; ci < nc; ++ci) {
-        // realizability is a property of ACTIVE targets; outside the
-        // injection mask the stored rows are the raw baseline placeholder
-        // and carry no injected flux (skipped below), so they are not
-        // checked (the review's convention item)
+        // realizability is a property of ACTIVE cells; outside the
+        // injection mask no correction flux exists (skipped below), so
+        // they are not checked (the review's convention item)
         if (masked && !injMask_[ci]) continue;
-        double margin = aniso::barycentricMargin(bTarget6_.data() + 6 * ci);
+        // the EFFECTIVE RUNNING anisotropy the momentum equation carries:
+        // b_eff = b_B(W) + db_stored with b_B = -mu_t/(rho k) dev(S) from
+        // the solver's own current gradients, eddy viscosity and state
+        // (the same floored k the mu_t formula used), replacing the frozen
+        // absolute-target check the review flagged. Diagnostic only: the
+        // margin is recorded with its residual-evaluation ordinal and cell,
+        // never projected or clipped.
+        Primitive Vd = GasState::toPrimitive(W_[ci], eos_);
+        double kd = std::max(Vd.k, settings_.kFloor);
+        double coef = -muT_[ci] / (Vd.rho * kd);
+        double dudx = grad_[ci][G_U].x, dudy = grad_[ci][G_U].y;
+        double dvdx = grad_[ci][G_V].x, dvdy = grad_[ci][G_V].y;
+        double div3 = (dudx + dvdy) / 3.0;
+        const double* dbc = dbTarget6_.data() + 6 * ci;
+        double beff[6];
+        beff[0] = coef * (dudx - div3) + dbc[0];
+        beff[1] = coef * (dvdy - div3) + dbc[1];
+        beff[2] = coef * (-div3) + dbc[2];
+        beff[3] = coef * 0.5 * (dudy + dvdx) + dbc[3];
+        beff[4] = dbc[4];
+        beff[5] = dbc[5];
+        double margin = aniso::barycentricMargin(beff);
+        if (margin < injDiag_.minMargin) {
+            injDiag_.minMargin = margin;
+            injDiag_.minMarginIter = injDiag_.checkedIters;
+            injDiag_.minMarginCell = ci;
+        }
         if (margin < -1e-9) {
             injDiag_.allRealizable = false;
-            injDiag_.maxViolation = std::max(injDiag_.maxViolation, -margin);
+            if (-margin > injDiag_.maxViolation) {
+                injDiag_.maxViolation = -margin;
+                injDiag_.maxViolationIter = injDiag_.checkedIters;
+                injDiag_.maxViolationCell = ci;
+            }
         }
     }
 
@@ -845,6 +882,9 @@ double DBNSSolver::rhoResidualNorm() const {
 SolveReport DBNSSolver::solve() {
     if (settings_.timeMode == TimeMode::Steady && settings_.implicitSteady)
         return solveImplicitSteady();
+    if (settings_.frozenMeanFlow)
+        throw std::runtime_error("frozenMeanFlow requires the implicit "
+                                 "steady driver");
 
     SolveReport rep;
     int nc = mesh_.nCells();
@@ -963,6 +1003,20 @@ SolveReport DBNSSolver::solveImplicitSteady() {
     double lastKChange = 1.0, lastOmChange = 1.0;
     if ((int)dW_.size() != nc) dW_.assign(nc, StateVec{});
 
+    // frozen-mean transport mode: capture the primitive mean state once and
+    // re-pin it after every update, so only k and omega march (the
+    // registered constitutive-error-at-matched-mean baseline). Pinning the
+    // PRIMITIVE mean (not the conserved rows) keeps the pressure exactly at
+    // the captured value as rho k evolves inside the total energy.
+    std::vector<std::array<double, 4>> frozenMean;
+    if (settings_.frozenMeanFlow) {
+        frozenMean.resize(nc);
+        for (int ci = 0; ci < nc; ++ci) {
+            Primitive V = GasState::toPrimitive(W_[ci], eos_);
+            frozenMean[ci] = {V.rho, V.u, V.v, V.p};
+        }
+    }
+
     double betaMax = std::max(sstCoeffs_.beta1, sstCoeffs_.beta2);
     double bStar = sstCoeffs_.betaStar;
 
@@ -1080,6 +1134,16 @@ SolveReport DBNSSolver::solveImplicitSteady() {
         Wsave = W_;
         for (int ci = 0; ci < nc; ++ci)
             for (int i = 0; i < NVAR; ++i) W_[ci][i] += dW_[ci][i];
+        if (settings_.frozenMeanFlow)
+            for (int ci = 0; ci < nc; ++ci) {
+                Primitive V = GasState::toPrimitive(W_[ci], eos_);
+                V.rho = frozenMean[ci][0];
+                V.u = frozenMean[ci][1];
+                V.v = frozenMean[ci][2];
+                V.p = frozenMean[ci][3];
+                if (V.k < 0.0) V.k = settings_.kFloor;
+                W_[ci] = GasState::toConserved(V, eos_);
+            }
 
         bool admissible = true;
         int badCell = -1;
@@ -1162,8 +1226,10 @@ SolveReport DBNSSolver::solveImplicitSteady() {
         // deliver from a wall-slaved scale. The field-change norm measures
         // what a steady solve actually owes: the turbulence state stopped
         // moving (the update through the destruction-stiff diagonal, and the
-        // re-pinned wall rows read exactly stationary).
-        const int nEq = 4;
+        // re-pinned wall rows read exactly stationary). Frozen-mean mode
+        // never solves the mean-flow equations, so only the turbulence
+        // field-change norms gate there.
+        const int nEq = settings_.frozenMeanFlow ? 0 : 4;
         if (iter <= freezeIter || res0 < 0.0) {
             res0 = std::max(res0, std::max(rn, 1e-30));
             for (int v = 0; v < nEq; ++v)
@@ -1207,7 +1273,12 @@ SolveReport DBNSSolver::solveImplicitSteady() {
         }
         if (iter % settings_.reportInterval == 0)
             rep.residualHistory.push_back(rn);
-        if (iter > freezeIter && !limiterFrozen && rn / res0 < 1e-2)
+        // frozen-mean mode: the density residual never decays (the mean is
+        // pinned, its discrete residual is a constant mismatch), so the
+        // limiter-chatter freeze triggers on the live criterion instead
+        if (iter > freezeIter && !limiterFrozen
+            && (settings_.frozenMeanFlow ? lastCriterion < 1e-2
+                                         : rn / res0 < 1e-2))
             limiterFrozen = true;
         // convergence requires EVERY live equation below the tolerance under
         // its own semantics AND a directly validated state (the per-cell
@@ -1241,7 +1312,7 @@ SolveReport DBNSSolver::solveImplicitSteady() {
         // the recorded final residual mirrors the live criterion: mean-flow
         // relative decay joined with the carried turbulence change norms
         const std::array<double, NVAR> rnsF = equationResidualNorms();
-        const int nEq = 4;
+        const int nEq = settings_.frozenMeanFlow ? 0 : 4;
         double eqRefMax = 1e-30, relMax = 0.0;
         for (int v = 0; v < nEq; ++v) eqRefMax = std::max(eqRefMax, eqRes0[v]);
         for (int v = 0; v < nEq; ++v)

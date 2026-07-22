@@ -725,6 +725,7 @@ PYBIND11_MODULE(rans_sst_py, m) {
         .def_readwrite("early_abort_rel_max", &DBNSSettings::earlyAbortRelMax)
         .def_readwrite("injection_ramp_iters", &DBNSSettings::injectionRampIters)
         .def_readwrite("injection_frozen_k", &DBNSSettings::injectionFrozenK)
+        .def_readwrite("frozen_mean_flow", &DBNSSettings::frozenMeanFlow)
         .def_readwrite("implicit_steady", &DBNSSettings::implicitSteady)
         .def_readwrite("cfl_implicit", &DBNSSettings::cflImplicit)
         .def_readwrite("cfl_ramp_start", &DBNSSettings::cflRampStart)
@@ -833,12 +834,21 @@ PYBIND11_MODULE(rans_sst_py, m) {
              "residual evaluation (the solver's own branch record).")
         .def("injection_diagnostics",
              [](const DBNSSolver& s) {
+                 // the realizability record is on the EFFECTIVE RUNNING
+                 // anisotropy b_eff(W) = b_B(W) + db_stored, diagnostic
+                 // only (never projected or clipped); the extremes carry
+                 // the residual-evaluation ordinal and the cell index
                  const auto& d = s.injectionDiagnostics();
                  py::dict out;
                  out["active"] = d.active;
                  out["checked_iters"] = d.checkedIters;
                  out["all_realizable"] = d.allRealizable;
+                 out["min_margin"] = d.minMargin;
+                 out["min_margin_iter"] = d.minMarginIter;
+                 out["min_margin_cell"] = d.minMarginCell;
                  out["max_violation"] = d.maxViolation;
+                 out["max_violation_iter"] = d.maxViolationIter;
+                 out["max_violation_cell"] = d.maxViolationCell;
                  out["max_db"] = d.maxDb;
                  out["max_dq"] = d.maxDq;
                  return out;

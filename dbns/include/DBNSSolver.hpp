@@ -39,15 +39,24 @@ struct SolveReport {
 };
 
 // Diagnostics of the model-form injection (mirrors the incompressible
-// solver's record): the per-residual-evaluation realizability re-check of the
-// injected anisotropy target, recorded rather than silently projected, so a
-// study can report violations (the caller projects before setting).
+// solver's record). The realizability re-check is on the EFFECTIVE RUNNING
+// anisotropy b_eff(W) = b_B(W) + db_stored, where b_B is the solver's own
+// Boussinesq anisotropy at the current state (-mu_t/(rho k) dev(S), the
+// running gradients and eddy viscosity the momentum fluxes actually carry)
+// and db_stored is the injected discrepancy. Recorded per residual
+// evaluation, diagnostic only: b_eff is never projected or clipped during
+// the run. The extremes carry the residual-evaluation ordinal and the cell.
 struct InjectionDiagnostics {
     bool   active = false;
     int    checkedIters = 0;
     bool   allRealizable = true;
-    double maxViolation = 0.0;   // worst negative barycentric margin seen
-    double maxDb = 0.0;          // max |b_target| component magnitude
+    double minMargin = 1e30;     // worst barycentric margin of b_eff seen
+    int    minMarginIter = -1;   // residual-evaluation ordinal of that worst
+    int    minMarginCell = -1;   // cell index of that worst
+    double maxViolation = 0.0;   // max(0, -margin) over the run
+    int    maxViolationIter = -1;
+    int    maxViolationCell = -1;
+    double maxDb = 0.0;          // max |db_stored| component magnitude
     double maxDq = 0.0;          // max |dq_target| component magnitude
 };
 
@@ -83,20 +92,22 @@ public:
     const IdealGasEOS& eos() const { return eos_; }
 
     // --- model-form injection (the deferred-correction coupling) ---
-    // Set the sampled closure correction: per-cell target anisotropy b
-    // (nCells x 6, ordered xx, yy, zz, xy, xz, yz) and per-cell turbulent
-    // heat-flux correction dq (nCells x 2, x and y components, SOLVER units
-    // of a Favre temperature flux, <rho u_i''T''>/<rho> [m/s K]). The stress
-    // difference enters the momentum fluxes as an explicit deferred
-    // correction against the Boussinesq term (running k, mu_t and strain, so
-    // a target equal to the solver's own Boussinesq anisotropy reproduces the
-    // baseline identically); with energyReach the consistent stress work and
-    // the injected heat flux (against the implicit gradient-diffusion term)
-    // enter the energy equation, the heat-flux reach of the pre-registered
-    // scheme. Values are COPIED (no caller lifetime coupling). The caller
-    // projects b into the realizable set first; the solver re-checks the
-    // barycentric margin every residual evaluation and records violations in
-    // the diagnostics rather than silently projecting.
+    // Set the sampled closure correction: per-cell STORED anisotropy
+    // discrepancy db (nCells x 6, ordered xx, yy, zz, xy, xz, yz) and
+    // per-cell turbulent heat-flux correction dq (nCells x 2, x and y
+    // components, SOLVER units of a Favre temperature flux,
+    // <rho u_i''T''>/<rho> [m/s K]). The stored discrepancy is the operative
+    // input: the injected flux is -div(2 rho k db), so db = 0 is exactly
+    // zero flux at any state (the discrete zero-correction contract). With
+    // energyReach the consistent stress work and the injected heat flux
+    // (against the implicit gradient-diffusion term) enter the energy
+    // equation, the heat-flux reach of the pre-registered scheme. Values are
+    // COPIED (no caller lifetime coupling). bDiag6 (the caller's absolute
+    // target) is retained as a provenance record only: the running
+    // realizability diagnostic checks b_eff(W) = b_B(W) + db at every
+    // residual evaluation (see InjectionDiagnostics), recording rather than
+    // projecting; bDiag6 has no diagnostic consumer since that replacement.
+    // The caller projects its absolute targets before setting.
     void setTargetCorrection(const std::vector<double>& db6,
                              const std::vector<double>& bDiag6,
                              const std::vector<double>& dq2,

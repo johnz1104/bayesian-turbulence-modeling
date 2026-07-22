@@ -166,30 +166,223 @@ static void test_heat_flux_reach_direction() {
 }
 
 static void test_realizability_recording() {
+    // the diagnostic is on the EFFECTIVE RUNNING anisotropy
+    // b_eff(W) = b_B(W) + db_stored. On this laminar flow mu_t = 0, so
+    // b_eff = db exactly, and the running k = 0 makes the injected flux
+    // -div(2 rho k db) identically zero: the recording is exercised without
+    // a destabilizing force, and the state is never projected or clipped.
     CouetteCase c;
     c.st.maxIterations = 300;      // a short march suffices for the recording
     c.st.convergenceTol = 1e-30;
     DBNSSolver s(c.mesh, c.eos, SSTCoefficients{}, c.bcs, c.st);
     s.initUniform({c.rho0, 0.0, 0.0, c.p0, 0.0, 0.0});
     int nc = c.mesh.nCells();
-    std::vector<double> b6(6 * nc, 0.0), dq2;
-    b6[0] = 0.9;                   // b_xx beyond the one-component corner
-    b6[1] = -0.45; b6[2] = -0.45;
-    // the absolute target carries the violation; the operative discrepancy
-    // stays zero so the recording is exercised without a destabilizing flux
-    std::vector<double> db6(6 * nc, 0.0);
-    s.setTargetCorrection(db6, b6, dq2, true);
+    std::vector<double> db6(6 * nc, 0.0), dq2;
+    for (int ci = 0; ci < nc; ++ci) {
+        db6[6 * ci + 0] = 0.9;     // b_xx beyond the one-component corner
+        db6[6 * ci + 1] = -0.45;
+        db6[6 * ci + 2] = -0.45;
+    }
+    std::vector<double> bDiag(6 * nc, 0.0);
+    s.setTargetCorrection(db6, bDiag, dq2, true);
     s.solve();
     const InjectionDiagnostics& d = s.injectionDiagnostics();
     std::printf("  [realizability] checked %d iters, all realizable %d, "
-                "max violation %.3e\n", d.checkedIters,
-                (int)d.allRealizable, d.maxViolation);
+                "min margin %.3e at iter %d cell %d, max violation %.3e\n",
+                d.checkedIters, (int)d.allRealizable, d.minMargin,
+                d.minMarginIter, d.minMarginCell, d.maxViolation);
     REQUIRE(d.checkedIters > 0, "check ran");
     REQUIRE(!d.allRealizable, "violation recorded, not silently projected");
     REQUIRE(d.maxViolation > 0.0, "violation magnitude recorded");
+    REQUIRE(d.minMargin < 0.0, "worst margin recorded");
+    REQUIRE(d.minMarginIter > 0, "iteration of the worst margin recorded");
+    REQUIRE(d.minMarginCell >= 0 && d.minMarginCell < nc,
+            "cell of the worst margin recorded");
+    REQUIRE(d.maxViolationIter > 0 && d.maxViolationCell >= 0,
+            "violation extreme carries iteration and cell");
+
+    // a realizable stored discrepancy on the same laminar state records a
+    // clean margin (b_eff = db inside the triangle)
+    DBNSSolver s2(c.mesh, c.eos, SSTCoefficients{}, c.bcs, c.st);
+    s2.initUniform({c.rho0, 0.0, 0.0, c.p0, 0.0, 0.0});
+    std::vector<double> small(6 * nc, 0.0);
+    for (int ci = 0; ci < nc; ++ci) small[6 * ci + 3] = -0.05;
+    s2.setTargetCorrection(small, bDiag, dq2, true);
+    s2.solve();
+    REQUIRE(s2.injectionDiagnostics().allRealizable,
+            "realizable effective anisotropy records clean");
+    REQUIRE(s2.injectionDiagnostics().minMargin >= 0.0,
+            "clean margin is nonnegative");
 
     s.clearTargetCorrection();
     REQUIRE(!s.injectionDiagnostics().active, "clear resets the diagnostics");
+}
+
+static void test_injection_conservation_sign_and_work() {
+    // One explicit forward-Euler step from an identical state, with and
+    // without the injection: the difference isolates the injected fluxes
+    // exactly. A uniform stored discrepancy makes the injected stress
+    // uniform, so interior cells feel no net force (the face fluxes
+    // telescope) and only the rows adjacent to the walls (whose boundary
+    // faces carry no injected flux) respond, with opposite signs; the
+    // global sums vanish (conservative internal-face assembly).
+    CouetteCase c;
+    c.st.turbulent = true;         // running rho k scales the injection
+    c.st.timeMode = TimeMode::Unsteady;
+    c.st.rkStages = 1;
+    c.st.tEnd = 1e-12;             // ONE capped global step: the step must
+                                   // stay below the explicit stability limit
+                                   // so exactly one Euler update runs and
+                                   // the A/B difference is the injected
+                                   // flux alone (a longer horizon takes
+                                   // several steps and couples nonlinearly)
+    c.st.maxIterations = 10;
+    int nc = c.mesh.nCells();
+    Primitive init{c.rho0, 0.5 * c.Uw, 0.0, c.p0, 1.0, 50.0};
+
+    auto oneStep = [&](const std::vector<double>& db6,
+                       const std::vector<double>& dq2, bool reach) {
+        DBNSSolver s(c.mesh, c.eos, SSTCoefficients{}, c.bcs, c.st);
+        s.initUniform(init);
+        std::vector<double> bDiag(6 * nc, 0.0);
+        s.setTargetCorrection(db6, bDiag, dq2, reach);
+        s.solve();
+        std::vector<StateVec> W(nc);
+        for (int ci = 0; ci < nc; ++ci) W[ci] = s.conserved(ci);
+        return W;
+    };
+
+    std::vector<double> zero6(6 * nc, 0.0), zero2;
+    std::vector<double> db6(6 * nc, 0.0);
+    for (int ci = 0; ci < nc; ++ci) db6[6 * ci + 3] = -0.15;  // db_xy
+    std::vector<double> dq2(2 * nc, 0.0);
+    for (int ci = 0; ci < nc; ++ci) dq2[2 * ci + 1] = 1.0;    // dq_y
+
+    auto WA = oneStep(zero6, zero2, true);        // no injection
+    auto WB = oneStep(db6, zero2, true);          // stress + work reach
+    auto WC = oneStep(db6, zero2, false);         // stress, reach off
+    auto WD = oneStep(zero6, dq2, true);          // heat flux only
+
+    // per-unit-depth cell volumes (divergence theorem, the solver's own
+    // construction): the global step divides the residual by the cell
+    // volume, so the conservation sums must be volume-weighted
+    std::vector<double> vol(nc, 0.0);
+    for (int ci = 0; ci < nc; ++ci) {
+        double sv = 0.0;
+        for (FaceID fi : c.mesh.cell(ci).faces) {
+            const Face& f = c.mesh.face(fi);
+            double sgn = (f.owner == ci) ? 1.0 : -1.0;
+            sv += (f.center.x * f.normal.x + f.center.y * f.normal.y)
+                  * sgn * f.area;
+        }
+        vol[ci] = 0.5 * sv;
+    }
+
+    double yLo = 1e30, yHi = -1e30;
+    for (int ci = 0; ci < nc; ++ci) {
+        double y = c.mesh.cell(ci).center.y;
+        yLo = std::min(yLo, y); yHi = std::max(yHi, y);
+    }
+    double sumU = 0.0, sumAbsU = 0.0, sumE = 0.0, sumAbsE = 0.0;
+    double loU = 0.0, hiU = 0.0, edgeMag = 0.0;
+    for (int ci = 0; ci < nc; ++ci) {
+        double dU = vol[ci] * (WB[ci][I_RHOU] - WA[ci][I_RHOU]);
+        double dE = vol[ci] * (WB[ci][I_RHOE] - WA[ci][I_RHOE]);
+        sumU += dU; sumAbsU += std::abs(dU);
+        sumE += dE; sumAbsE += std::abs(dE);
+        edgeMag = std::max(edgeMag, std::abs(dU));
+        double y = c.mesh.cell(ci).center.y;
+        if (std::abs(y - yLo) < 1e-15) loU += dU;
+        if (std::abs(y - yHi) < 1e-15) hiU += dU;
+    }
+    std::printf("  [conservation] sum dU %.3e (abs %.3e), sum dE %.3e "
+                "(abs %.3e), wall rows %.3e / %.3e\n",
+                sumU, sumAbsU, sumE, sumAbsE, loU, hiU);
+    // tolerance floor: the positivity clamp's decode-encode roundtrip adds
+    // ulp-level state noise per cell, so the telescoped sums land at that
+    // floor rather than at exact zero (measured order 1e-7 relative at this
+    // step size; a non-conservative assembly would read order one)
+    REQUIRE(sumAbsU > 0.0, "the injection moved momentum");
+    REQUIRE(std::abs(sumU) < 1e-6 * sumAbsU,
+            "global momentum change telescopes to zero");
+    REQUIRE(std::abs(sumE) < 1e-6 * std::max(sumAbsE, 1e-300),
+            "global energy change telescopes to zero");
+    // sign: tau_inj_xy = -2 rho k db_xy > 0 for db_xy < 0 transports
+    // x-momentum toward the lower wall row
+    REQUIRE(loU > 0.0, "lower wall row gains streamwise momentum");
+    REQUIRE(hiU < 0.0, "upper wall row loses streamwise momentum");
+    // interior cells of a uniform correction feel no net force
+    for (int ci = 0; ci < nc; ++ci) {
+        double y = c.mesh.cell(ci).center.y;
+        if (std::abs(y - yLo) < 1e-15 || std::abs(y - yHi) < 1e-15) continue;
+        double dU = vol[ci] * (WB[ci][I_RHOU] - WA[ci][I_RHOU]);
+        REQUIRE(std::abs(dU) < 1e-9 * edgeMag,
+                "uniform correction is force-free in the interior");
+    }
+    // energy reach off: identical momentum rows, untouched energy row (the
+    // energy comparison tolerates the positivity clamp's decode-encode
+    // roundtrip, whose arithmetic differs once the momentum rows differ)
+    for (int ci = 0; ci < nc; ++ci) {
+        REQUIRE(WC[ci][I_RHOU] == WB[ci][I_RHOU],
+                "reach flag does not alter the momentum flux");
+        REQUIRE(std::abs(WC[ci][I_RHOE] - WA[ci][I_RHOE])
+                    <= 1e-12 * std::abs(WA[ci][I_RHOE]),
+                "reach off leaves the energy row at baseline");
+    }
+    // heat-flux-only injection: momentum untouched, energy conservative
+    double sumEq = 0.0, sumAbsEq = 0.0;
+    for (int ci = 0; ci < nc; ++ci) {
+        REQUIRE(WD[ci][I_RHOU] == WA[ci][I_RHOU],
+                "dq carries no momentum flux");
+        double dE = vol[ci] * (WD[ci][I_RHOE] - WA[ci][I_RHOE]);
+        sumEq += dE; sumAbsEq += std::abs(dE);
+    }
+    REQUIRE(sumAbsEq > 0.0, "the heat-flux correction moved energy");
+    REQUIRE(std::abs(sumEq) < 1e-6 * sumAbsEq,
+            "global heat-flux energy change telescopes to zero");
+}
+
+static void test_frozen_mean_transport_mode() {
+    // the registered gate-B fallback baseline: the primitive mean is pinned
+    // every iteration and only k and omega march
+    CouetteCase c;
+    c.st.turbulent = true;
+    c.st.frozenMeanFlow = true;
+    c.st.maxIterations = 2000;
+    c.st.convergenceTol = 1e-4;
+    DBNSSolver s(c.mesh, c.eos, SSTCoefficients{}, c.bcs, c.st);
+    Primitive init{c.rho0, 0.5 * c.Uw, 0.0, c.p0, 1.0, 50.0};
+    s.initUniform(init);
+    SolveReport rep = s.solve();
+    std::printf("  [frozen mean] status %d iters %d\n",
+                (int)rep.status, rep.iterations);
+    double meanDrift = 0.0, kMove = 0.0, omMove = 0.0;
+    for (int ci = 0; ci < c.mesh.nCells(); ++ci) {
+        Primitive V = s.primitive(ci);
+        meanDrift = std::max({meanDrift,
+                              std::abs(V.rho - init.rho) / init.rho,
+                              std::abs(V.u - init.u) / c.Uw,
+                              std::abs(V.v) / c.Uw,
+                              std::abs(V.p - init.p) / init.p});
+        kMove = std::max(kMove, std::abs(V.k - init.k));
+        omMove = std::max(omMove, std::abs(V.omega - init.omega));
+    }
+    std::printf("  [frozen mean] mean drift %.3e, k moved %.3e, "
+                "omega moved %.3e\n", meanDrift, kMove, omMove);
+    REQUIRE(meanDrift < 1e-10, "the mean state is pinned");
+    REQUIRE(kMove > 1e-3, "k transport marched");
+    REQUIRE(omMove > 1.0, "omega transport marched");
+
+    // the explicit path refuses the mode (implicit steady only)
+    CouetteCase c2;
+    c2.st.turbulent = true;
+    c2.st.frozenMeanFlow = true;
+    c2.st.implicitSteady = false;
+    DBNSSolver s2(c2.mesh, c2.eos, SSTCoefficients{}, c2.bcs, c2.st);
+    s2.initUniform(init);
+    bool threw = false;
+    try { s2.solve(); } catch (const std::exception&) { threw = true; }
+    REQUIRE(threw, "frozen mean without the implicit driver refuses");
 }
 
 static void test_turbulent_zero_discrepancy_identity() {
@@ -237,8 +430,12 @@ int main() {
     test_turbulent_zero_discrepancy_identity();
     std::printf("[dbns injection] heat-flux reach directionality\n");
     test_heat_flux_reach_direction();
-    std::printf("[dbns injection] realizability recording\n");
+    std::printf("[dbns injection] effective-running realizability recording\n");
     test_realizability_recording();
+    std::printf("[dbns injection] conservation, sign and energy work\n");
+    test_injection_conservation_sign_and_work();
+    std::printf("[dbns injection] frozen-mean transport mode\n");
+    test_frozen_mean_transport_mode();
     std::printf("[dbns injection] ALL PASSED\n");
     return 0;
 }

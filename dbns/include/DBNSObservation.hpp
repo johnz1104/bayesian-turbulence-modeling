@@ -77,23 +77,28 @@ public:
             Primitive V = solver_.primitive(P);
             double T1 = V.p / (V.rho * eos.R);
             // use the solver's own viscosity (honours constMu) so the wall
-            // observation is consistent with the field it reads
+            // observation is consistent with the field it reads. Transport
+            // at a resolved wall face is MOLECULAR: the eddy viscosity
+            // vanishes at the wall, and the owner-cell muT (the previous
+            // coefficient) overestimated the wall shear and heat flux
+            // (measured immaterial at y+ 0.05, muT/mu order 1e-15 to 1e-12;
+            // fixed per the audit's wall-viscosity note, matching the
+            // solver's wall-flux convention).
             double muLam = solver_.laminarViscosity(P);
-            double muT = solver_.eddyViscosity(P);
             double delta = std::max(f.delta, 1e-12);
 
             // wall-tangential velocity magnitude at the near-wall cell
             Vec3 Uc{V.u, V.v, 0.0};
             double un = Uc.dot(f.normal);
             Vec3 Ut = Uc - f.normal * un;
-            double tau_w = (muLam + muT) * Ut.norm() / delta;
+            double tau_w = muLam * Ut.norm() / delta;
             double Cf = tau_w / std::max(dynP, 1e-30);
 
             double Cp = (V.p - ref_.p) / std::max(dynP, 1e-30);
 
             // wall heat flux: conduction from the near-wall cell to the wall
-            double lamEff = eos.Cp() * (muLam / eos.Pr + muT / eos.Pr_T);
-            double qw = lamEff * (T1 - Tw) / delta;
+            double lamWall = eos.Cp() * muLam / eos.Pr;
+            double qw = lamWall * (T1 - Tw) / delta;
 
             double denomSt = ref_.rho * ref_.U * eos.Cp() * (Taw - Tw);
             double St = (std::abs(denomSt) > 1e-30) ? qw / denomSt : 0.0;

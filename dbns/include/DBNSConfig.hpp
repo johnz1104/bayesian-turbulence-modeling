@@ -66,6 +66,13 @@ struct DBNSSettings {
     // force grows with the k it produces; default keeps the registered
     // running-k form
     bool   injectionFrozenK = false;
+    // frozen-mean transport mode (the registered gate-B fallback baseline):
+    // the mean-flow primitive state (rho, u, v, p) captured at solve start
+    // is held fixed every iteration and only the k and omega transport
+    // equations march to steadiness, the constitutive-error-at-matched-mean
+    // convention. Implicit steady driver only; convergence gates on the
+    // turbulence field-change norms alone.
+    bool   frozenMeanFlow = false;
     bool   verbose    = false;
 
     double kFloor     = 1e-12;      // turbulence positivity floors
