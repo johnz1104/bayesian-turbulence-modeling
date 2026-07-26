@@ -932,6 +932,18 @@ clause threshold changes.
    propagated folds, and their measured drift is the recorded common-mode
    restart floor of the member ensembles.
 
+   Scope correction, same day (2026-07-26, before any gate record was
+   consumed): the quiescence route is RESTRICTED to restored-checkpoint
+   restarts. On a cold solve a per-step field change below tolerance does
+   not bound the accumulated remaining drift (slow creep), so the
+   registered relative-decay criterion must govern cold classification;
+   the first cold regeneration measured the unrestricted route stopping
+   the attached gate at 12999 iterations versus the registered 47424 and
+   the adiabatic case at 50051 versus 77379, while every heated fold hit
+   the relative criterion first and reproduced its prior cold trajectory
+   bit-exactly. The two affected cases were re-solved under the restricted
+   route before any record was consumed.
+
 3. One landmark rule everywhere. The gate and audit paths now read the
    impingement half-rise through the registered rule (the records'
    smoothing width, linearly interpolated level crossing), replacing a

@@ -479,7 +479,7 @@ def stage_baselines(records, results_dir, quick, regen,
         "ruling": "per-case (reviewer adjudication 2026-07-18); gate "
                   "failures take the registered fallback and are excluded "
                   "from claim-bearing coupled legs",
-        "gate_a_pass": bool(out["gates"]["A"].get("pass", False)),
+        "gate_a_pass": bool(out["gates"].get("A", {}).get("pass", False)),
         "gate_b_pass_cases": sorted(c for c, e in out["gates"]["B"].items()
                                     if e.get("pass")),
         "gate_b_fail_cases": sorted(c for c, e in out["gates"]["B"].items()

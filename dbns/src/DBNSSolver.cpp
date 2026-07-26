@@ -1345,16 +1345,23 @@ SolveReport DBNSSolver::solveImplicitSteady() {
             && iter > freezeIter
             && std::max(relMax, turbMax) > settings_.earlyAbortRelMax)
             break;
-        // quiescence route (the checkpoint-restart semantics): a state that
-        // is not moving in ANY conservative component at the FULL Courant
-        // number over an accepted step is at a discrete fixed point, and is
-        // converged regardless of the relative-decay ratios. The relative
-        // criterion alone can never classify a quiescent warm restart (its
-        // reference residual IS the tiny restart residual, so the ratio
-        // idles near one); the full-CFL guard keeps a rejection-throttled
-        // solve (cflScale backed off, increments small because the step is
-        // small) from masquerading as quiescent.
-        const bool quiescent = (cflScale >= 1.0 && iter > freezeIter
+        // quiescence route, RESTORED-CHECKPOINT RESTARTS ONLY: a reloaded
+        // converged state whose conservative components all stop moving at
+        // the full Courant number over an accepted step is holding its
+        // fixed point, and the relative criterion can never classify it
+        // (its reference residual IS the tiny restart residual, so the
+        // ratio idles near one). The route is gated on the restored
+        // limiter checkpoint because on a COLD solve a per-step field
+        // change below tolerance does NOT bound the accumulated remaining
+        // drift (slow creep), and the registered relative-decay criterion
+        // must govern (measured: the cold gate A classified at 12999
+        // versus 47424 iterations before this gate, the cold adiabatic at
+        // 50051 versus 77379, while every heated fold hit the relative
+        // criterion first and reproduced its trajectory bit-exactly). The
+        // full-CFL guard keeps a rejection-throttled solve from
+        // masquerading as quiescent.
+        const bool quiescent = (startLimiterFrozen_ && cflScale >= 1.0
+                                && iter > freezeIter
                                 && lastMeanChange < settings_.convergenceTol
                                 && turbMax < settings_.convergenceTol);
         if ((iter > freezeIter
