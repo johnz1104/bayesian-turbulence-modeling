@@ -366,18 +366,31 @@ def ensure_frozen_mean_adiabatic(records, results_dir, quick, regen=False):
 
 
 def stage_baselines(records, results_dir, quick, regen,
-                    skip_extract=False):
+                    skip_extract=False, only=None):
     """Solve the baselines where their caches are missing, measure the
     gates, and build the extraction caches. Cached cases never re-solve
     unless --regen. skip_extract stops after the gate adjudication (the
     baseline-only cold-regeneration boundary: extraction regeneration
-    belongs to the released a-priori phase, not the substrate rebuild)."""
+    belongs to the released a-priori phase, not the substrate rebuild).
+    only (a set of {"gatea", "frozenmean", "gateb"}) restricts which solve
+    blocks run, so independent long solves parallelize across processes; a
+    restricted pass never writes the adjudication (the unrestricted or
+    refresh pass assembles it from the per-case records)."""
+    only = set(only) if only else None
+
+    def _runs(block):
+        return only is None or block in only
+
     out = {"gates": {"B": {}}, "solves": {}}
     baselines = {}
 
     # gate A: the attached configuration on the adiabatic record
     gate_a_path = os.path.join(results_dir, "gate_a.json")
-    if not regen and _json_ident_ok(gate_a_path,
+    if not _runs("gatea"):
+        if os.path.isfile(gate_a_path):
+            out["gates"]["A"] = json.load(open(gate_a_path))
+        print("[gate A] outside this pass restriction")
+    elif not regen and _json_ident_ok(gate_a_path,
                                     _gate_ident(results_dir,
                                                 "gate_a_attached")):
         out["gates"]["A"] = json.load(open(gate_a_path))
@@ -422,11 +435,11 @@ def stage_baselines(records, results_dir, quick, regen,
     # (which stays cached only for the gate record and the labeled
     # exploratory legs). Prepared before the gate-B loop so any
     # extraction-regeneration warm load finds the cache in place.
-    if "adiabatic" in records:
+    if "adiabatic" in records and _runs("frozenmean"):
         ensure_frozen_mean_adiabatic(records, results_dir, quick, regen)
 
     # gate B: the interaction configuration per record, solve-once cached
-    for case, record in records.items():
+    for case, record in (records.items() if _runs("gateb") else ()):
         gate_path = os.path.join(results_dir, f"gate_b_{case}.json")
         if _case_cached(results_dir, case) and not regen \
                 and _json_ident_ok(gate_path, _gate_ident(results_dir,
@@ -475,6 +488,10 @@ def stage_baselines(records, results_dir, quick, regen,
     # pass; a failing case is excluded from claim-bearing coupled legs, takes
     # the registered frozen-mean fallback on its a-priori role, and any
     # injection probe on it is EXPLORATORY, never gate rehabilitation)
+    if only is not None:
+        print(f"[baselines] restricted pass {sorted(only)} complete; "
+              f"adjudication deferred to the unrestricted or refresh pass")
+        return out, None
     adjud = {
         "ruling": "per-case (reviewer adjudication 2026-07-18); gate "
                   "failures take the registered fallback and are excluded "
@@ -815,6 +832,11 @@ def main():
     ap.add_argument("--results", default="results/sbli")
     ap.add_argument("--quick", action="store_true")
     ap.add_argument("--regen", action="store_true")
+    ap.add_argument("--only", default="",
+                    help="baselines stage only: comma set of "
+                         "{gatea,frozenmean,gateb} restricting which solve "
+                         "blocks run (parallel substrate rebuilds); implies "
+                         "no adjudication write")
     ap.add_argument("--skip-extract", action="store_true",
                     dest="skip_extract",
                     help="baselines stage only: stop after the gate "
@@ -866,9 +888,12 @@ def main():
             sx, sy = sbli_apriori.TEST_STRIDE[k]
             sbli_apriori.TEST_STRIDE[k] = (4 * sx, 4 * sy)
 
+    only = ([t.strip() for t in args.only.split(",") if t.strip()]
+            if (args.stage == "baselines" and args.only) else None)
     gates, study = stage_baselines(
         records, args.results, args.quick, args.regen,
-        skip_extract=(args.stage == "baselines" and args.skip_extract))
+        skip_extract=(args.stage == "baselines" and args.skip_extract),
+        only=only)
 
     # standalone stages write their own partial file so concurrent stage
     # processes never race on the combined numbers; assemble merges them
