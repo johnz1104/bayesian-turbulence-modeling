@@ -45,12 +45,14 @@ SEEDS = (0, 1, 2)
 
 # Physics schema token for every SBLI cache identity (the fingerprint
 # machinery of UQ.cache_fingerprint): bump exactly when the producing model
-# changes. v3 marks the molecular wall-transport convention of the
-# density-based solver and observation operator (the audit's wall-viscosity
-# note) and the transitive content-hash lineage; v2 was the honest adiabatic
-# wall and completed convergence criterion; v1 (implicit, never stamped) the
-# isothermal-convention density-only round.
-SBLI_PHYSICS = "sbli-dbns-v3"
+# changes. v4 marks the isolated frozen-mean turbulence sweep, the
+# reconstruction-limiter checkpoint-restart semantics with the quiescence
+# convergence route, the registered landmark rule on the gate path, and the
+# cold-regenerated baselines; v3 was the molecular wall transport and
+# content-hash lineage; v2 the honest adiabatic wall and completed
+# criterion; v1 (implicit, never stamped) the isothermal-convention
+# density-only round.
+SBLI_PHYSICS = "sbli-dbns-v4"
 
 
 def sbli_ident(kind, case, **extra):
@@ -142,7 +144,7 @@ class SBLIAPriori:
             status, _reason = cfp.check({k: z[k] for k in z.files}, ident)
             if status == "match":
                 skip = ("meta", cfp.FINGERPRINT_KEY, cfp.CONFIG_KEY,
-                        cfp.CODE_REV_KEY)
+                        cfp.CODE_REV_KEY, cfp.BINDING_KEY)
                 out = {k: z[k] for k in z.files if k not in skip}
                 out["meta"] = json.loads(str(z["meta"]))
                 out["dq"] = None if out["dq"].size == 0 else out["dq"]
@@ -545,6 +547,23 @@ class SBLIAPriori:
             results[case] = {"n_train": int(len(X_tr)),
                              "n_test": int(len(X_te)),
                              "models": per_model}
+        if leg == "db" and "adiabatic" in self.test_sets:
+            # the adiabatic 2011 campaign's db surface (the frozen-mean
+            # extraction route): scored as the labeled independent-campaign
+            # surface, never entering the five-case primary mean (the
+            # per-case gate ruling)
+            adia = self.test_sets["adiabatic"]
+            X_ad = self._features(adia, history=False)
+            Y_ad = adia["db_free"]
+            cmap_ad = None if db_raw else adia["basis_M"]
+            per_model = {}
+            for kind in ("flow", "gauss", "pooled"):
+                per_model[kind] = [self._fit_and_score(
+                    kind, X_tr, Y_tr, X_ad, Y_ad, seed, epochs,
+                    component_map=cmap_ad)[0] for seed in seeds]
+            results["independent_campaign_surface"] = {
+                "n_test": int(len(X_ad)), "models": per_model,
+                "baseline_route": "frozen-mean"}
         if pool_meta is not None:
             results["pool"] = pool_meta
             results["representation"] = ("raw-components (registered "

@@ -302,6 +302,26 @@ def region_masks(record, xs):
             "downstream": xs > edge}, float(onset), float(edge)
 
 
+def station_truths(record, xs):
+    """Wall-series truths at the pinned stations, with the documented
+    s = 1.0 field-row Cp fallback (the series' pressure column is the
+    quantized quirk). ONE rule for every scorer: the probabilistic ensemble
+    scorer and the eigenspace family scorer consume this same function (the
+    review's corner-scorer omission finding)."""
+    series = record.series
+    truths = {"Cf": np.interp(xs, series.x, series.cf)}
+    if series.cp is not None:
+        truths["Cp"] = np.interp(xs, series.x, series.cp)
+    elif hasattr(record, "cp_from_field"):
+        xf, cpf = record.cp_from_field()
+        keep = (xs >= xf[0]) & (xs <= xf[-1])
+        if keep.any():
+            truths["Cp"] = np.interp(xs, xf, cpf)
+    if series.St is not None and not np.all(np.isnan(series.St)):
+        truths["St"] = np.interp(xs, series.x, series.St)
+    return truths
+
+
 def score_ensemble(members, record, stations=STATIONS, baseline_wall=None):
     """Station coverage (0.90 and 0.50 bands), band sharpness and median
     errors of a converged ensemble's wall quantities against the record's
@@ -311,18 +331,7 @@ def score_ensemble(members, record, stations=STATIONS, baseline_wall=None):
     point error."""
     series = record.series
     xs = stations[(stations >= series.x[0]) & (stations <= series.x[-1])]
-    truths = {"Cf": np.interp(xs, series.x, series.cf)}
-    if series.cp is not None:
-        truths["Cp"] = np.interp(xs, series.x, series.cp)
-    elif hasattr(record, "cp_from_field"):
-        # the s = 1.0 series' pressure column is the documented quantized
-        # quirk; the record provides the field-row Cp exactly for this case
-        xf, cpf = record.cp_from_field()
-        keep = (xs >= xf[0]) & (xs <= xf[-1])
-        if keep.any():
-            truths["Cp"] = np.interp(xs, xf, cpf)
-    if series.St is not None and not np.all(np.isnan(series.St)):
-        truths["St"] = np.interp(xs, series.x, series.St)
+    truths = station_truths(record, xs)
 
     out = {"n_members": len(members),
            "n_converged": sum(1 for m in members

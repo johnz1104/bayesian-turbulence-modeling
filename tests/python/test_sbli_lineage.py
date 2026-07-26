@@ -181,3 +181,105 @@ def test_seed_reduce_semantics():
     hi = apo._seed_reduce(per_seed, np.max)
     assert lo["cov"] == pytest.approx(0.6)
     assert hi["cov"] == pytest.approx(0.8)
+
+
+def test_json_identity_roundtrip(tmp_path):
+    cfg = {"kind": "gate-record", "case": "x", "gate": {"lineage": {"a": "1"}}}
+    rec = cfp.attach_json({"pass": True}, cfg)
+    assert cfp.check_json(rec, cfg)[0] == "match"
+    cfg2 = {"kind": "gate-record", "case": "x", "gate": {"lineage": {"a": "2"}}}
+    assert cfp.check_json(rec, cfg2)[0] == "mismatch"
+    assert cfp.check_json({"pass": True}, cfg)[0] == "legacy"
+
+
+def test_case_level_conformal_quantile():
+    # the case-level convention: with twelve calibration cases at alpha 0.10
+    # the finite-sample split-conformal quantile is their maximum (the
+    # ceil((n+1)(1-alpha))/n level exceeds 11/12), never a row-pooled value
+    from UQ import conformal
+    scores = np.arange(12, dtype=float)
+    assert conformal.conformal_quantile(scores, alpha=0.10) == 11.0
+
+
+def test_station_truths_field_row_fallback():
+    from UQ.datasets.sbli_aposteriori import station_truths
+
+    class _Series:
+        x = np.linspace(-10.0, 10.0, 41)
+        cf = np.full(41, 2.5e-3)
+        cp = None
+        St = None
+
+    class _Rec:
+        series = _Series()
+
+        @staticmethod
+        def cp_from_field():
+            xf = np.linspace(-10.0, 10.0, 21)
+            return xf, 0.1 * xf
+
+    xs = np.arange(-5.0, 6.0, 1.0)
+    truths = station_truths(_Rec(), xs)
+    # the s = 1.0 quantized-series case: Cp comes from the field wall row,
+    # so the eigenspace family scorer sees Cp on that fold too
+    assert "Cp" in truths
+    assert np.allclose(truths["Cp"], 0.1 * xs)
+    assert "St" not in truths
+
+
+def test_targets_resume_without_rewrite(tmp_path):
+    d = str(tmp_path)
+    # synthetic upstream universe: heated extractions at both strides plus
+    # the conditioning fields
+    from UQ.datasets.sbli_apriori import TEST_STRIDE, _train_stride
+    for c in apo.HEATED:
+        for st in (TEST_STRIDE[c], _train_stride(c)):
+            pth = os.path.join(d, f"extract_{c}_s{st[0]}x{st[1]}_hist.npz")
+            cfp.savez_atomic(pth, {"features": np.zeros((2, 6))})
+    cfp.savez_atomic(os.path.join(d, "fields_s1.0.npz"),
+                     {"primitive": np.zeros((3, 6))})
+    cfg = apo._targets_config(d, "s1.0", "flow", 0, 3, 2, "objective-basis")
+    tpath = apo._targets_path(d, "s1.0", "flow", model_seed=0)
+    cfp.savez_atomic(tpath, cfp.attach({"b": np.zeros((1, 2))}, cfg))
+    sha_before = cfp.file_sha(tpath)
+    assert apo._targets_current(d, "s1.0", "flow", 0, 3, 2)
+    # the currency check never touches the file, so member identities
+    # (which bind the target hash) stay intact across a resume
+    assert cfp.file_sha(tpath) == sha_before
+    mcfg1 = apo._member_config(d, "s1.0", kind="flow", index=0, model_seed=0)
+    assert apo._targets_current(d, "s1.0", "flow", 0, 3, 2)
+    mcfg2 = apo._member_config(d, "s1.0", kind="flow", index=0, model_seed=0)
+    assert cfp.fingerprint(mcfg1) == cfp.fingerprint(mcfg2)
+    # a mutated upstream extraction invalidates the target (regeneration is
+    # then required, which is the moment members legitimately invalidate)
+    pth = os.path.join(d, "extract_s0.75_s8x4_hist.npz")
+    cfp.savez_atomic(pth, {"features": np.ones((2, 6))})
+    assert not apo._targets_current(d, "s1.0", "flow", 0, 3, 2)
+
+
+def test_prepare_properties_does_not_advance():
+    rans = pytest.importorskip("rans_sst_py")
+    mesh = rans.Mesh.make_plate_2d(8, 6, 0.02, 0.01, 1.0e4, 1.0)
+    eos = rans.IdealGasEOS()
+    solver = rans.DBNSSolver(mesh, eos, rans.SSTCoefficients(),
+                             rans.DBNSBoundaryConditions(),
+                             rans.DBNSSettings())
+    n = solver.n_cells()
+    rng = np.random.default_rng(3)
+    prim = np.stack([
+        np.full(n, 1.2) + 0.01 * rng.standard_normal(n),
+        50.0 + 5.0 * rng.standard_normal(n),
+        1.0 * rng.standard_normal(n),
+        np.full(n, 1.0e5) + 100.0 * rng.standard_normal(n),
+        np.abs(rng.standard_normal(n)) + 0.1,
+        np.abs(rng.standard_normal(n)) * 10.0 + 50.0,
+    ], axis=1)
+    solver.init_field(prim)
+    f0 = {k: np.array(solver.fields()[k])
+          for k in ("rho", "u", "v", "p", "k", "omega")}
+    solver.prepare_properties()
+    f1 = solver.fields()
+    # the extraction warm path: property preparation must leave the state
+    # byte-identical (the one-iteration solve it replaced advanced it)
+    for k in f0:
+        assert np.array_equal(f0[k], np.asarray(f1[k])), k

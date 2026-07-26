@@ -69,8 +69,8 @@ from UQ.datasets.sbli_aposteriori import (
     dq_to_solver_units, landmarks_from_wall, score_ensemble,
     N_MEMBERS, MEMBER_SEED, STATIONS)
 from UQ.reproduce_sbli_apriori import (
-    _all_records, _configure, _fields_path, sbli_ident, GATE_A_CF,
-    GATE_A_STATION)
+    _all_records, _configure, _fields_path, _wall_path, sbli_ident,
+    GATE_A_CF, GATE_A_STATION)
 
 FOLDS = ("s0.5", "s1.0", "s1.9")
 HEATED = ("s0.5", "s0.75", "s1.0", "s1.4", "s1.9")
@@ -232,6 +232,7 @@ def _member_config(results_dir, fold, kind=None, corner=None, index=None,
                  else ("adiabatic" if _is_exploratory(fold) else fold))
     return sbli_ident("apo-member", fold, member={
         "injection_form": "stored-discrepancy",
+        "limiter_checkpoint": True,
         "frozen_k": MEMBER_FROZEN_K, "ramp_iters": MEMBER_RAMP_ITERS,
         "max_iter": MEMBER_MAX_ITER, "tol": MEMBER_TOL,
         "abort_iter": MEMBER_ABORT_ITER,
@@ -305,9 +306,19 @@ def _load_baseline(records, case, results_dir, quick, with_shock=True,
     if derived_probe:
         kw = {"max_iterations": 1, "convergence_tol": 1e-30}
     base = _configure(records[case], quick, with_shock=with_shock, **kw)
-    prim = np.load(_fields_path(
-        results_dir, case if with_shock else "gate_a_attached"))["primitive"]
+    z = np.load(_fields_path(
+        results_dir, case if with_shock else "gate_a_attached"))
+    prim = z["primitive"]
     base.solver.init_field(prim)
+    if member_caps and "limiter_recon" in z.files:
+        # checkpoint-restart semantics (the dated addendum note): restore
+        # the baseline's converged reconstruction-limiter state so the
+        # member resumes the exact discrete operator it converged under;
+        # without it the fresh limiters re-open the reconstruction and the
+        # restart carries an operator re-transient two orders larger than
+        # the remaining-decay drift (measured by the round-trip test)
+        base.solver.set_frozen_reconstruction_limiter(
+            np.asarray(z["limiter_recon"], dtype=float))
     if derived_probe:
         # property preparation (gradients + derived fields) WITHOUT a solver
         # iteration: the loaded converged state is not advanced (the one-sweep
@@ -316,11 +327,45 @@ def _load_baseline(records, case, results_dir, quick, with_shock=True,
     return base, prim
 
 
+def _targets_current(results_dir, fold, kind, model_seed, n_members,
+                     epochs, attached=False):
+    """True when the stored target file matches its full identity computed
+    with the STORED representation and the CURRENT upstream lineage. A
+    current file is never rewritten (a rewrite changes its content hash and
+    would invalidate every completed member downstream, the review's
+    restart-invalidation finding); the representation is safe to take from
+    the stored config because the feasibility gate is a pure function of
+    the extractions, whose hashes the identity already pins."""
+    path = _targets_path(results_dir, fold, kind, attached=attached,
+                         model_seed=model_seed)
+    if not os.path.isfile(path):
+        return False
+    z = np.load(path, allow_pickle=True)
+    if cfp.CONFIG_KEY not in z.files:
+        return False
+    stored = json.loads(str(np.asarray(z[cfp.CONFIG_KEY])[()]))
+    rep = stored.get("targets", {}).get("representation")
+    if rep is None:
+        return False
+    status, _ = cfp.check({k: z[k] for k in z.files},
+                          _targets_config(results_dir, fold, kind,
+                                          model_seed, n_members, epochs,
+                                          rep, attached=attached))
+    return status == "match"
+
+
 def stage_targets(records, results_dir, fold, quick, n_members, epochs,
                   model_seed):
     """Refit the fold models at ONE model seed and write that seed's member
     target files (interaction and attached control); the deterministic
-    families are written once per fold by stage_targets_deterministic."""
+    families are written once per fold by stage_targets_deterministic.
+    Identity-current target files are never rewritten and the refits are
+    skipped with them (resume without member invalidation)."""
+    if all(_targets_current(results_dir, fold, kind, model_seed, n_members,
+                            epochs, attached=att)
+           for kind in KINDS for att in (False, True)):
+        print(f"[targets {fold} ms{model_seed}] current; not rewritten")
+        return
     t0 = time.time()
     study = SBLIAPriori.build(records, {c: None for c in records},
                               results_dir, history=True)
@@ -725,11 +770,9 @@ def stage_score(records, results_dir, fold, n_members):
     # estimator applies to sampled predictives only)
     series = record.series
     xs = STATIONS[(STATIONS >= series.x[0]) & (STATIONS <= series.x[-1])]
-    truths = {"Cf": np.interp(xs, series.x, series.cf)}
-    if series.cp is not None:
-        truths["Cp"] = np.interp(xs, series.x, series.cp)
-    if series.St is not None and not np.all(np.isnan(series.St)):
-        truths["St"] = np.interp(xs, series.x, series.St)
+    # the SHARED truths construction (carries the s = 1.0 field-row Cp
+    # fallback, so the eigenspace families score Cp on that fold too)
+    truths = sbli_aposteriori.station_truths(record, xs)
 
     def _family_scores(labels):
         fam = {}
@@ -772,7 +815,14 @@ def stage_score(records, results_dir, fold, n_members):
     # attached control: skin friction at the incoming-profile station per
     # member against the baseline's own value and the measured level; per
     # model seed separately (the tripled control of the seed protocol)
-    gate_a = json.load(open(os.path.join(results_dir, "gate_a.json")))
+    from UQ.reproduce_sbli_apriori import _gate_ident, _json_ident_ok
+    gate_a_path = os.path.join(results_dir, "gate_a.json")
+    if not _json_ident_ok(gate_a_path,
+                          _gate_ident(results_dir, "gate_a_attached")):
+        print("[score] gate_a.json stale identity; regenerate the gates "
+              "before scoring")
+        sys.exit(1)
+    gate_a = json.load(open(gate_a_path))
     cf_base = float(gate_a["cf_at_station"])
     att = {"cf_baseline": cf_base, "cf_data": GATE_A_CF}
     for kind in KINDS:
@@ -818,9 +868,31 @@ def stage_score(records, results_dir, fold, n_members):
     out["lineage"] = lineage
     path = os.path.join(_apo_dir(results_dir, fold),
                         f"fold_scores_{fold}.json")
-    cfp.json_atomic(path, out)
+    cfp.json_atomic(path, cfp.attach_json(out, sbli_ident(
+        "fold-score", fold, score={"n_members": n_members,
+                                   "model_seeds": list(MODEL_SEEDS),
+                                   "sample_seed": SAMPLE_SEED})))
     print(f"[score {fold}] wrote {path}")
     return out
+
+
+def fold_score_lineage_ok(results_dir, fold):
+    """Transitive validation of a fold score for downstream consumers
+    (figures, the memo): every file hash the score recorded must still
+    match the file on disk. Names resolve in the fold's aposteriori
+    directory first, then the results root."""
+    path = os.path.join(_apo_dir(results_dir, fold),
+                        f"fold_scores_{fold}.json")
+    if not os.path.isfile(path):
+        return False
+    rec = json.load(open(path))
+    for name, sha in rec.get("lineage", {}).items():
+        cand = os.path.join(_apo_dir(results_dir, fold), name)
+        if not os.path.isfile(cand):
+            cand = os.path.join(results_dir, name)
+        if cfp.file_sha(cand) != sha:
+            return False
+    return True
 
 
 def stage_score_exploratory(records, results_dir, n_members):
@@ -847,6 +919,54 @@ def stage_score_exploratory(records, results_dir, n_members):
     cfp.json_atomic(path, out)
     print(f"[score {fold}] wrote {path} (exploratory)")
     return out
+
+
+def stage_zerocheck(records, results_dir, quick, cases):
+    """The pre-matrix checkpoint-round-trip probes (the review's restart
+    requirement): reload each converged baseline through the member path
+    (restored reconstruction limiter, member budget), inject the exact
+    zero correction, solve, and record the classification and the wall
+    drift against the baseline's own wall record. The measured drift is
+    the common-mode restart floor every member of that fold shares; a
+    material drift is a stop-and-adjudicate state before any target is
+    generated."""
+    for case in cases:
+        attached = case == "gate_a_attached"
+        rec_case = "adiabatic" if attached else case
+        base, _ = _load_baseline(records, rec_case, results_dir, quick,
+                                 with_shock=not attached, member_caps=True)
+        nc = base.solver.n_cells()
+        zero3 = np.zeros((nc, 3, 3))
+        t0 = time.time()
+        base.solver.set_target_correction(zero3, zero3, np.zeros((nc, 2)),
+                                          True)
+        rep = base.solver.solve()
+        w = base.wall()
+        out = {"case": case, "status": str(rep.status),
+               "iterations": int(rep.iterations),
+               "final_residual": float(rep.final_residual),
+               "wall_time_s": round(time.time() - t0, 1),
+               "limiter_checkpoint": True,
+               "member_budget": {"max_iter": MEMBER_MAX_ITER,
+                                 "tol": MEMBER_TOL}}
+        bwall = _baseline_wall(results_dir, case)
+        if bwall is not None:
+            drift = {}
+            for q in ("Cf", "Cp", "qw", "St"):
+                a2 = np.interp(bwall["x_star"], w["x_star"], w[q])
+                scale = float(np.max(np.abs(bwall[q]))) or 1.0
+                drift[q] = float(np.max(np.abs(a2 - bwall[q])) / scale)
+            out["max_rel_wall_drift"] = drift
+        lm = landmarks_from_wall(w)
+        out["landmarks"] = {k: lm[k] for k in ("x_s", "x_r", "shock")}
+        cfp.json_atomic(
+            os.path.join(results_dir, f"zerocheck_{case}.json"),
+            cfp.attach_json(out, sbli_ident("zerocheck", case, zc={
+                "lineage": {
+                    "fields": cfp.file_sha(_fields_path(results_dir, case)),
+                    "wall": cfp.file_sha(_wall_path(results_dir, case))}})))
+        print(f"[zerocheck {case}] {rep.status} iters {rep.iterations} "
+              f"drift {out.get('max_rel_wall_drift')}")
 
 
 def _spawn(script_args, log_path):
@@ -972,7 +1092,10 @@ def stage_orchestrate(records, results_dir, quick, throttle, n_members,
                    "quick": bool(quick)},
     }
     path = os.path.join(results_dir, f"aposteriori_numbers{suffix}.json")
-    cfp.json_atomic(path, numbers)
+    cfp.json_atomic(path, cfp.attach_json(numbers, sbli_ident(
+        "aposteriori-numbers", "all-cases", numbers={
+            "n_members": n_members, "model_seeds": list(model_seeds),
+            "quick": bool(quick)})))
     print("wrote", path)
 
 
@@ -986,6 +1109,21 @@ def _require_gates(results_dir, fold):
               "stage first")
         sys.exit(1)
     adjud = json.load(open(path))
+    # transitive validation: the adjudication's recorded gate-record hashes
+    # must match the records on disk (a superseded gate can never authorize
+    # a coupled stage)
+    ident = adjud.get(cfp.IDENTITY_JSON_KEY)
+    if not isinstance(ident, dict) or "config_json" not in ident:
+        print("[gates] adjudication record carries no identity block; "
+              "regenerate it (baselines stage) before coupled stages")
+        sys.exit(1)
+    lin = json.loads(ident["config_json"]).get("adjud", {}).get("lineage",
+                                                                {})
+    for name, sha in lin.items():
+        if cfp.file_sha(os.path.join(results_dir, name)) != sha:
+            print(f"[gates] adjudication lineage stale for {name}; "
+                  f"regenerate the adjudication before coupled stages")
+            sys.exit(1)
     if not adjud.get("gate_a_pass"):
         print("[gates] gate A failed; coupled stages are not adjudicable")
         sys.exit(1)
@@ -1004,7 +1142,8 @@ def _require_gates(results_dir, fold):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--stage", required=True,
-                    choices=("targets", "member", "score", "orchestrate"))
+                    choices=("targets", "member", "score", "orchestrate",
+                             "zerocheck"))
     ap.add_argument("--results", default="results/sbli")
     ap.add_argument("--fold", default=None)
     ap.add_argument("--kind", default="flow",
@@ -1018,7 +1157,7 @@ def main():
     ap.add_argument("--throttle", type=int, default=4)
     ap.add_argument("--folds", default=",".join(FOLDS))
     args = ap.parse_args()
-    if getattr(args, "fold", None):
+    if args.stage != "zerocheck" and getattr(args, "fold", None):
         _require_gates(args.results, args.fold)
 
     np.random.seed(SAMPLE_SEED)
@@ -1058,6 +1197,11 @@ def main():
         stage_orchestrate(records, args.results, args.quick, args.throttle,
                           n_members, epochs, folds,
                           model_seeds=model_seeds)
+    if args.stage == "zerocheck":
+        cases = ([f.strip() for f in args.folds.split(",") if f.strip()]
+                 if args.folds != ",".join(FOLDS)
+                 else ["gate_a_attached"] + list(FOLDS))
+        stage_zerocheck(records, args.results, args.quick, cases)
 
 
 if __name__ == "__main__":

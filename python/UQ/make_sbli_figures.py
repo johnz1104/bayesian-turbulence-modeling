@@ -28,7 +28,8 @@ from UQ.reproduce_sbli_aposteriori import (_member_path, _member_config,
                                            _member_current,
                                            _corner_member_path,
                                            _load_member, KINDS, FOLDS,
-                                           MODEL_SEEDS)
+                                           MODEL_SEEDS,
+                                           fold_score_lineage_ok)
 from UQ.datasets.sbli_aposteriori import STATIONS
 
 KIND_COLORS = {"flow": "tab:blue", "gauss": "tab:orange",
@@ -249,12 +250,17 @@ def fig_bands(records, results_dir, fold, n_members, out):
     print(f"wrote fig5_aposteriori_{fold}.png")
 
 
-def fig_attached(apo_numbers, out):
+def fig_attached(apo_numbers, results_dir, out):
     """Preserve-attached control: member skin frictions at the incoming
     station against the baseline and the measurement."""
     folds = apo_numbers.get("folds", {})
     rows = []
     for fold, block in folds.items():
+        # transitive gate: a fold whose recorded member and target hashes
+        # no longer match the caches on disk never renders
+        if not fold_score_lineage_ok(results_dir, fold):
+            print(f"skip fig6 rows for {fold} (fold-score lineage stale)")
+            continue
         att = block.get("attached_control", {})
         for kind in KINDS:
             per_seed = att.get(kind, {}).get("per_seed", {})
@@ -313,7 +319,7 @@ def main():
     fig_regions(numbers, args.out)
     for fold in FOLDS:
         fig_bands(records, args.results, fold, args.n_members, args.out)
-    fig_attached(apo_numbers, args.out)
+    fig_attached(apo_numbers, args.results, args.out)
     print("figures in", args.out)
 
 

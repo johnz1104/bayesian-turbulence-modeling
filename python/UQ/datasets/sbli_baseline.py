@@ -54,6 +54,12 @@ if os.path.isdir(_BUILD) and _BUILD not in sys.path:
 
 import rans_sst_py as rans
 
+from .. import cache_fingerprint as _cfp
+# the compiled binding every SBLI cache in this process was produced by,
+# recorded as provenance in each cache (never identity; see the
+# cache_fingerprint module note)
+_cfp.set_binding_provenance(_cfp.file_sha(rans.__file__))
+
 MACH = 2.28
 INCIDENCE_DEG = 8.0
 GAMMA = 1.4

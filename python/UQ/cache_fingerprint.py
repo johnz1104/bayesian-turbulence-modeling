@@ -48,6 +48,24 @@ SCHEMA_VERSION = 1
 FINGERPRINT_KEY = "cache_fingerprint"
 CONFIG_KEY = "cache_config_json"
 CODE_REV_KEY = "cache_code_rev"
+BINDING_KEY = "cache_binding_sha"
+IDENTITY_JSON_KEY = "cache_identity"
+
+# compiled-binding content hash, registered once per process by the driver
+# that imports the binding. PROVENANCE, not identity (the adjudicated
+# code_rev convention): embedding the binary hash in the fingerprint would
+# invalidate every cache on any rebuild, including a no-op rebuild, which is
+# exactly the gratuitous-invalidation failure the physics token exists to
+# avoid; the reader gets the producing binary surfaced instead.
+_BINDING_SHA = None
+
+
+def set_binding_provenance(sha):
+    """Register the compiled-binding content hash recorded in every cache
+    written by this process (see the module note: provenance, never
+    identity)."""
+    global _BINDING_SHA
+    _BINDING_SHA = sha
 
 
 def code_rev():
@@ -106,7 +124,40 @@ def attach(arrays, config):
     out[FINGERPRINT_KEY] = np.array(fingerprint(config))
     out[CONFIG_KEY] = np.array(config_json(config))
     out[CODE_REV_KEY] = np.array(code_rev())
+    if _BINDING_SHA is not None:
+        out[BINDING_KEY] = np.array(_BINDING_SHA)
     return out
+
+
+def attach_json(obj, config):
+    """The JSON-record identity block (attach() for .json artifacts): the
+    fingerprint, canonical config, code revision and binding provenance
+    under one reserved key. Validated by check_json with the same
+    match/mismatch/legacy classification as the npz path."""
+    out = dict(obj)
+    ident = {"fingerprint": fingerprint(config),
+             "config_json": config_json(config),
+             "code_rev": code_rev()}
+    if _BINDING_SHA is not None:
+        ident["binding_sha"] = _BINDING_SHA
+    out[IDENTITY_JSON_KEY] = ident
+    return out
+
+
+def check_json(loaded, config):
+    """Classify a loaded JSON record against the expected configuration
+    (same contract as check(); legacy = no identity block)."""
+    ident = loaded.get(IDENTITY_JSON_KEY) if isinstance(loaded, dict) \
+        else None
+    if not isinstance(ident, dict) or "fingerprint" not in ident:
+        return ("legacy", "record carries no identity block (built before "
+                "JSON identity); set QBTM_ALLOW_LEGACY_CACHE=1 to reuse it")
+    if ident["fingerprint"] == fingerprint(config):
+        return "match", ""
+    return ("mismatch",
+            f"record built with a different configuration: stored "
+            f"{ident.get('config_json', '<missing>')}, expected "
+            f"{config_json(config)}")
 
 
 def file_sha(path):
