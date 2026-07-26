@@ -832,6 +832,37 @@ PYBIND11_MODULE(rans_sst_py, m) {
              },
              "Per-cell omega-production limiter activation of the last "
              "residual evaluation (the solver's own branch record).")
+        .def("reconstruction_limiter",
+             [](const DBNSSolver& s) {
+                 auto v = s.reconstructionLimiter();
+                 py::ssize_t nc = (py::ssize_t)(v.size() / 6);
+                 py::array_t<double> out({nc, (py::ssize_t)6});
+                 auto a = out.mutable_unchecked<2>();
+                 for (py::ssize_t ci = 0; ci < nc; ++ci)
+                     for (py::ssize_t k = 0; k < 6; ++k)
+                         a(ci, k) = v[6 * ci + k];
+                 return out;
+             },
+             "Venkatakrishnan reconstruction-limiter values of the last "
+             "evaluation (n_cells, 6), the checkpointable frozen-limiter "
+             "state of a converged solve.")
+        .def("set_frozen_reconstruction_limiter",
+             [](DBNSSolver& s, py::array_t<double> lim) {
+                 auto a = lim.unchecked<2>();
+                 if (a.shape(1) != 6)
+                     throw std::runtime_error(
+                         "set_frozen_reconstruction_limiter: lim must be "
+                         "(n_cells, 6)");
+                 std::vector<double> v(6 * a.shape(0));
+                 for (py::ssize_t ci = 0; ci < a.shape(0); ++ci)
+                     for (py::ssize_t k = 0; k < 6; ++k)
+                         v[6 * ci + k] = a(ci, k);
+                 s.setFrozenReconstructionLimiter(v);
+             },
+             py::arg("lim"),
+             "Restore a checkpointed reconstruction-limiter state and start "
+             "the implicit march limiter-frozen, so a reloaded converged "
+             "state resumes the exact discrete operator it converged under.")
         .def("injection_diagnostics",
              [](const DBNSSolver& s) {
                  // the realizability record is on the EFFECTIVE RUNNING

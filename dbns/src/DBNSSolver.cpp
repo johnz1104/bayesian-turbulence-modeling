@@ -650,6 +650,25 @@ void DBNSSolver::setTargetCorrection(const std::vector<double>& db6,
         injDiag_.maxDq = std::max(injDiag_.maxDq, std::abs(v));
 }
 
+std::vector<double> DBNSSolver::reconstructionLimiter() const {
+    int nc = mesh_.nCells();
+    std::vector<double> out(6 * nc);
+    for (int ci = 0; ci < nc; ++ci)
+        for (int v = 0; v < 6; ++v) out[6 * ci + v] = limiter_[ci][v];
+    return out;
+}
+
+void DBNSSolver::setFrozenReconstructionLimiter(
+        const std::vector<double>& lim6) {
+    int nc = mesh_.nCells();
+    if ((int)lim6.size() != 6 * nc)
+        throw std::runtime_error("setFrozenReconstructionLimiter: lim6 must "
+                                 "be nCells*6");
+    for (int ci = 0; ci < nc; ++ci)
+        for (int v = 0; v < 6; ++v) limiter_[ci][v] = lim6[6 * ci + v];
+    startLimiterFrozen_ = true;
+}
+
 void DBNSSolver::clearTargetCorrection() {
     dbTarget6_.clear();
     bTarget6_.clear();
@@ -1053,6 +1072,7 @@ SolveReport DBNSSolver::solveImplicitSteady() {
     int rejectCount = 0;
     double lastCriterion = 1.0;
     int consecutiveRejects = 0;
+    bool quiescentConverged = false;
     // the uniform initial state has a machine-zero density residual, so the
     // relative-convergence normalizer is the residual maximum over the ramp
     // (frozen afterwards), not the first iterate
@@ -1062,8 +1082,14 @@ SolveReport DBNSSolver::solveImplicitSteady() {
                                settings_.injectionRampIters, 50});
     // the hard (eps = 0) Venkatakrishnan limiter chatters at steady state and
     // stalls deep convergence; freezing it once the residual has dropped two
-    // orders is the standard remedy and changes no converged answer
-    bool limiterFrozen = false;
+    // orders is the standard remedy and changes no converged answer. A
+    // restored checkpoint limiter (setFrozenReconstructionLimiter) starts
+    // frozen, so a reloaded converged state resumes the exact operator it
+    // converged under.
+    bool limiterFrozen = startLimiterFrozen_;
+    // carried mean-flow field-change norms of the last accepted step (the
+    // quiescence route below)
+    double lastMeanChange = 1.0;
     int iter = 0;
     for (; iter < settings_.maxIterations; ++iter) {
         // linear CFL ramp: low while the transient is strong, then the target
@@ -1103,7 +1129,15 @@ SolveReport DBNSSolver::solveImplicitSteady() {
             }
         }
 
-        // forward sweep (lower neighbors already updated this sweep)
+        // forward sweep (lower neighbors already updated this sweep).
+        // Frozen-mean mode zeroes the mean-flow increment rows THE MOMENT
+        // each cell's increment exists: the neighbor terms consume the full
+        // six-component dW of already-swept cells, so a nonzero phantom
+        // mean increment (the pinned mean's residual never vanishes) would
+        // otherwise contaminate the k and omega coupling even though the
+        // final mean is re-pinned after the update (the review's
+        // sweep-contamination finding); with the rows zeroed the turbulence
+        // increments solve the genuine frozen-mean transport equations.
         for (int ci = 0; ci < nc; ++ci) {
             StateVec rhs;
             for (int i = 0; i < NVAR; ++i) rhs[i] = -res_[ci][i];
@@ -1116,6 +1150,8 @@ SolveReport DBNSSolver::solveImplicitSteady() {
                 for (int i = 0; i < NVAR; ++i) rhs[i] -= c[i];
             }
             for (int i = 0; i < NVAR; ++i) dW_[ci][i] = rhs[i] / D[ci][i];
+            if (settings_.frozenMeanFlow)
+                for (int i = 0; i < 4; ++i) dW_[ci][i] = 0.0;
         }
         // backward sweep (upper neighbors carry their final increments)
         for (int ci = nc - 1; ci >= 0; --ci) {
@@ -1129,6 +1165,8 @@ SolveReport DBNSSolver::solveImplicitSteady() {
                 for (int i = 0; i < NVAR; ++i) corr[i] += c[i];
             }
             for (int i = 0; i < NVAR; ++i) dW_[ci][i] -= corr[i] / D[ci][i];
+            if (settings_.frozenMeanFlow)
+                for (int i = 0; i < 4; ++i) dW_[ci][i] = 0.0;
         }
 
         Wsave = W_;
@@ -1259,6 +1297,21 @@ SolveReport DBNSSolver::solveImplicitSteady() {
             lastKChange  = kDiff / kVal;
             lastOmChange = omDiff / omVal;
         }
+        {
+            // mean-flow field-change norms of the accepted step, per
+            // conservative component against its own field scale (the
+            // quiescence route's measure)
+            double change = 0.0;
+            for (int v = 0; v < 4; ++v) {
+                double val = 1e-30, diff = 0.0;
+                for (int ci = 0; ci < nc; ++ci) {
+                    val  = std::max(val,  std::abs(W_[ci][v]));
+                    diff = std::max(diff, std::abs(W_[ci][v] - Wsave[ci][v]));
+                }
+                change = std::max(change, diff / val);
+            }
+            lastMeanChange = change;
+        }
         const double turbMax = settings_.turbulent
             ? std::max(lastKChange, lastOmChange) : 0.0;
         lastCriterion = std::max(relMax, turbMax);
@@ -1292,10 +1345,25 @@ SolveReport DBNSSolver::solveImplicitSteady() {
             && iter > freezeIter
             && std::max(relMax, turbMax) > settings_.earlyAbortRelMax)
             break;
-        if (iter > freezeIter
-            && std::max(relMax, turbMax) < settings_.convergenceTol) {
+        // quiescence route (the checkpoint-restart semantics): a state that
+        // is not moving in ANY conservative component at the FULL Courant
+        // number over an accepted step is at a discrete fixed point, and is
+        // converged regardless of the relative-decay ratios. The relative
+        // criterion alone can never classify a quiescent warm restart (its
+        // reference residual IS the tiny restart residual, so the ratio
+        // idles near one); the full-CFL guard keeps a rejection-throttled
+        // solve (cflScale backed off, increments small because the step is
+        // small) from masquerading as quiescent.
+        const bool quiescent = (cflScale >= 1.0 && iter > freezeIter
+                                && lastMeanChange < settings_.convergenceTol
+                                && turbMax < settings_.convergenceTol);
+        if ((iter > freezeIter
+             && std::max(relMax, turbMax) < settings_.convergenceTol)
+            || quiescent) {
             if (stateIsValid()) {
                 rep.status = EvaluationStatus::Converged;
+                quiescentConverged = quiescent
+                    && std::max(relMax, turbMax) >= settings_.convergenceTol;
             } else {
                 rep.status = EvaluationStatus::Diverged;
                 rep.iterations = iter;
@@ -1320,7 +1388,14 @@ SolveReport DBNSSolver::solveImplicitSteady() {
                               rnsF[v] / std::max(eqRes0[v], 1e-6 * eqRefMax));
         if (settings_.turbulent)
             relMax = std::max(relMax, std::max(lastKChange, lastOmChange));
-        rep.finalResidual = relMax;
+        // a quiescence-classified solve records the measure that actually
+        // converged it (the field-change norms), not the idling relative
+        // ratio of a warm restart's tiny reference
+        rep.finalResidual = quiescentConverged
+            ? std::max(lastMeanChange,
+                       settings_.turbulent
+                           ? std::max(lastKChange, lastOmChange) : 0.0)
+            : relMax;
     }
     return rep;
 }

@@ -116,10 +116,21 @@ public:
     void clearTargetCorrection();
     // per-cell omega-production limiter activation of the LAST residual
     // evaluation (the solver's own branch decision, so activation maps are
-    // exact rather than a python recomputation)
+    // exact rather than a python recomputation). This is the SST source
+    // limiter, distinct from the Venkatakrishnan reconstruction limiter
+    // below.
     const std::vector<std::uint8_t>& limiterActive() const {
         return limiterActive_;
     }
+    // reconstruction-limiter checkpointing: export the Venkatakrishnan
+    // limiter values of the last evaluation (nCells x 6, primitive order
+    // rho, u, v, p, k, omega) and restore them as a FROZEN limiter for a
+    // warm restart, so a reloaded converged state resumes the exact
+    // discrete operator it converged under and carries no limiter-refresh
+    // transient (the checkpoint-restart semantics of the member solves).
+    // Implicit steady driver only; the explicit path recomputes limiters.
+    std::vector<double> reconstructionLimiter() const;
+    void setFrozenReconstructionLimiter(const std::vector<double>& lim6);
     const InjectionDiagnostics& injectionDiagnostics() const { return injDiag_; }
 
     // --- MMS support ---
@@ -149,6 +160,7 @@ private:
     // gradients of primitive variables (rho,u,v,p,k,omega) per cell
     std::vector<std::array<Vec3, 6>> grad_;
     std::vector<std::array<double, 6>> limiter_;  // Venkatakrishnan scalar per var
+    bool startLimiterFrozen_ = false;  // restored-checkpoint limiter state
 
     // workspace
     std::vector<StateVec>   res_;            // residual accumulator

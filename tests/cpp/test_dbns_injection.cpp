@@ -423,6 +423,112 @@ static void test_turbulent_zero_discrepancy_identity() {
             "zero stored discrepancy is bit-identical at a turbulent state");
 }
 
+static void test_frozen_mean_sweep_isolation() {
+    // the review's sweep-contamination finding: the LU-SGS neighbor terms
+    // consume the full six-component increment of already-swept cells, so
+    // phantom mean-flow increments would contaminate the k and omega
+    // coupling even though the final mean is re-pinned. Discriminator: an
+    // artificial MEAN-ROW source (manufactured source on rho, momentum and
+    // energy only) changes the mean residual and hence any phantom mean
+    // increment, but under the corrected sweep (mean rows zeroed the
+    // moment they exist) the turbulence march must be BIT-IDENTICAL.
+    CouetteCase c;
+    c.st.turbulent = true;
+    c.st.frozenMeanFlow = true;
+    c.st.maxIterations = 300;
+    c.st.convergenceTol = 1e-30;
+    Primitive init{c.rho0, 0.5 * c.Uw, 0.0, c.p0, 1.0, 50.0};
+
+    DBNSSolver a(c.mesh, c.eos, SSTCoefficients{}, c.bcs, c.st);
+    a.initUniform(init);
+    a.solve();
+
+    DBNSSolver b(c.mesh, c.eos, SSTCoefficients{}, c.bcs, c.st);
+    b.initUniform(init);
+    int nc = c.mesh.nCells();
+    std::vector<StateVec> src(nc, StateVec{});
+    for (int ci = 0; ci < nc; ++ci) {
+        double y = c.mesh.cell(ci).center.y;
+        src[ci][I_RHO]  = 1.0;
+        src[ci][I_RHOU] = 1e3 * std::sin(M_PI * y / c.H);
+        src[ci][I_RHOE] = 1e5;
+    }
+    b.setManufacturedSource(src);
+    b.solve();
+
+    double kDiff = 0.0, omDiff = 0.0;
+    for (int ci = 0; ci < nc; ++ci) {
+        Primitive Va = a.primitive(ci), Vb = b.primitive(ci);
+        kDiff  = std::max(kDiff,  std::abs(Va.k - Vb.k));
+        omDiff = std::max(omDiff, std::abs(Va.omega - Vb.omega));
+    }
+    std::printf("  [sweep isolation] k diff %.3e, omega diff %.3e under a "
+                "mean-row source\n", kDiff, omDiff);
+    REQUIRE(kDiff == 0.0 && omDiff == 0.0,
+            "mean-row residuals cannot touch the frozen-mean turbulence "
+            "march");
+}
+
+static void test_checkpoint_roundtrip_zero_identity() {
+    // the persisted-checkpoint contract of the member solves: reload a
+    // CONVERGED state with its reconstruction-limiter checkpoint restored,
+    // inject a zero correction, and the solve must classify Converged
+    // (the quiescence route) while the state stays at the checkpoint;
+    // without the limiter restore the fresh limiters re-open the
+    // reconstruction and the restart drifts (the warm-audit effect this
+    // semantics closes).
+    CouetteCase c;
+    DBNSSolver a(c.mesh, c.eos, SSTCoefficients{}, c.bcs, c.st);
+    a.initUniform({c.rho0, 0.0, 0.0, c.p0, 0.0, 0.0});
+    REQUIRE(a.solve().status == EvaluationStatus::Converged,
+            "reference converges");
+    int nc = c.mesh.nCells();
+    std::vector<Primitive> checkpoint(nc);
+    for (int ci = 0; ci < nc; ++ci) checkpoint[ci] = a.primitive(ci);
+    std::vector<double> lims = a.reconstructionLimiter();
+
+    auto drift = [&](const DBNSSolver& s) {
+        double d = 0.0;
+        for (int ci = 0; ci < nc; ++ci) {
+            Primitive V = s.primitive(ci);
+            d = std::max(d, std::abs(V.u - checkpoint[ci].u) / c.Uw);
+            d = std::max(d, std::abs(V.p - checkpoint[ci].p) / c.p0);
+        }
+        return d;
+    };
+
+    std::vector<double> zero6(6 * nc, 0.0), dq2(2 * nc, 0.0);
+    DBNSSolver rest(c.mesh, c.eos, SSTCoefficients{}, c.bcs, c.st);
+    rest.initField(checkpoint);
+    rest.setFrozenReconstructionLimiter(lims);
+    rest.setTargetCorrection(zero6, zero6, dq2, true);
+    SolveReport rr = rest.solve();
+    double dRestored = drift(rest);
+
+    DBNSSolver fresh(c.mesh, c.eos, SSTCoefficients{}, c.bcs, c.st);
+    fresh.initField(checkpoint);
+    fresh.setTargetCorrection(zero6, zero6, dq2, true);
+    SolveReport rf = fresh.solve();
+    double dFresh = drift(fresh);
+
+    std::printf("  [checkpoint] restored: %d iters %d, drift %.3e | fresh "
+                "limiters: %d iters %d, drift %.3e\n",
+                (int)rr.status, rr.iterations, dRestored,
+                (int)rf.status, rf.iterations, dFresh);
+    REQUIRE(rr.status == EvaluationStatus::Converged,
+            "restored checkpoint classifies converged");
+    // the restored restart continues the baseline's remaining decay toward
+    // the true fixed point (a relative-decay criterion leaves that content
+    // behind by construction); the contract is that the OPERATOR is the
+    // checkpointed one, so the drift is the small continued-decay term and
+    // never the order-larger limiter-refresh re-transient of a fresh
+    // restart (measured here about two orders apart)
+    REQUIRE(dRestored < 1e-3,
+            "restored drift is bounded by the remaining-decay scale");
+    REQUIRE(dRestored <= 0.1 * dFresh,
+            "the limiter restore removes the limiter-refresh re-transient");
+}
+
 int main() {
     std::printf("[dbns injection] zero-correction identity\n");
     test_zero_correction_identity();
@@ -436,6 +542,10 @@ int main() {
     test_injection_conservation_sign_and_work();
     std::printf("[dbns injection] frozen-mean transport mode\n");
     test_frozen_mean_transport_mode();
+    std::printf("[dbns injection] frozen-mean sweep isolation\n");
+    test_frozen_mean_sweep_isolation();
+    std::printf("[dbns injection] checkpoint round-trip zero identity\n");
+    test_checkpoint_roundtrip_zero_identity();
     std::printf("[dbns injection] ALL PASSED\n");
     return 0;
 }
