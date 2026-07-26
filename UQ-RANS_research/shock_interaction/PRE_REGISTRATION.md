@@ -898,3 +898,71 @@ null shape, fold definition, or clause threshold changes.
    production re-enablement requires an independent full-budget diagnostic
    panel and a dated amendment fixing the thresholds, before any member it
    governs is scored.
+
+## Dated addendum (2026-07-26): substrate corrections from the Phase L review, fixed before any corrected-lineage result
+
+Recorded after the reviewer's blocking review of the first repair round and
+BEFORE any extraction, trained model, target, ensemble, or score exists on
+the corrected lineage. No success band, null shape, fold definition, or
+clause threshold changes.
+
+1. Frozen-mean sweep isolation. The implicit sweeps of the frozen-mean
+   transport mode zero the mean-flow increment rows the moment they are
+   computed, before any neighbor coupling consumes them: the pinned mean's
+   residual never vanishes, so a phantom mean increment would otherwise
+   contaminate the k and omega coupling even though the final mean is
+   re-pinned. Pinned by a discriminating test (an artificial mean-row
+   source leaves the turbulence march bit-identical); the frozen-mean
+   surface regenerates under the corrected sweep.
+
+2. Checkpoint-restart semantics and a quiescence convergence route. The
+   converged baselines checkpoint their Venkatakrishnan reconstruction-
+   limiter state with the fields, and every member warm-start restores it,
+   so a reloaded state resumes the exact discrete operator it converged
+   under and carries no limiter-refresh re-transient (measured about two
+   orders larger than the remaining-decay drift without the restore). The
+   convergence criterion gains a quiescence route: a state whose
+   conservative components all stop moving at the full Courant number over
+   an accepted step is a discrete fixed point and classifies Converged
+   regardless of the relative-decay ratios, which can never classify a
+   quiescent restart (their reference IS the tiny restart residual); the
+   full-CFL guard keeps a rejection-throttled solve from masquerading as
+   quiescent. Before any target generation, zero-correction checkpoint
+   round-trip probes run on the gate-A configuration and the three
+   propagated folds, and their measured drift is the recorded common-mode
+   restart floor of the member ensembles.
+
+3. One landmark rule everywhere. The gate and audit paths now read the
+   impingement half-rise through the registered rule (the records'
+   smoothing width, linearly interpolated level crossing), replacing a
+   raw-series grid-index reading whose offsets were quantized at the
+   streamwise cell width; gate records regenerate under it. The gate-A
+   momentum-thickness integral stops at the layer's own edge (first
+   u = 0.99 crossing; the full-height integral accumulated far-field
+   noise); the metric remains report-only.
+
+4. Case-level conformal calibration. Per amendment 4's whole-case
+   calibration units, the conformal score of a calibration case is the
+   0.90 empirical quantile of its normalized row residuals, and the band
+   quantile is the finite-sample split-conformal quantile ACROSS the
+   calibration-case scores (with about twelve cases at alpha 0.10 that is
+   their maximum), never a quantile over pooled correlated rows. The
+   conformal predictor runs at the pinned model seeds {0, 1, 2} with the
+   criterion on the seed mean, like every other modeled line.
+
+5. Far-transfer db surfaces completed. The far db leg scores the adiabatic
+   2011 campaign's frozen-mean db surface as the labeled independent-
+   campaign surface, alongside the s = 1.0 pairing and never inside the
+   five-case primary mean.
+
+6. Lineage completed and physics token bumped to v4. Wall records bind
+   their exact fields cache; gate records, the adjudication, partial and
+   assembled numbers files, and fold scores carry identity blocks
+   validated at every consumer (a stale partial can never assemble);
+   identity-current target files are never rewritten on a resume (a
+   rewrite would invalidate completed members); the compiled-binding
+   content hash is recorded in every cache as provenance (never identity,
+   per the adjudicated code-revision convention; the physics token remains
+   the identity lever). All seven baselines and the frozen-mean surface
+   COLD-regenerate under sbli-dbns-v4; the warm-reconverged v3 states are
+   superseded and never consumed.
