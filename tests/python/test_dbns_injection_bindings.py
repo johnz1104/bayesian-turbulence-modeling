@@ -74,23 +74,25 @@ def test_zero_correction_identity_smoke():
 
 
 def test_diagnostics_record_violation():
+    # the realizability diagnostic is on the EFFECTIVE RUNNING anisotropy
+    # b_eff(W) = b_B(W) + db_stored; on this laminar flow mu_t = 0 so
+    # b_eff = db exactly, the running k = 0 keeps the injected flux at
+    # zero, and the absolute-target argument is provenance only
     mesh, solver = _laminar_channel()
     n = mesh.n_cells()
-    b = np.zeros((n, 3, 3))
-    b[:, 0, 0] = 0.9          # beyond the one-component corner (2/3)
-    b[:, 1, 1] = -0.45
-    b[:, 2, 2] = -0.45
-    # the absolute target carries the violation for the realizability
-    # recording; max_db now measures the OPERATIVE stored discrepancy (the
-    # injected magnitude), so it is exercised through db, not b
-    db = np.zeros_like(b)
-    db[:, 0, 1] = db[:, 1, 0] = 1e-6
-    solver.set_target_correction(db, b, np.zeros((0,)))
+    db = np.zeros((n, 3, 3))
+    db[:, 0, 0] = 0.9         # beyond the one-component corner (2/3)
+    db[:, 1, 1] = -0.45
+    db[:, 2, 2] = -0.45
+    solver.set_target_correction(db, np.zeros_like(db), np.zeros((0,)))
     solver.solve()
     d = solver.injection_diagnostics()
     assert d["all_realizable"] is False
     assert d["max_violation"] > 0.0
-    assert d["max_db"] == pytest.approx(1e-6)
+    assert d["min_margin"] < 0.0
+    assert d["min_margin_iter"] > 0
+    assert 0 <= d["min_margin_cell"] < n
+    assert d["max_db"] == pytest.approx(0.9)
 
 
 def test_boundary_profile_constant_matches_uniform():
