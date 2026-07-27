@@ -151,6 +151,65 @@ def write_manifest(path, names=tuple(DATASETS), root=None):
     return rec
 
 
+TOKEN_FIELDS = ("manifest", "digests", "writer_pid")
+
+
+def token_ident(body):
+    """Identity configuration of a run token: the whole recorded body."""
+    return {"kind": "dns-run-token", "token": body}
+
+
+def write_run_token(token_path, manifest_path, required=tuple(DATASETS)):
+    """Record that THIS process has just fresh-verified the manifest.
+
+    Verification hashes every registered dataset, which is the right cost
+    once per run and the wrong cost once per worker: an orchestrated matrix
+    spawns a worker per member, and each one re-reading the whole source
+    corpus turns a correctness gate into hours of pure hashing. The parent
+    verifies, writes this token, and passes it to the workers it spawns; a
+    standalone worker gets no token and verifies in full. Only a caller that
+    has just verified may write one."""
+    rec = json.load(open(manifest_path))
+    body = {"manifest": cfp.file_sha(manifest_path),
+            "digests": {n: rec["datasets"][n]["digest"] for n in sorted(required)},
+            "writer_pid": os.getpid()}
+    cfp.json_atomic(token_path, cfp.attach_json(body, token_ident(body)))
+    return body
+
+
+def verify_run_token(token_path, manifest_path, required=tuple(DATASETS)):
+    """The worker-side gate: the token must be self-consistent and must name
+    the manifest that is on disk right now, digest for digest. Cheap by
+    construction (no dataset is re-read), and never a substitute for the
+    parent's fresh pass, which is what actually bound the manifest to the
+    live data. Returns (ok, reason)."""
+    if not os.path.isfile(token_path):
+        return False, "run token absent"
+    tok = json.load(open(token_path))
+    if not isinstance(tok, dict) or set(TOKEN_FIELDS) - set(tok):
+        return False, "run token is missing fields"
+    body = {k: tok[k] for k in TOKEN_FIELDS}
+    status, why = cfp.check_json(tok, token_ident(body))
+    if status != "match":
+        return False, f"run token identity {status} ({why})"
+    if not os.path.isfile(manifest_path):
+        return False, "manifest absent"
+    if body["manifest"] != cfp.file_sha(manifest_path):
+        return False, ("the manifest changed since the run token was "
+                       "written; re-verify")
+    rec = json.load(open(manifest_path))
+    entries = rec.get("datasets")
+    if not isinstance(entries, dict):
+        return False, "manifest carries no datasets block"
+    live = {n: entries[n].get("digest") for n in entries}
+    if body["digests"] != live:
+        return False, "run token digests do not match the manifest record"
+    if set(body["digests"]) != set(required):
+        return False, ("run token does not cover the registered datasets "
+                       f"{sorted(set(required) - set(body['digests']))}")
+    return True, ""
+
+
 def verify_manifest(path, root=None, required=tuple(DATASETS)):
     """Rule the recorded manifest against the live data, CLOSED over the
     required dataset set. Returns (ok, reason); a missing manifest is

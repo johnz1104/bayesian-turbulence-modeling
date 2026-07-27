@@ -1065,3 +1065,34 @@ clause threshold changes.
    result redirection so a smoke run is ruled by the universe it writes
    into. Nothing here changes a success band, a null shape, a fold
    definition or a clause threshold.
+
+10. Correction to clause 9 (2026-07-27, same day, still before any
+    corrected-lineage extraction exists). Clause 9 stated that a stale
+    adoption is restored only by cold regeneration and that completeness
+    reaches every per-seed model row. Adversarial review found neither was
+    fully enforced, and both are now closed. (a) The migration stage
+    rewrote ANY non-current adoption record, so adopt, change the data,
+    adopt again returned a baseline to current with no solve; and the
+    adoption record was ruled over whichever fields it happened to carry,
+    so a record with its campaign digest removed and its identity rebuilt
+    over the reduced body read as current. Adoption records are now ruled
+    CLOSED over their expected fields (correct tag, expected campaign,
+    exactly one non-null digest for that campaign, a non-null fields hash),
+    a stale record is never overwritten by the migration stage, and an
+    absent one is written only when the (fields hash, campaign digest) pair
+    matches the tracked audited migration record, so deleting a sidecar
+    does not reopen the route. The audited record is the eight cold v4
+    baselines of the substrate audit, in the repository where a change to
+    it is a reviewed commit. (b) The attached leave-one-Mach-family-out
+    health gate passed on a non-empty dictionary, so the one clause that
+    guards the far-transfer line was never ruled to model-row depth. It is
+    now ruled per family, per channel case, per scored model, one row per
+    pinned seed, with the expected case set read from the record's own
+    conformal roles (fit plus calibration is exactly the matrix the control
+    runs over), and a conformal per-seed entry must carry its scored cases
+    rather than merely exist. (c) Operationally, an orchestrating parent
+    now fresh-verifies the manifest once and passes its workers a token
+    bound to that exact manifest record; a worker without a token still
+    verifies in full. This changes no ruling, only the cost of making it
+    once per member rather than re-reading the whole source corpus. No
+    success band, null shape, fold definition or clause threshold changes.

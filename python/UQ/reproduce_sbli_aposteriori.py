@@ -1037,6 +1037,14 @@ def stage_orchestrate(records, results_dir, quick, throttle, n_members,
     exploratory phase runs ONLY under QBTM_SBLI_EXPLORATORY=1 and its
     outputs never enter the formal numbers."""
     common = ["--results", results_dir] + (["--quick"] if quick else [])
+    # this process fresh-verified the manifest for every orchestrated fold
+    # above; its workers re-check that token instead of re-hashing the whole
+    # source corpus once per member (a matrix spawns a worker per member, so
+    # the full pass per worker is hours of pure hashing)
+    token = os.path.join(_apo_dir(results_dir),
+                         f"dns_run_token_{os.getpid()}.json")
+    dns_manifest.write_run_token(token, _manifest_path(results_dir))
+    common += ["--run-token", token]
     log_path = os.path.join(_apo_dir(results_dir), "workers.log")
 
     def _member_jobs(fold, kinds=KINDS, corners=False, attached=False,
@@ -1130,28 +1138,49 @@ def stage_orchestrate(records, results_dir, quick, throttle, n_members,
             "n_members": n_members, "model_seeds": list(model_seeds),
             "quick": bool(quick)})))
     print("wrote", path)
+    # the token authorizes workers of THIS run only
+    if os.path.isfile(token):
+        os.remove(token)
 
 
-def _require_manifest(results_dir):
+def _manifest_path(results_dir):
+    return os.path.join(results_dir, "dns_manifest.json")
+
+
+def _require_manifest(results_dir, run_token=None):
     """The raw-input gate of every coupled stage: the results universe's own
     DNS manifest must verify against the live data. Ruled on the universe
     the stage WRITES INTO, so the quick smoke path is gated by its own
-    manifest and never by the production one."""
-    ok, why = dns_manifest.verify_manifest(
-        os.path.join(results_dir, "dns_manifest.json"))
+    manifest and never by the production one.
+
+    run_token names a token written by a parent that fresh-verified moments
+    ago (the orchestrated matrix); the worker then re-checks the token
+    against the manifest on disk instead of re-hashing the whole source
+    corpus once per member. A worker launched without a token verifies in
+    full, so the cheap path exists only under a parent that paid the full
+    cost in this run."""
+    manifest = _manifest_path(results_dir)
+    if run_token:
+        ok, why = dns_manifest.verify_run_token(run_token, manifest)
+        if not ok:
+            print(f"[gates] DNS run token refused ({why}); the parent must "
+                  f"re-verify the manifest before its workers run")
+            sys.exit(1)
+        return
+    ok, why = dns_manifest.verify_manifest(manifest)
     if not ok:
         print(f"[gates] DNS manifest gate failed ({why}); run the a-priori "
               f"driver to adjudicate before any coupled stage")
         sys.exit(1)
 
 
-def _require_gates(results_dir, fold):
+def _require_gates(results_dir, fold, run_token=None):
     """Claim-bearing coupled stages run only on gate-passing configurations
     (the recorded per-case ruling); the far-transfer target is exempt only
     when explicitly labeled exploratory via QBTM_SBLI_EXPLORATORY=1. Carries
     the manifest gate as well, so a single-fold worker verifies the source
     data exactly once."""
-    _require_manifest(results_dir)
+    _require_manifest(results_dir, run_token)
     path = os.path.join(results_dir, "gates_adjudication.json")
     if not os.path.isfile(path):
         print("[gates] no adjudication record; run the a-priori baselines "
@@ -1205,6 +1234,12 @@ def main():
     ap.add_argument("--quick", action="store_true")
     ap.add_argument("--throttle", type=int, default=4)
     ap.add_argument("--folds", default=",".join(FOLDS))
+    ap.add_argument("--run-token", default=None, dest="run_token",
+                    help="path to the DNS run token written by an "
+                         "orchestrating parent that fresh-verified the "
+                         "manifest; workers re-check it instead of "
+                         "re-hashing the source corpus (a worker without "
+                         "one verifies in full)")
     args = ap.parse_args()
 
     np.random.seed(SAMPLE_SEED)
@@ -1236,11 +1271,14 @@ def main():
         gated = []                      # pre-target probe, no fold claim
     else:
         gated = [args.fold] if getattr(args, "fold", None) else []
+    # an orchestrating parent verifies in full (it writes the token its own
+    # workers ride on), so the cheap path is only ever a spawned worker's
+    token = None if args.stage == "orchestrate" else args.run_token
     if gated:
         for fold in gated:
-            _require_gates(args.results, fold)
+            _require_gates(args.results, fold, run_token=token)
     else:
-        _require_manifest(args.results)
+        _require_manifest(args.results, run_token=token)
 
     records = _all_records()
 

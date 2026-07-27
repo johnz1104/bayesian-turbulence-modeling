@@ -483,14 +483,24 @@ def _complete_numbers(seeds):
     def folds():
         return {f: {"models": rows()} for f in HELD_FOLDS}
 
+    # the attached health gate runs over the real channel matrix, so the
+    # fixture carries real case tags: the roles declare the expected set and
+    # the control must cover every one of them per family
+    tags = list(GV_CASES[:4])
+    control = {}
+    for t in tags:
+        control.setdefault(f"family_{mach_family(t)}", {})[t] = rows()
     return {
         "gates": {"A": {"pass": True}, "B": {"s1.0": {"pass": True}}},
         "loso": {leg: folds() for leg in LOSO_LEGS},
         "insample": {leg: {"models": rows()} for leg in INSAMPLE_LEGS},
         "far": {"transfer": {leg: folds() for leg in FAR_TRANSFER_LEGS},
-                "control": {"dq_y": {"family_M2": {}}},
-                "conformal": {"roles": {"disjoint": True},
-                              "per_seed": {str(s): {"q_abs": 1.0}
+                "control": {"dq_y": control},
+                "conformal": {"roles": {"disjoint": True,
+                                        "fit_cases": tags[0::2],
+                                        "calibration_cases": tags[1::2]},
+                              "per_seed": {str(s): {"q_abs": 1.0,
+                                                    "cases": {"s1.0": {}}}
                                            for s in seeds},
                               "seed_mean": {"s1.0": {}},
                               "seed_min_max": {"s1.0": {}}}},
@@ -617,12 +627,47 @@ def test_numbers_completeness_is_recomputed_not_labeled(tmp_path):
     cfp.set_binding_provenance(saved_binding)
 
 
+def test_completeness_reaches_the_attached_control_and_conformal_seeds():
+    # the attached leave-one-Mach-family-out health gate passed on a
+    # non-empty dictionary, so completeness did not in fact reach every
+    # per-seed model row; the conformal per-seed keys were presence-only
+    from UQ.reproduce_sbli_apriori import numbers_missing
+    seeds = (0, 1)
+    rec = _complete_numbers(seeds)
+    assert not numbers_missing(rec, seeds)
+    # a control block that merely exists is now refused
+    rec["far"]["control"]["dq_y"] = {"family_2": {}}
+    assert any(m.startswith("far:control:dq_y") for m in
+               numbers_missing(rec, seeds))
+    # a case the roles declare but the control never scored
+    rec = _complete_numbers(seeds)
+    fam = sorted(rec["far"]["control"]["dq_y"])[0]
+    dropped = sorted(rec["far"]["control"]["dq_y"][fam])[0]
+    del rec["far"]["control"]["dq_y"][fam][dropped]
+    assert f"far:control:dq_y:{fam}:{dropped}" in numbers_missing(rec, seeds)
+    # a scored case missing a model, and one short a seed
+    rec = _complete_numbers(seeds)
+    fam = sorted(rec["far"]["control"]["dq_y"])[0]
+    tag = sorted(rec["far"]["control"]["dq_y"][fam])[0]
+    del rec["far"]["control"]["dq_y"][fam][tag]["pooled"]
+    assert f"far:control:dq_y:{fam}:{tag}:pooled" in numbers_missing(rec,
+                                                                     seeds)
+    rec = _complete_numbers(seeds)
+    rec["far"]["control"]["dq_y"][fam][tag]["flow"] = [{"coverage_0.9": 0.9}]
+    assert any("seeds" in m and "far:control" in m
+               for m in numbers_missing(rec, seeds))
+    # an empty conformal per-seed entry no longer counts as present
+    rec = _complete_numbers(seeds)
+    rec["far"]["conformal"]["per_seed"]["1"] = {"q_abs": 1.0}
+    assert "far:conformal:per_seed:1" in numbers_missing(rec, seeds)
+
+
 def test_baseline_dns_adoption_gates_reuse(tmp_path, monkeypatch):
     # the review's mixed-era finding: accepting changed source data rewrote
     # the manifest and invalidated the extractions, but left the baselines
     # those extractions are measured against reusable
     from UQ.reproduce_sbli_apriori import (_adoption_status, _audit_adoption,
-                                           _fields_path,
+                                           _fields_path, _baseline_campaign,
                                            stage_adopt_baselines)
     root = _synthetic_dns_root(str(tmp_path / "root"))
     monkeypatch.setenv("QBTM_DNS_DATA", root)
@@ -633,11 +678,17 @@ def test_baseline_dns_adoption_gates_reuse(tmp_path, monkeypatch):
         cfp.savez_atomic(_fields_path(d, tag),
                          cfp.attach({"primitive": np.zeros((3, 6))},
                                     sbli_ident("sbli_fields", tag)))
+    # the migration allowlist of this hermetic universe (in production it is
+    # the tracked audited record, which no test hash could ever match)
+    allow = {t: {"campaign": _baseline_campaign(t),
+                 "dns": dm.dataset_digest(_baseline_campaign(t)),
+                 "fields": cfp.file_sha(_fields_path(d, t))}
+             for t in ("s1.0", "gate_a_attached")}
     # an identity-current baseline with no adoption record is NOT current
     assert _adoption_status(d, "s1.0")[0] == "absent"
     with pytest.raises(SystemExit):
         _audit_adoption(d, ("s1.0",), False)
-    stage_adopt_baselines(d)
+    stage_adopt_baselines(d, allowlist=allow)
     assert _adoption_status(d, "s1.0")[0] == "current"
     assert _adoption_status(d, "gate_a_attached")[0] == "current"
     # a heated-campaign correction strands the heated baseline; rewriting
@@ -658,6 +709,141 @@ def test_baseline_dns_adoption_gates_reuse(tmp_path, monkeypatch):
                                 sbli_ident("sbli_fields", "gate_a_attached")))
     status, why = _adoption_status(d, "gate_a_attached")
     assert status == "stale" and "fields cache changed" in why
+
+
+def test_stale_adoption_is_never_restored_by_re_adopting(tmp_path,
+                                                         monkeypatch):
+    # the migration stage rewrote ANY non-current record, so
+    # adopt -> change DNS -> adopt returned the baseline to current with no
+    # solve, contradicting the rule that only cold regeneration restores it
+    from UQ.reproduce_sbli_apriori import (_adoption_status, _fields_path,
+                                           _adoption_path, _baseline_campaign,
+                                           stage_adopt_baselines)
+    root = _synthetic_dns_root(str(tmp_path / "root"))
+    monkeypatch.setenv("QBTM_DNS_DATA", root)
+    dm.forget(tuple(dm.DATASETS))
+    d = str(tmp_path / "results")
+    os.makedirs(d)
+    cfp.savez_atomic(_fields_path(d, "s1.0"),
+                     cfp.attach({"primitive": np.zeros((3, 6))},
+                                sbli_ident("sbli_fields", "s1.0")))
+    allow = {"s1.0": {"campaign": _baseline_campaign("s1.0"),
+                      "dns": dm.dataset_digest("interaction_heated"),
+                      "fields": cfp.file_sha(_fields_path(d, "s1.0"))}}
+    stage_adopt_baselines(d, allowlist=allow)
+    assert _adoption_status(d, "s1.0")[0] == "current"
+    with open(_dataset_file(root, "interaction_heated"), "wb") as f:
+        f.write(b"corrected campaign")
+    dm.forget(tuple(dm.DATASETS))
+    assert _adoption_status(d, "s1.0")[0] == "stale"
+    # re-adopting REFUSES and leaves the record stale
+    with pytest.raises(SystemExit):
+        stage_adopt_baselines(d, allowlist=allow)
+    assert _adoption_status(d, "s1.0")[0] == "stale"
+    # nor does deleting the stale sidecar reopen the route: the live pair no
+    # longer matches the audited migration record
+    os.remove(_adoption_path(d, "s1.0"))
+    assert _adoption_status(d, "s1.0")[0] == "absent"
+    with pytest.raises(SystemExit):
+        stage_adopt_baselines(d, allowlist=allow)
+    assert _adoption_status(d, "s1.0")[0] == "absent"
+    # and a tag with no audited entry at all is refused rather than adopted
+    with pytest.raises(SystemExit):
+        stage_adopt_baselines(d, allowlist={})
+    assert _adoption_status(d, "s1.0")[0] == "absent"
+
+
+def test_adoption_record_is_ruled_closed_over_its_fields(tmp_path,
+                                                         monkeypatch):
+    # the same fail-open shape as the manifest, one level down: a record
+    # with its dns entry removed and its identity rebuilt over the reduced
+    # body was self-consistent, and the digest loop then iterated nothing
+    from UQ.reproduce_sbli_apriori import (_adoption_status, _fields_path,
+                                           _adoption_path, _write_adoption)
+    root = _synthetic_dns_root(str(tmp_path / "root"))
+    monkeypatch.setenv("QBTM_DNS_DATA", root)
+    dm.forget(tuple(dm.DATASETS))
+    d = str(tmp_path / "results")
+    os.makedirs(d)
+    cfp.savez_atomic(_fields_path(d, "s1.0"),
+                     cfp.attach({"primitive": np.zeros((3, 6))},
+                                sbli_ident("sbli_fields", "s1.0")))
+    _write_adoption(d, "s1.0")
+    assert _adoption_status(d, "s1.0")[0] == "current"
+    path = _adoption_path(d, "s1.0")
+    good = json.load(open(path))
+
+    def _reforge(body):
+        cfp.json_atomic(path, cfp.attach_json(
+            body, sbli_ident("baseline-dns", "s1.0", adopt=body)))
+
+    # (a) the dns entry removed and the identity reforged over what is left
+    body = {k: good[k] for k in ("tag", "campaign", "fields")}
+    _reforge(body)
+    status, why = _adoption_status(d, "s1.0")
+    assert status == "stale" and "dns" in why
+    # (b) an empty dns map, self-consistent
+    body = {k: good[k] for k in ("tag", "campaign", "dns", "fields")}
+    body["dns"] = {}
+    _reforge(body)
+    assert _adoption_status(d, "s1.0")[0] == "stale"
+    # (c) a null digest (adopted while the campaign was absent)
+    body["dns"] = {good["campaign"]: None}
+    _reforge(body)
+    status, why = _adoption_status(d, "s1.0")
+    assert status == "stale" and "no" in why
+    # (d) a digest recorded under the WRONG campaign
+    body["dns"] = {"gv_channel": dm.dataset_digest("gv_channel")}
+    _reforge(body)
+    assert _adoption_status(d, "s1.0")[0] == "stale"
+    # (e) the record renamed to another baseline
+    body = {k: good[k] for k in ("tag", "campaign", "dns", "fields")}
+    body["tag"] = "s1.9"
+    _reforge(body)
+    assert _adoption_status(d, "s1.0")[0] == "stale"
+
+
+def test_run_token_is_bound_to_the_verified_manifest(tmp_path):
+    # the worker-side cheap gate: a parent that fresh-verified writes the
+    # token, workers re-check it instead of re-hashing every dataset, and it
+    # stops authorizing the moment the manifest it names moves
+    root = _synthetic_dns_root(str(tmp_path / "root"))
+    mpath = str(tmp_path / "dns_manifest.json")
+    tpath = str(tmp_path / "token.json")
+    dm.write_manifest(mpath, root=root)
+    assert dm.verify_manifest(mpath, root=root)[0]
+    dm.write_run_token(tpath, mpath)
+    ok, why = dm.verify_run_token(tpath, mpath)
+    assert ok, why
+    # a re-manifested (even identical) record is a different file: the token
+    # names the exact manifest its parent verified
+    with open(_dataset_file(root, "interaction_heated"), "wb") as f:
+        f.write(b"corrected campaign")
+    dm.write_manifest(mpath, root=root)
+    ok, why = dm.verify_run_token(tpath, mpath)
+    assert not ok and "manifest changed" in why
+    # a token whose digests are edited and identity reforged still refuses:
+    # it must agree with the manifest record digest for digest
+    dm.write_run_token(tpath, mpath)
+    tok = json.load(open(tpath))
+    body = {k: tok[k] for k in dm.TOKEN_FIELDS}
+    body["digests"] = dict(body["digests"])
+    body["digests"]["interaction_heated"] = "0000000000000000"
+    cfp.json_atomic(tpath, cfp.attach_json(body, dm.token_ident(body)))
+    ok, why = dm.verify_run_token(tpath, mpath)
+    assert not ok and "digests" in why
+    # and a narrowed token cannot claim coverage it does not have
+    dm.write_run_token(tpath, mpath)
+    tok = json.load(open(tpath))
+    body = {k: tok[k] for k in dm.TOKEN_FIELDS}
+    body["digests"] = {"interaction_heated":
+                       body["digests"]["interaction_heated"]}
+    cfp.json_atomic(tpath, cfp.attach_json(body, dm.token_ident(body)))
+    assert not dm.verify_run_token(tpath, mpath)[0]
+    # a missing token never passes
+    os.remove(tpath)
+    ok, why = dm.verify_run_token(tpath, mpath)
+    assert not ok and "absent" in why
 
 
 def test_faradiab_targets_bind_the_attached_training_pool(tmp_path,

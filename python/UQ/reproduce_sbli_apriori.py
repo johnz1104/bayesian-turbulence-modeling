@@ -51,6 +51,7 @@ from UQ.datasets.sbli_apriori import (SBLIAPriori, TEST_STRIDE, SBLI_PHYSICS,
                                       sbli_ident, extraction_ident,
                                       extraction_fields_path,
                                       conformal_case_split)
+from UQ.datasets.heatflux_apriori import mach_family
 from UQ.datasets import dns_manifest
 
 DRIVER_SEED = 0
@@ -245,34 +246,64 @@ def _write_adoption(results_dir, tag):
                                                      adopt=body)))
 
 
+ADOPTION_FIELDS = ("tag", "campaign", "dns", "fields")
+
+
 def _adoption_status(results_dir, tag):
     """(status, reason) of a baseline's DNS adoption: "current", "absent"
-    (never adopted) or "stale" (the fields cache or the source campaign moved
-    since adoption). Fail-closed: anything but "current" refuses reuse."""
+    (never adopted) or "stale" (the record is malformed, or the fields cache
+    or the source campaign moved since adoption). Fail-closed: anything but
+    "current" refuses reuse.
+
+    The record is ruled CLOSED over the expected fields, exactly as the
+    manifest gate is ruled closed over the registered datasets. Building the
+    expected identity from whatever keys a record happened to carry left the
+    same fail-open hole one level down: a record with its dns entry removed
+    and its identity rebuilt over the reduced body was self-consistent, and
+    the digest loop then iterated an empty default and returned current."""
     path = _adoption_path(results_dir, tag)
     if not os.path.isfile(path):
         return "absent", (f"baseline {tag} carries no DNS adoption record "
                           f"(run --stage adopt-baselines to bind the "
                           f"validated caches to the verified manifest)")
     rec = json.load(open(path))
-    body = {k: rec[k] for k in ("tag", "campaign", "dns", "fields")
-            if k in rec}
+    if not isinstance(rec, dict):
+        return "stale", f"baseline {tag} adoption record is not a record"
+    absent = [k for k in ADOPTION_FIELDS if k not in rec]
+    if absent:
+        return "stale", (f"baseline {tag} adoption record is missing "
+                         f"{absent}")
+    body = {k: rec[k] for k in ADOPTION_FIELDS}
     status, why = cfp.check_json(rec, sbli_ident("baseline-dns", tag,
                                                  adopt=body))
     if status != "match":
         return "stale", (f"baseline {tag} adoption record identity "
                          f"{status} ({why})")
+    campaign = _baseline_campaign(tag)
+    if body["tag"] != tag or body["campaign"] != campaign:
+        return "stale", (f"baseline {tag} adoption record names "
+                         f"{body['tag']}/{body['campaign']}, expected "
+                         f"{tag}/{campaign}")
+    dns = body["dns"]
+    if not isinstance(dns, dict) or set(dns) != {campaign}:
+        return "stale", (f"baseline {tag} adoption record carries digests "
+                         f"{sorted(dns) if isinstance(dns, dict) else dns}, "
+                         f"expected exactly [{campaign}]")
+    if dns[campaign] is None:
+        return "stale", (f"baseline {tag} was adopted with no {campaign} "
+                         f"digest (the campaign was absent at adoption)")
     live_fields = cfp.file_sha(_fields_path(results_dir, tag))
-    if body.get("fields") != live_fields:
+    if live_fields is None:
+        return "stale", f"baseline {tag} has no fields cache on disk"
+    if body["fields"] != live_fields:
         return "stale", (f"baseline {tag} fields cache changed since its "
-                         f"DNS adoption ({body.get('fields')} adopted, "
+                         f"DNS adoption ({body['fields']} adopted, "
                          f"{live_fields} on disk)")
-    for ds, adopted in sorted(body.get("dns", {}).items()):
-        live = dns_manifest.dataset_digest(ds)
-        if live != adopted:
-            return "stale", (f"baseline {tag} was solved against {ds} "
-                             f"digest {adopted}, live {live}: cold "
-                             f"regenerate it (--regen --cases {tag})")
+    live = dns_manifest.dataset_digest(campaign)
+    if live is None or live != dns[campaign]:
+        return "stale", (f"baseline {tag} was solved against {campaign} "
+                         f"digest {dns[campaign]}, live {live}: cold "
+                         f"regenerate it (--regen --cases {tag})")
     return "current", ""
 
 
@@ -305,30 +336,98 @@ def _audit_adoption(results_dir, tags, regen):
         _require_adoption(results_dir, tag, f"cached baseline {tag}")
 
 
-def stage_adopt_baselines(results_dir):
-    """One-time adoption of baselines that predate the sidecar: bind each
-    identity-current fields cache to the campaign digest of the currently
-    VERIFIED manifest (the driver's manifest gate has already run, so this
-    can never adopt against unverified data). Every later solve writes its
-    own record, so this stage is an operator action for the migration only,
-    and it never adopts a cache whose producing configuration cannot be
-    proven from its identity."""
-    out = {}
+# The AUDITED migration record: the exact fields-cache content hash and
+# campaign digest of each baseline whose DNS era was established by hand (the
+# seven cold v4 solves plus the frozen-mean surface, ruled equivalent and
+# gate-reproducing in the substrate audit). It is tracked in the repository
+# precisely so the one-time migration cannot be re-aimed at a different pair:
+# restricting adoption to the absent case alone is bypassed by DELETING a
+# stale sidecar, which would re-adopt a superseded solve against corrected
+# data. Entries are added only by a reviewed commit that records an audit;
+# a cold regeneration never needs one, because the solve writes its own
+# record directly.
+BASELINE_ADOPTION_ALLOWLIST = {
+    "gate_a_attached": {"campaign": "interaction_adiabatic",
+                        "dns": "bda54cbebfb5cac0",
+                        "fields": "1cfcc946e04cc778"},
+    "adiabatic": {"campaign": "interaction_adiabatic",
+                  "dns": "bda54cbebfb5cac0",
+                  "fields": "aea090f8df0160c8"},
+    "adiabatic_frozenmean": {"campaign": "interaction_adiabatic",
+                             "dns": "bda54cbebfb5cac0",
+                             "fields": "18eb470e0e78f32f"},
+    "s0.5": {"campaign": "interaction_heated",
+             "dns": "9cb6353f03abca64",
+             "fields": "78d1ad0a7c8fe0ef"},
+    "s0.75": {"campaign": "interaction_heated",
+              "dns": "9cb6353f03abca64",
+              "fields": "e6196969aa38458c"},
+    "s1.0": {"campaign": "interaction_heated",
+             "dns": "9cb6353f03abca64",
+             "fields": "de2acad008d0a6f8"},
+    "s1.4": {"campaign": "interaction_heated",
+             "dns": "9cb6353f03abca64",
+             "fields": "a6e389ae81ae2009"},
+    "s1.9": {"campaign": "interaction_heated",
+             "dns": "9cb6353f03abca64",
+             "fields": "ce481df681c3a790"},
+}
+
+
+def stage_adopt_baselines(results_dir, allowlist=None):
+    """One-time migration of baselines that predate the sidecar: bind an
+    identity-current fields cache to its campaign digest, and ONLY when the
+    (fields hash, campaign digest) pair is the audited one.
+
+    Two rules make this a migration rather than a way to launder currency.
+    A STALE record is never overwritten (adoption cannot restore what only a
+    cold regeneration can restore; an earlier form rewrote any non-current
+    record, so a DNS change followed by this stage returned the baseline to
+    current with no solve). And an ABSENT record is written only against the
+    tracked allowlist, so deleting a stale sidecar does not reopen the same
+    route. Exits non-zero when any baseline is refused."""
+    allow = BASELINE_ADOPTION_ALLOWLIST if allowlist is None else allowlist
+    out, refused = {}, []
     for tag in BASELINE_TAGS:
         path = _fields_path(results_dir, tag)
         if not _npz_ident_ok(path, sbli_ident("sbli_fields", tag)):
             out[tag] = "no identity-current fields cache"
             print(f"[adopt] {tag}: skipped ({out[tag]})")
             continue
-        before, _ = _adoption_status(results_dir, tag)
+        before, why = _adoption_status(results_dir, tag)
         if before == "current":
             out[tag] = "already current"
             print(f"[adopt] {tag}: already current")
             continue
-        _write_adoption(results_dir, tag)
+        if before == "stale":
+            out[tag] = f"REFUSED (stale): {why}"
+            print(f"[adopt] {tag}: REFUSED, a stale adoption is restored "
+                  f"only by cold regeneration ({why})")
+            refused.append(tag)
+            continue
+        entry = allow.get(tag)
         body = _adoption_body(results_dir, tag)
-        out[tag] = f"adopted {body['campaign']} {body['dns'][body['campaign']]}"
+        live = body["dns"][body["campaign"]]
+        if entry is None:
+            out[tag] = "REFUSED (not in the audited migration record)"
+            print(f"[adopt] {tag}: REFUSED, no audited migration entry")
+            refused.append(tag)
+            continue
+        if (entry["campaign"] != body["campaign"]
+                or entry["dns"] != live or entry["fields"] != body["fields"]):
+            out[tag] = "REFUSED (does not match the audited migration record)"
+            print(f"[adopt] {tag}: REFUSED, cache {body['fields']} against "
+                  f"{body['campaign']} {live} is not the audited pair "
+                  f"({entry['fields']} against {entry['dns']})")
+            refused.append(tag)
+            continue
+        _write_adoption(results_dir, tag)
+        out[tag] = f"adopted {body['campaign']} {live}"
         print(f"[adopt] {tag}: {out[tag]} (was {before})")
+    if refused:
+        print(f"[adopt] REFUSED {refused}: cold regenerate them (--regen "
+              f"--cases <tag>) rather than re-adopting")
+        sys.exit(1)
     return out
 
 
@@ -611,6 +710,44 @@ def _seed_rows_missing(node, path, seeds):
     return missing
 
 
+def _control_missing(control, roles, seeds):
+    """The attached leave-one-Mach-family-out health gate, ruled to the same
+    depth as every other block: each pinned family, each of its channel
+    cases, each scored model, one row per seed. A non-empty dictionary was
+    accepted before, so the health gate of the far-transfer clause was the
+    one line completeness never actually reached.
+
+    The expected case set is the record's OWN conformal roles (fit plus
+    calibration is exactly the channel matrix the control runs over, both
+    built from the same converged pool in the same run), so the rule needs
+    no second copy of the matrix; without usable roles the structural
+    clauses still apply."""
+    missing = []
+    if not isinstance(control, dict) or not control:
+        return ["far:control:dq_y"]
+    cases = set()
+    if isinstance(roles, dict):
+        cases = set(roles.get("fit_cases") or ()) | \
+            set(roles.get("calibration_cases") or ())
+    if cases:
+        for tag in sorted(cases):
+            fam = f"family_{mach_family(tag)}"
+            if fam not in control:
+                missing.append(f"far:control:dq_y:{fam}")
+            elif tag not in control[fam]:
+                missing.append(f"far:control:dq_y:{fam}:{tag}")
+    for fam in sorted(control):
+        block = control[fam]
+        if not isinstance(block, dict) or not block:
+            missing.append(f"far:control:dq_y:{fam}")
+            continue
+        for tag in sorted(block):
+            missing += _seed_rows_missing(block[tag],
+                                          f"far:control:dq_y:{fam}:{tag}",
+                                          seeds)
+    return missing
+
+
 def numbers_missing(numbers, seeds=None):
     """RECOMPUTE what the published numbers lack, from the record itself.
 
@@ -659,9 +796,6 @@ def numbers_missing(numbers, seeds=None):
                 missing += _seed_rows_missing(node[fold].get("models"),
                                               f"far:transfer:{leg}:{fold}",
                                               seeds)
-    control = far.get("control", {}).get("dq_y")
-    if not isinstance(control, dict) or not control:
-        missing.append("far:control:dq_y")
     conformal_block = far.get("conformal")
     if not isinstance(conformal_block, dict):
         conformal_block = {}
@@ -670,8 +804,12 @@ def numbers_missing(numbers, seeds=None):
             missing.append(f"far:conformal:{key}")
     per_seed = conformal_block.get("per_seed") or {}
     for sd in (seeds or ()):
-        if str(sd) not in per_seed:
+        entry = per_seed.get(str(sd))
+        # a per-seed key must carry its scored cases, not just exist
+        if not isinstance(entry, dict) or not entry.get("cases"):
             missing.append(f"far:conformal:per_seed:{sd}")
+    missing += _control_missing(far.get("control", {}).get("dq_y"),
+                                conformal_block.get("roles"), seeds)
     return sorted(set(missing))
 
 
