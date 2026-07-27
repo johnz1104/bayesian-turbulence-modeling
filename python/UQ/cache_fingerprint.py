@@ -180,20 +180,23 @@ def file_sha(path):
 
 
 def savez_atomic(path, arrays):
-    """np.savez_compressed through a temp file and an atomic rename, so a
-    crashed writer can never leave a half-written cache that a later run
-    would load (writes go to <path>.tmp in the same directory, then
-    os.replace)."""
-    tmp = path + ".tmp"
+    """np.savez_compressed through a per-writer temp file and an atomic
+    rename: a crashed writer can never leave a half-written cache that a
+    later run would load, and CONCURRENT writers of the same path can
+    never corrupt each other (a shared temp name let one writer truncate
+    or publish another's half-written bytes, the review's concurrency
+    finding; with per-pid temps the race degrades to benign
+    last-complete-writer-wins)."""
+    tmp = f"{path}.tmp.{os.getpid()}"
     with open(tmp, "wb") as f:
         np.savez_compressed(f, **arrays)
     os.replace(tmp, path)
 
 
 def json_atomic(path, obj, indent=1):
-    """json.dump through a temp file and an atomic rename (same contract as
-    savez_atomic for the JSON records)."""
-    tmp = path + ".tmp"
+    """json.dump through a per-writer temp file and an atomic rename (same
+    contract and same concurrency hardening as savez_atomic)."""
+    tmp = f"{path}.tmp.{os.getpid()}"
     with open(tmp, "w") as f:
         json.dump(obj, f, indent=indent)
     os.replace(tmp, path)

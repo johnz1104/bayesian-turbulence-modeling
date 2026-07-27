@@ -47,6 +47,7 @@ from UQ.datasets.sbli_apriori import (SBLIAPriori, TEST_STRIDE, SBLI_PHYSICS,
                                       sbli_ident, extraction_ident,
                                       extraction_fields_path,
                                       conformal_case_split)
+from UQ.datasets import dns_manifest
 
 DRIVER_SEED = 0
 
@@ -130,6 +131,13 @@ def _partial_ident(results_dir, stage, leg, seeds, epochs):
         for st in (TEST_STRIDE[c], sbli_apriori._train_stride(c)):
             pth = SBLIAPriori._cache_path(results_dir, c, st, True)
             lin[os.path.basename(pth)] = cfp.file_sha(pth)
+    # the raw-input edge: the interaction digests always (record reads on
+    # the scoring side), the attached datasets for the far stage, whose
+    # training pools read the DNS loaders directly with no extraction
+    # intermediary (the review's raw-input lineage finding)
+    dns_set = (dns_manifest.FAR_SET if stage == "far"
+               else dns_manifest.INTERACTION_SET)
+    lin["dns"] = dns_manifest.digests(dns_set)
     return sbli_ident("apriori-partial", f"{stage}:{leg or 'all'}",
                       part={"seeds": list(seeds), "epochs": int(epochs),
                             "lineage": lin})
@@ -434,10 +442,15 @@ def numbers_ident(results_dir, seeds, epochs, quick, lineage):
         "lineage": dict(sorted(lineage.items()))})
 
 
-def validate_apriori_numbers(results_dir, quick=False):
+def validate_apriori_numbers(results_dir, quick=False, strict=False,
+                             expected_seeds=None, expected_epochs=None):
     """Transitive validation for consumers of the published numbers: the
     identity block must be present and every recorded lineage hash must
-    match the file on disk. Returns (ok, reason)."""
+    match the file on disk. strict additionally requires the completeness
+    label (all stages and legs present), the expected seeds and epochs
+    (defaults: the pinned production protocol), a current gate
+    adjudication whose recorded gate-record hashes still match disk, and
+    the binding provenance to be recorded. Returns (ok, reason)."""
     suffix = "_quick" if quick else ""
     path = os.path.join(results_dir, f"apriori_numbers{suffix}.json")
     if not os.path.isfile(path):
@@ -446,11 +459,43 @@ def validate_apriori_numbers(results_dir, quick=False):
     ident = rec.get(cfp.IDENTITY_JSON_KEY)
     if not isinstance(ident, dict) or "config_json" not in ident:
         return False, "no identity block"
-    lin = json.loads(ident["config_json"]).get("numbers", {}).get("lineage",
-                                                                  {})
-    for name, sha in lin.items():
+    stored = json.loads(ident["config_json"]).get("numbers", {})
+    for name, sha in stored.get("lineage", {}).items():
+        if name == "dns":
+            for ds, dg in sha.items():
+                if dns_manifest.dataset_digest(ds) != dg:
+                    return False, f"dns digest stale for {ds}"
+            continue
         if cfp.file_sha(os.path.join(results_dir, name)) != sha:
             return False, f"lineage stale for {name}"
+    if not strict:
+        return True, ""
+    if not rec.get("complete", False):
+        return False, f"incomplete: {rec.get('missing', 'unlabeled')}"
+    want_seeds = list(expected_seeds if expected_seeds is not None
+                      else sbli_apriori.SEEDS)
+    want_epochs = int(expected_epochs if expected_epochs is not None
+                      else sbli_apriori.EPOCHS)
+    if list(stored.get("seeds", [])) != want_seeds:
+        return False, (f"seeds {stored.get('seeds')} do not match the "
+                       f"expected {want_seeds}")
+    if int(stored.get("epochs", -1)) != want_epochs:
+        return False, (f"epochs {stored.get('epochs')} do not match the "
+                       f"expected {want_epochs}")
+    if "binding_sha" not in ident:
+        return False, "no binding provenance recorded"
+    adjud_path = os.path.join(results_dir, "gates_adjudication.json")
+    if not os.path.isfile(adjud_path):
+        return False, "gates adjudication absent"
+    adjud = json.load(open(adjud_path))
+    aident = adjud.get(cfp.IDENTITY_JSON_KEY)
+    if not isinstance(aident, dict) or "config_json" not in aident:
+        return False, "gates adjudication carries no identity block"
+    alin = json.loads(aident["config_json"]).get("adjud", {}).get("lineage",
+                                                                  {})
+    for name, sha in alin.items():
+        if cfp.file_sha(os.path.join(results_dir, name)) != sha:
+            return False, f"gate lineage stale for {name}"
     return True, ""
 
 
@@ -972,6 +1017,28 @@ def main():
     if os.path.isfile(numbers_path):
         numbers = json.load(open(numbers_path))
 
+    # the checksummed DNS manifest gate: refuse to run against silently
+    # changed source data; regenerating the manifest is an explicit
+    # operator action (rerun with QBTM_SBLI_ACCEPT_DNS=1 after adjudicating
+    # the change), and the first run bootstraps it
+    manifest_path = os.path.join(args.results, "dns_manifest.json")
+    os.makedirs(args.results, exist_ok=True)
+    ok, why = dns_manifest.verify_manifest(manifest_path)
+    if not ok and why == "manifest absent":
+        dns_manifest.write_manifest(manifest_path)
+        print(f"[dns] manifest bootstrapped at {manifest_path}")
+    elif not ok:
+        if os.environ.get("QBTM_SBLI_ACCEPT_DNS") == "1":
+            dns_manifest.write_manifest(manifest_path)
+            print(f"[dns] manifest REGENERATED under explicit acceptance "
+                  f"({why}); dependent caches will invalidate through "
+                  f"their identities")
+        else:
+            print(f"[dns] SOURCE DATA CHANGED: {why}; adjudicate the "
+                  f"change, then rerun with QBTM_SBLI_ACCEPT_DNS=1 to "
+                  f"accept and re-manifest")
+            sys.exit(1)
+
     records = _all_records()
     if args.stage == "reconverge":
         # --cases here names the RECONVERGE list (fields-cache tags, e.g.
@@ -1039,12 +1106,16 @@ def main():
     numbers["gates"] = gates["gates"]
     numbers["solves"] = gates["solves"]
     if args.stage == "all":
+        # in-flight checkpoints go to a clearly NON-FINAL progress file (a
+        # crash can never leave a plausible-looking partial numbers file);
+        # the production route is per-stage partials plus assemble
+        progress = numbers_path + ".progress"
         numbers["loso"] = stage_loso(study, seeds, epochs)
-        json.dump(numbers, open(numbers_path, "w"), indent=1)
+        cfp.json_atomic(progress, numbers)
         numbers["insample"] = stage_insample(study, seeds, epochs)
-        json.dump(numbers, open(numbers_path, "w"), indent=1)
+        cfp.json_atomic(progress, numbers)
         numbers["far"] = stage_far(study, seeds, epochs, records)
-        json.dump(numbers, open(numbers_path, "w"), indent=1)
+        cfp.json_atomic(progress, numbers)
     if args.stage == "assemble":
         consumed = assemble_numbers(args.results, numbers, seeds, epochs,
                                     suffix)
@@ -1056,6 +1127,24 @@ def main():
                          for k, v in sbli_apriori.TEST_STRIDE.items()},
         "quick": bool(args.quick),
     }
+    # the completeness label: a numbers file missing any stage or leg is
+    # marked complete false and lists what is absent, so a partial result
+    # can never read as authoritative (the review's completion finding)
+    missing = []
+    for stage_name, legs in (("loso", ("dq_y", "dq_joint", "db",
+                                       "dq_y_history")),
+                             ("insample", ("dq_y", "dq_joint", "db")),
+                             ("far", ("transfer", "control", "conformal"))):
+        if stage_name not in numbers:
+            missing.append(stage_name)
+            continue
+        for leg in legs:
+            if leg not in numbers[stage_name]:
+                missing.append(f"{stage_name}:{leg}")
+    numbers["complete"] = not missing
+    numbers["missing"] = missing
+    if missing:
+        print(f"[numbers] INCOMPLETE (labeled complete false): {missing}")
     if args.stage == "all":
         # in-process results: the lineage is the extraction caches the
         # stages consumed (the same set the partial identities pin)
@@ -1064,6 +1153,7 @@ def main():
             for st in (TEST_STRIDE[c], sbli_apriori._train_stride(c)):
                 pth = SBLIAPriori._cache_path(args.results, c, st, True)
                 consumed[os.path.basename(pth)] = cfp.file_sha(pth)
+    consumed["dns"] = dns_manifest.digests(dns_manifest.FAR_SET)
     cfp.json_atomic(numbers_path, cfp.attach_json(
         numbers, numbers_ident(args.results, seeds, epochs, args.quick,
                                consumed)))

@@ -71,6 +71,7 @@ from UQ.datasets.sbli_aposteriori import (
 from UQ.reproduce_sbli_apriori import (
     _all_records, _configure, _fields_path, _wall_path, sbli_ident,
     GATE_A_CF, GATE_A_STATION)
+from UQ.datasets import dns_manifest
 
 FOLDS = ("s0.5", "s1.0", "s1.9")
 HEATED = ("s0.5", "s0.75", "s1.0", "s1.4", "s1.9")
@@ -174,6 +175,10 @@ def _targets_lineage(results_dir, fold, attached=False):
     cond = "gate_a_attached" if attached else \
         ("adiabatic" if _is_exploratory(fold) else fold)
     lin[f"fields_{cond}.npz"] = cfp.file_sha(_fields_path(results_dir, cond))
+    # the raw-input edge: member targets consume the records directly
+    # (reference scales, mask spans, the record Mach), so the target
+    # identity binds the interaction dataset digests
+    lin["dns"] = dns_manifest.digests(dns_manifest.INTERACTION_SET)
     return lin
 
 
@@ -207,7 +212,8 @@ def _corners_config(results_dir, fold):
         "mask": {"y_min": 0.05, "y_max": sbli_aposteriori.MASK_Y_MAX,
                  "k_floor": sbli_aposteriori.MASK_K_FLOOR},
         "lineage": {f"fields_{fold}.npz": cfp.file_sha(
-            _fields_path(results_dir, fold))}})
+            _fields_path(results_dir, fold)),
+            "dns": dns_manifest.digests(dns_manifest.INTERACTION_SET)}})
 
 
 def _member_config(results_dir, fold, kind=None, corner=None, index=None,
@@ -1116,6 +1122,12 @@ def _require_gates(results_dir, fold):
     """Claim-bearing coupled stages run only on gate-passing configurations
     (the recorded per-case ruling); the far-transfer target is exempt only
     when explicitly labeled exploratory via QBTM_SBLI_EXPLORATORY=1."""
+    ok, why = dns_manifest.verify_manifest(
+        os.path.join(results_dir, "dns_manifest.json"))
+    if not ok:
+        print(f"[gates] DNS manifest gate failed ({why}); run the a-priori "
+              f"driver to adjudicate before any coupled stage")
+        sys.exit(1)
     path = os.path.join(results_dir, "gates_adjudication.json")
     if not os.path.isfile(path):
         print("[gates] no adjudication record; run the a-priori baselines "

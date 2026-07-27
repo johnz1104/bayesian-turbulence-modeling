@@ -301,6 +301,11 @@ def main():
         _HERE, "..", "..", "UQ-RANS_research", "shock_interaction",
         "figures"))
     ap.add_argument("--n-members", type=int, default=24)
+    ap.add_argument("--allow-partial", action="store_true",
+                    dest="allow_partial",
+                    help="render interim figures from unvalidated or "
+                         "incomplete numbers (NEVER for the evidence "
+                         "package; every panel is labeled by its inputs)")
     args = ap.parse_args()
     os.makedirs(args.out, exist_ok=True)
 
@@ -308,7 +313,20 @@ def main():
     numbers = {}
     p = os.path.join(args.results, "apriori_numbers.json")
     if os.path.isfile(p):
-        numbers = json.load(open(p))
+        # evidence figures refuse invalid or incomplete numbers outright
+        # (the review's completion finding); --allow-partial is the labeled
+        # interim escape hatch
+        from UQ.reproduce_sbli_apriori import validate_apriori_numbers
+        ok, why = validate_apriori_numbers(args.results, strict=True)
+        if ok or args.allow_partial:
+            if not ok:
+                print(f"NOTE: rendering PARTIAL evidence ({why}); never "
+                      f"package these figures")
+            numbers = json.load(open(p))
+        else:
+            print(f"apriori numbers refused ({why}); rerun with "
+                  f"--allow-partial for labeled interim figures")
+            sys.exit(1)
     apo_numbers = {}
     p = os.path.join(args.results, "aposteriori_numbers.json")
     if os.path.isfile(p):

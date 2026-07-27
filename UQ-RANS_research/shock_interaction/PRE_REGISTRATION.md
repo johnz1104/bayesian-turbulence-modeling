@@ -1000,3 +1000,29 @@ clause threshold changes.
    the identity lever). All seven baselines and the frozen-mean surface
    COLD-regenerate under sbli-dbns-v4; the warm-reconverged v3 states are
    superseded and never consumed.
+
+8. Raw-input lineage (2026-07-27, before any corrected-lineage extraction
+   exists). The transitive chain previously started at the solver caches:
+   extraction identities hashed their baseline fields but not the DNS
+   record the discrepancy is measured against, and the far-transfer pools
+   read the attached datasets directly with no identity edge, so a changed
+   data root or corrected source file could silently reuse an incompatible
+   result. Every registered dataset directory now carries a deterministic
+   content digest (sorted per-file path, size and content hash;
+   per-dataset granularity, which over-invalidates but never
+   under-invalidates), bound into the interaction extraction identities
+   (the producing campaign), the a-posteriori target configurations (the
+   member targets consume the records' reference scales and mask spans
+   directly), and the a-priori partial and numbers identities (the far
+   stage binds the attached-source digests as a direct raw-input edge). A
+   checksummed manifest of all registered datasets is written with the
+   results and verified at every driver start; a mismatch refuses to run
+   until the change is adjudicated and the manifest explicitly
+   regenerated. The published numbers additionally carry a completeness
+   label (all stages and legs present, or complete false with the missing
+   set listed), a strict consumer validation (completeness, protocol
+   seeds and epochs, binding provenance, current gate lineage) that the
+   figure maker enforces, and the atomic cache writers use per-writer
+   temp files so concurrent writers of one cache cannot corrupt it;
+   extraction caches are generated in one serialized baselines pass
+   before any parallel model job.

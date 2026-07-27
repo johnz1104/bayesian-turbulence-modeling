@@ -342,3 +342,119 @@ def test_assemble_drops_stale_stages_and_records_lineage(tmp_path):
                     {"insample": {"n": 2}})
     ok, why = validate_apriori_numbers(d)
     assert not ok and "apriori_insample.json" in why
+
+
+def test_dns_dataset_digest_and_manifest(tmp_path):
+    from UQ.datasets import dns_manifest as dm
+    r1 = str(tmp_path / "rootA")
+    r2 = str(tmp_path / "rootB")
+    for r, content in ((r1, b"favre-data-v1"), (r2, b"favre-data-v2")):
+        os.makedirs(os.path.join(r, "shock_wave_BLI"))
+        with open(os.path.join(r, "shock_wave_BLI", "block.dat"), "wb") as f:
+            f.write(content)
+    d1 = dm.dataset_digest("interaction_adiabatic", root=r1)
+    d2 = dm.dataset_digest("interaction_adiabatic", root=r2)
+    assert d1 and d2 and d1 != d2          # content drives the digest
+    assert dm.dataset_digest("interaction_adiabatic", root=r1) == d1
+    assert dm.dataset_digest("interaction_heated", root=r1) is None
+    # manifest roundtrip and change detection
+    mpath = str(tmp_path / "dns_manifest.json")
+    dm.write_manifest(mpath, names=("interaction_adiabatic",), root=r1)
+    ok, _ = dm.verify_manifest(mpath, root=r1)
+    assert ok
+    ok, why = dm.verify_manifest(mpath, root=r2)
+    assert not ok and "interaction_adiabatic" in why
+
+
+def test_extraction_identity_binds_dns_digest(tmp_path, monkeypatch):
+    from UQ.datasets import dns_manifest as dm
+    d = str(tmp_path / "results")
+    os.makedirs(d)
+    for tag, content in (("dataA", b"heated-v1"), ("dataB", b"heated-v2")):
+        r = str(tmp_path / tag)
+        os.makedirs(os.path.join(r, "heat_transfer_SBLI"))
+        with open(os.path.join(r, "heat_transfer_SBLI", "f.dat"), "wb") as f:
+            f.write(content)
+    cfp.savez_atomic(os.path.join(d, "fields_s1.0.npz"),
+                     {"primitive": np.zeros((3, 6))})
+    monkeypatch.setenv("QBTM_DNS_DATA", str(tmp_path / "dataA"))
+    identA = extraction_ident("s1.0", (4, 4), True, d)
+    monkeypatch.setenv("QBTM_DNS_DATA", str(tmp_path / "dataB"))
+    identB = extraction_ident("s1.0", (4, 4), True, d)
+    # replacing the source dataset invalidates the extraction identity even
+    # with an unchanged baseline fields cache (the raw-input lineage edge)
+    assert cfp.fingerprint(identA) != cfp.fingerprint(identB)
+
+
+def test_strict_numbers_validation(tmp_path):
+    from UQ.reproduce_sbli_apriori import (numbers_ident,
+                                           validate_apriori_numbers,
+                                           _gate_ident)
+    from UQ.datasets.sbli_apriori import sbli_ident
+    d = str(tmp_path)
+    # a current gate adjudication with identity lineage
+    cfp.savez_atomic(os.path.join(d, "fields_s1.0.npz"),
+                     {"primitive": np.zeros((2, 6))})
+    gpath = os.path.join(d, "gate_b_s1.0.json")
+    cfp.json_atomic(gpath, cfp.attach_json({"pass": True},
+                                           _gate_ident(d, "s1.0")))
+    lin = {"gate_b_s1.0.json": cfp.file_sha(gpath)}
+    cfp.json_atomic(os.path.join(d, "gates_adjudication.json"),
+                    cfp.attach_json({"gate_a_pass": True},
+                                    sbli_ident("gates-adjudication",
+                                               "all-cases",
+                                               adjud={"lineage": lin})))
+    full = {"gates": {}, "complete": True, "missing": [],
+            "loso": {k: {} for k in ("dq_y", "dq_joint", "db",
+                                     "dq_y_history")},
+            "insample": {k: {} for k in ("dq_y", "dq_joint", "db")},
+            "far": {k: {} for k in ("transfer", "control", "conformal")}}
+    # importing the solver binding registers the binding provenance
+    # process-wide; clear it to exercise the no-provenance refusal, then
+    # restore the real value at the end
+    saved_binding = cfp._BINDING_SHA
+    cfp.set_binding_provenance(None)
+    cfp.json_atomic(os.path.join(d, "apriori_numbers.json"),
+                    cfp.attach_json(full, numbers_ident(d, (0,), 2, False,
+                                                        {})))
+    # non-strict passes on lineage alone; strict needs binding provenance
+    ok, _ = validate_apriori_numbers(d)
+    assert ok
+    ok, why = validate_apriori_numbers(d, strict=True, expected_seeds=(0,),
+                                       expected_epochs=2)
+    assert not ok and "binding" in why
+    cfp.set_binding_provenance("abc123")
+    cfp.json_atomic(os.path.join(d, "apriori_numbers.json"),
+                    cfp.attach_json(full, numbers_ident(d, (0,), 2, False,
+                                                        {})))
+    ok, why = validate_apriori_numbers(d, strict=True, expected_seeds=(0,),
+                                       expected_epochs=2)
+    assert ok, why
+    # wrong protocol settings refuse
+    ok, why = validate_apriori_numbers(d, strict=True,
+                                       expected_seeds=(0, 1, 2),
+                                       expected_epochs=2)
+    assert not ok and "seeds" in why
+    # an incomplete result refuses under strict
+    partial = dict(full)
+    partial["complete"] = False
+    partial["missing"] = ["far"]
+    cfp.json_atomic(os.path.join(d, "apriori_numbers.json"),
+                    cfp.attach_json(partial, numbers_ident(d, (0,), 2,
+                                                           False, {})))
+    ok, why = validate_apriori_numbers(d, strict=True, expected_seeds=(0,),
+                                       expected_epochs=2)
+    assert not ok and "incomplete" in why
+    cfp.set_binding_provenance(saved_binding)
+
+
+def test_atomic_writers_use_per_pid_temps(tmp_path):
+    d = str(tmp_path)
+    p = os.path.join(d, "x.npz")
+    cfp.savez_atomic(p, {"a": np.arange(3)})
+    q = os.path.join(d, "y.json")
+    cfp.json_atomic(q, {"a": 1})
+    # no shared-temp residue survives, and the temp naming is per-writer
+    assert os.listdir(d) == sorted(["x.npz", "y.json"]) or \
+        sorted(os.listdir(d)) == ["x.npz", "y.json"]
+    assert str(os.getpid()) not in "".join(os.listdir(d))

@@ -89,14 +89,20 @@ def extraction_fields_path(results_dir, case):
 
 def extraction_ident(case, stride, history, results_dir):
     """Extraction cache identity: physics token, case, stride, history flag,
-    the baseline route, and the transitive lineage edge to the exact content
-    of the converged-fields cache it was built from (a mutated or
-    regenerated fields file invalidates the extraction)."""
+    the baseline route, the transitive lineage edge to the exact content of
+    the converged-fields cache it was built from, AND the content digest of
+    the raw DNS campaign the discrepancy is measured against (a mutated or
+    regenerated fields file, or a changed source dataset, invalidates the
+    extraction; the review's raw-input lineage finding)."""
+    from .dns_manifest import dataset_digest
+    campaign = ("interaction_adiabatic" if case == "adiabatic"
+                else "interaction_heated")
     return sbli_ident("sbli_extract", case, extract={
         "stride": list(stride), "history": bool(history),
         "route": "frozen-mean" if case == "adiabatic" else "free-running",
         "lineage": {"fields": cfp.file_sha(
-            extraction_fields_path(results_dir, case))}})
+            extraction_fields_path(results_dir, case)),
+            "dns": {campaign: dataset_digest(campaign)}}})
 
 
 def conformal_case_split(tags):
