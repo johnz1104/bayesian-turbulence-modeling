@@ -283,3 +283,62 @@ def test_prepare_properties_does_not_advance():
     # byte-identical (the one-iteration solve it replaced advanced it)
     for k in f0:
         assert np.array_equal(f0[k], np.asarray(f1[k])), k
+
+
+def test_baseline_currency_decoupled_from_extractions(tmp_path):
+    # the review's conflation finding: quarantined (absent) extractions
+    # must never make a fully valid baseline look uncached (which would
+    # trigger a multi-hour cold re-solve)
+    from UQ.reproduce_sbli_apriori import _baseline_cached
+    from UQ.datasets.sbli_apriori import sbli_ident
+    d = str(tmp_path)
+    fpath = os.path.join(d, "fields_s1.0.npz")
+    cfp.savez_atomic(fpath, cfp.attach({"primitive": np.zeros((3, 6))},
+                                       sbli_ident("sbli_fields", "s1.0")))
+    wident = sbli_ident("sbli_wall", "s1.0", wall={
+        "lineage": {"fields": cfp.file_sha(fpath)}})
+    cfp.savez_atomic(os.path.join(d, "wall_s1.0.npz"),
+                     cfp.attach({"Cf": np.zeros(4)}, wident))
+    # no extraction files exist anywhere in d
+    assert _baseline_cached(d, "s1.0")
+    # a mutated fields cache still invalidates through the wall binding
+    cfp.savez_atomic(fpath, cfp.attach({"primitive": np.ones((3, 6))},
+                                       sbli_ident("sbli_fields", "s1.0")))
+    assert not _baseline_cached(d, "s1.0")
+
+
+def test_assemble_drops_stale_stages_and_records_lineage(tmp_path):
+    from UQ.reproduce_sbli_apriori import (assemble_numbers, _partial_ident,
+                                           numbers_ident,
+                                           validate_apriori_numbers)
+    d = str(tmp_path)
+    seeds, epochs = (0,), 2
+    # upstream extraction universe for the partial identities
+    from UQ.datasets.sbli_apriori import TEST_STRIDE, _train_stride
+    for c in sorted(TEST_STRIDE):
+        for st in (TEST_STRIDE[c], _train_stride(c)):
+            cfp.savez_atomic(
+                os.path.join(d, f"extract_{c}_s{st[0]}x{st[1]}_hist.npz"),
+                {"features": np.zeros((2, 6))})
+    # one valid per-stage partial (insample); loso left with NO source
+    cfp.json_atomic(os.path.join(d, "apriori_insample.json"),
+                    cfp.attach_json({"insample": {"n": 1}},
+                                    _partial_ident(d, "insample", None,
+                                                   seeds, epochs)))
+    numbers = {"loso": {"stale": "carried-from-an-earlier-era"},
+               "config": {}}
+    consumed = assemble_numbers(d, numbers, seeds, epochs, "")
+    assert "loso" not in numbers          # stale block DROPPED
+    assert numbers["insample"] == {"n": 1}
+    assert "apriori_insample.json" in consumed
+    # published numbers validate transitively through the recorded lineage
+    npath = os.path.join(d, "apriori_numbers.json")
+    cfp.json_atomic(npath, cfp.attach_json(
+        numbers, numbers_ident(d, seeds, epochs, False, consumed)))
+    ok, why = validate_apriori_numbers(d)
+    assert ok, why
+    # mutating a consumed partial breaks the published numbers' validation
+    cfp.json_atomic(os.path.join(d, "apriori_insample.json"),
+                    {"insample": {"n": 2}})
+    ok, why = validate_apriori_numbers(d)
+    assert not ok and "apriori_insample.json" in why

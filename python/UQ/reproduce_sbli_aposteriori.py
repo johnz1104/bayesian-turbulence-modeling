@@ -391,13 +391,20 @@ def stage_targets(records, results_dir, fold, quick, n_members, epochs,
         b_t, dq = member_targets(models[kind], feats, b_base, mask, basis_M,
                                  db_raw=db_raw,
                                  n_members=n_members, seed=SAMPLE_SEED)
-        cfp.savez_atomic(
-            _targets_path(results_dir, fold, kind, model_seed=model_seed),
-            cfp.attach(dict(
-                b=b_t.astype(np.float32), dq=dq.astype(np.float32),
-                b_base=b_base.astype(np.float32), mask=mask),
-                _targets_config(results_dir, fold, kind, model_seed,
-                                n_members, epochs, representation)))
+        # per-file resume: an identity-current sibling is never rewritten,
+        # so its completed members survive a partial regeneration
+        if _targets_current(results_dir, fold, kind, model_seed, n_members,
+                            epochs):
+            print(f"[targets {fold} ms{model_seed}] {kind} current; kept")
+        else:
+            cfp.savez_atomic(
+                _targets_path(results_dir, fold, kind,
+                              model_seed=model_seed),
+                cfp.attach(dict(
+                    b=b_t.astype(np.float32), dq=dq.astype(np.float32),
+                    b_base=b_base.astype(np.float32), mask=mask),
+                    _targets_config(results_dir, fold, kind, model_seed,
+                                    n_members, epochs, representation)))
         meta[f"{kind}_db_fro_med_masked"] = float(np.median(
             np.linalg.norm((b_t - b_base[None])[:, mask], axis=(2, 3))))
         meta[f"{kind}_dq_abs_med"] = float(np.median(np.abs(dq)))
@@ -411,6 +418,11 @@ def stage_targets(records, results_dir, fold, quick, n_members, epochs,
         abase, records["adiabatic"], m_t_from_fields=True)
     meta["attached_mask_fraction"] = float(np.mean(amask))
     for kind in KINDS:
+        if _targets_current(results_dir, fold, kind, model_seed, n_members,
+                            epochs, attached=True):
+            print(f"[targets {fold} ms{model_seed}] attached {kind} "
+                  f"current; kept")
+            continue
         b_t, dq = member_targets(models[kind], afeats, ab_base, amask,
                                  abasis_M, db_raw=db_raw,
                                  n_members=n_members, seed=SAMPLE_SEED)
@@ -945,6 +957,7 @@ def stage_zerocheck(records, results_dir, quick, cases):
         out = {"case": case, "status": str(rep.status),
                "iterations": int(rep.iterations),
                "final_residual": float(rep.final_residual),
+               "quiescent": bool(rep.quiescent),
                "wall_time_s": round(time.time() - t0, 1),
                "limiter_checkpoint": True,
                "member_budget": {"max_iter": MEMBER_MAX_ITER,

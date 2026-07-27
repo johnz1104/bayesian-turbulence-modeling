@@ -311,15 +311,18 @@ def _npz_ident_ok(path, ident):
     return status == "match"
 
 
-def _case_cached(results_dir, case, history=True):
-    strides = (TEST_STRIDE[case], sbli_apriori._train_stride(case))
-    have = all(os.path.isfile(SBLIAPriori._cache_path(
-        results_dir, case, st, history)) for st in strides)
+def _baseline_cached(results_dir, case):
+    """Baseline-cache currency ONLY: the fields identity and the wall
+    identity with its fields binding. Extraction currency is a separate
+    axis handled by _extraction_current plus the warm reload, so missing
+    or superseded extractions can never trigger a baseline re-solve (the
+    review's conflation finding: with the stale extractions quarantined,
+    the old extraction-existence requirement would have cold re-solved all
+    six interaction baselines against fully valid caches)."""
     wall_ident = sbli_ident("sbli_wall", case, wall={
         "lineage": {"fields": cfp.file_sha(_fields_path(results_dir,
                                                         case))}})
-    return (have
-            and _npz_ident_ok(_wall_path(results_dir, case), wall_ident)
+    return (_npz_ident_ok(_wall_path(results_dir, case), wall_ident)
             and _npz_ident_ok(_fields_path(results_dir, case),
                               sbli_ident("sbli_fields", case)))
 
@@ -363,6 +366,92 @@ def ensure_frozen_mean_adiabatic(records, results_dir, quick, regen=False):
               "registered fallback route is unavailable, stopping (report "
               "before any downstream stage)")
         sys.exit(1)
+
+
+def assemble_numbers(results_dir, numbers, seeds, epochs, suffix):
+    """Identity-validated assembly with DROP-STALE semantics: a stage block
+    enters the numbers only from a currently valid per-stage partial or a
+    complete, currently valid per-leg set; any pre-existing stage block
+    without a valid source is REMOVED with a note (a retained numbers file
+    can never carry a superseded stage forward, the review's stale-stage
+    finding). Returns the consumed partial files as name -> content hash,
+    which becomes the published numbers' transitive lineage."""
+    consumed = {}
+
+    def _valid_partial(path, stage, leg):
+        if not os.path.isfile(path):
+            return None
+        loaded = json.load(open(path))
+        status, _ = cfp.check_json(
+            loaded, _partial_ident(results_dir, stage, leg, seeds, epochs))
+        if status != "match":
+            print(f"[assemble] {os.path.basename(path)} stale identity "
+                  f"({status}); withheld")
+            return None
+        return loaded
+
+    for stage in ("loso", "insample", "far"):
+        path = os.path.join(results_dir, f"apriori_{stage}{suffix}.json")
+        loaded = _valid_partial(path, stage, None)
+        if loaded is not None:
+            numbers[stage] = loaded[stage]
+            consumed[os.path.basename(path)] = cfp.file_sha(path)
+            continue
+        # merge per-leg partials from the memory-bounded path; the stage
+        # enters the numbers only when every expected leg is present, so a
+        # partial sweep can never masquerade as complete
+        expected = (("dq_y", "dq_joint", "db", "dq_y_history")
+                    if stage == "loso"
+                    else ("dq_y", "dq_joint", "db"))
+        legs, leg_files = {}, {}
+        for leg in expected:
+            lp = os.path.join(results_dir,
+                              f"apriori_{stage}_{leg}{suffix}.json")
+            lv = _valid_partial(lp, stage, leg)
+            if lv is not None:
+                legs[leg] = lv[leg]
+                leg_files[os.path.basename(lp)] = cfp.file_sha(lp)
+        if len(legs) == len(expected):
+            numbers[stage] = legs
+            consumed.update(leg_files)
+        else:
+            if legs:
+                print(f"[assemble] {stage}: {len(legs)}/{len(expected)} "
+                      f"leg partials present; stage withheld")
+            if stage in numbers:
+                numbers.pop(stage)
+                print(f"[assemble] {stage}: pre-existing block DROPPED "
+                      f"(no currently valid source)")
+    return consumed
+
+
+def numbers_ident(results_dir, seeds, epochs, quick, lineage):
+    """The published a-priori numbers' identity: settings plus the exact
+    content hashes of every consumed source (assembled partials, or the
+    extraction caches for an in-process all-stage run)."""
+    return sbli_ident("apriori-numbers", "all-cases", numbers={
+        "seeds": list(seeds), "epochs": int(epochs), "quick": bool(quick),
+        "lineage": dict(sorted(lineage.items()))})
+
+
+def validate_apriori_numbers(results_dir, quick=False):
+    """Transitive validation for consumers of the published numbers: the
+    identity block must be present and every recorded lineage hash must
+    match the file on disk. Returns (ok, reason)."""
+    suffix = "_quick" if quick else ""
+    path = os.path.join(results_dir, f"apriori_numbers{suffix}.json")
+    if not os.path.isfile(path):
+        return False, "numbers file absent"
+    rec = json.load(open(path))
+    ident = rec.get(cfp.IDENTITY_JSON_KEY)
+    if not isinstance(ident, dict) or "config_json" not in ident:
+        return False, "no identity block"
+    lin = json.loads(ident["config_json"]).get("numbers", {}).get("lineage",
+                                                                  {})
+    for name, sha in lin.items():
+        if cfp.file_sha(os.path.join(results_dir, name)) != sha:
+            return False, f"lineage stale for {name}"
+    return True, ""
 
 
 def stage_baselines(records, results_dir, quick, regen,
@@ -441,7 +530,7 @@ def stage_baselines(records, results_dir, quick, regen,
     # gate B: the interaction configuration per record, solve-once cached
     for case, record in (records.items() if _runs("gateb") else ()):
         gate_path = os.path.join(results_dir, f"gate_b_{case}.json")
-        if _case_cached(results_dir, case) and not regen \
+        if _baseline_cached(results_dir, case) and not regen \
                 and _json_ident_ok(gate_path, _gate_ident(results_dir,
                                                           case)):
             out["gates"]["B"][case] = json.load(open(gate_path))
@@ -683,6 +772,18 @@ def stage_far(study, seeds, epochs, records):
                 [per_seed[str(sd)]["cases"][case]["normalized"]
                  for sd in seeds]))
     out["conformal"]["seed_mean"] = mean_cases
+    spread = {}
+    for case in mean_cases:
+        vals_a = [per_seed[str(sd)]["cases"][case]["absolute"]
+                  for sd in seeds]
+        spread[case] = {"absolute": [float(np.min(vals_a)),
+                                     float(np.max(vals_a))]}
+        if "normalized" in mean_cases[case]:
+            vals_n = [per_seed[str(sd)]["cases"][case]["normalized"]
+                      for sd in seeds]
+            spread[case]["normalized"] = [float(np.min(vals_n)),
+                                          float(np.max(vals_n))]
+    out["conformal"]["seed_min_max"] = spread
     return out
 
 
@@ -945,45 +1046,8 @@ def main():
         numbers["far"] = stage_far(study, seeds, epochs, records)
         json.dump(numbers, open(numbers_path, "w"), indent=1)
     if args.stage == "assemble":
-        def _valid_partial(path, stage, leg):
-            # identity-validated consumption: a partial whose recorded
-            # extraction lineage no longer matches the current caches is
-            # withheld, never silently assembled
-            if not os.path.isfile(path):
-                return None
-            loaded = json.load(open(path))
-            status, _ = cfp.check_json(
-                loaded, _partial_ident(args.results, stage, leg, seeds,
-                                       epochs))
-            if status != "match":
-                print(f"[assemble] {os.path.basename(path)} stale identity "
-                      f"({status}); withheld")
-                return None
-            return loaded
-
-        for stage in ("loso", "insample", "far"):
-            loaded = _valid_partial(_part_path(stage), stage, None)
-            if loaded is not None:
-                numbers[stage] = loaded[stage]
-                continue
-            # merge per-leg partials from the memory-bounded path; the
-            # stage enters the numbers only when every expected leg is
-            # present, so a partial sweep can never masquerade as complete
-            expected = (("dq_y", "dq_joint", "db", "dq_y_history")
-                        if stage == "loso"
-                        else ("dq_y", "dq_joint", "db"))
-            legs = {}
-            for leg in expected:
-                lp = os.path.join(
-                    args.results, f"apriori_{stage}_{leg}{suffix}.json")
-                lv = _valid_partial(lp, stage, leg)
-                if lv is not None:
-                    legs[leg] = lv[leg]
-            if len(legs) == len(expected):
-                numbers[stage] = legs
-            elif legs:
-                print(f"[assemble] {stage}: {len(legs)}/{len(expected)} "
-                      f"leg partials present; stage withheld")
+        consumed = assemble_numbers(args.results, numbers, seeds, epochs,
+                                    suffix)
 
     numbers["config"] = {
         "driver_seed": DRIVER_SEED, "seeds": list(seeds), "epochs": epochs,
@@ -992,10 +1056,17 @@ def main():
                          for k, v in sbli_apriori.TEST_STRIDE.items()},
         "quick": bool(args.quick),
     }
+    if args.stage == "all":
+        # in-process results: the lineage is the extraction caches the
+        # stages consumed (the same set the partial identities pin)
+        consumed = {}
+        for c in sorted(TEST_STRIDE):
+            for st in (TEST_STRIDE[c], sbli_apriori._train_stride(c)):
+                pth = SBLIAPriori._cache_path(args.results, c, st, True)
+                consumed[os.path.basename(pth)] = cfp.file_sha(pth)
     cfp.json_atomic(numbers_path, cfp.attach_json(
-        numbers, sbli_ident("apriori-numbers", "all-cases", numbers={
-            "seeds": list(seeds), "epochs": int(epochs),
-            "quick": bool(args.quick)})))
+        numbers, numbers_ident(args.results, seeds, epochs, args.quick,
+                               consumed)))
     print("wrote", numbers_path)
 
 

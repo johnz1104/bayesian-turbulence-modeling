@@ -529,6 +529,64 @@ static void test_checkpoint_roundtrip_zero_identity() {
             "the limiter restore removes the limiter-refresh re-transient");
 }
 
+static void test_turbulent_checkpoint_and_forced_restart() {
+    // blocker-1/2 gates: (a) the TURBULENT round-trip (mu_t live, so the
+    // restart's first-evaluation eddy viscosity matters): a zero-correction
+    // restored restart classifies via the quiescence route and holds the
+    // state; (b) a NONZERO stored discrepancy is a fresh force, so its
+    // restart must NEVER carry the quiescence tag whatever its status.
+    CouetteCase c;
+    c.st.turbulent = true;
+    c.st.convergenceTol = 1e-5;
+    c.st.maxIterations = 60000;
+    DBNSSolver a(c.mesh, c.eos, SSTCoefficients{}, c.bcs, c.st);
+    a.initUniform({c.rho0, 0.5 * c.Uw, 0.0, c.p0, 1.0, 5000.0});
+    SolveReport ra = a.solve();
+    std::printf("  [turb checkpoint] reference status %d iters %d\n",
+                (int)ra.status, ra.iterations);
+    REQUIRE(ra.status == EvaluationStatus::Converged,
+            "turbulent reference converges");
+    int nc = c.mesh.nCells();
+    std::vector<Primitive> chk(nc);
+    for (int ci = 0; ci < nc; ++ci) chk[ci] = a.primitive(ci);
+    std::vector<double> lims = a.reconstructionLimiter();
+    std::vector<double> zero6(6 * nc, 0.0), dq2(2 * nc, 0.0);
+
+    DBNSSolver rest(c.mesh, c.eos, SSTCoefficients{}, c.bcs, c.st);
+    rest.initField(chk);
+    rest.setFrozenReconstructionLimiter(lims);
+    rest.setTargetCorrection(zero6, zero6, dq2, true);
+    SolveReport rr = rest.solve();
+    double drift = 0.0;
+    for (int ci = 0; ci < nc; ++ci) {
+        Primitive V = rest.primitive(ci);
+        drift = std::max(drift, std::abs(V.u - chk[ci].u) / c.Uw);
+        drift = std::max(drift, std::abs(V.p - chk[ci].p) / c.p0);
+    }
+    std::printf("  [turb checkpoint] zero-db restart status %d iters %d "
+                "quiescent %d drift %.3e\n", (int)rr.status, rr.iterations,
+                (int)rr.quiescent, drift);
+    REQUIRE(rr.status == EvaluationStatus::Converged,
+            "turbulent zero-db restart classifies converged");
+    REQUIRE(rr.quiescent, "zero-db restored restart rides quiescence");
+    REQUIRE(drift < 1e-2, "turbulent restart holds the checkpoint");
+
+    // a forced restart with a small stored discrepancy: whatever the
+    // classification, the quiescence tag must be false (the gate)
+    std::vector<double> db6(6 * nc, 0.0);
+    for (int ci = 0; ci < nc; ++ci) db6[6 * ci + 3] = -1e-4;
+    DBNSSolver forced(c.mesh, c.eos, SSTCoefficients{}, c.bcs, c.st);
+    forced.initField(chk);
+    forced.setFrozenReconstructionLimiter(lims);
+    forced.setTargetCorrection(db6, zero6, dq2, true);
+    SolveReport rf = forced.solve();
+    std::printf("  [turb checkpoint] forced restart status %d iters %d "
+                "quiescent %d\n", (int)rf.status, rf.iterations,
+                (int)rf.quiescent);
+    REQUIRE(!rf.quiescent,
+            "a nonzero stored discrepancy never rides quiescence");
+}
+
 int main() {
     std::printf("[dbns injection] zero-correction identity\n");
     test_zero_correction_identity();
@@ -546,6 +604,8 @@ int main() {
     test_frozen_mean_sweep_isolation();
     std::printf("[dbns injection] checkpoint round-trip zero identity\n");
     test_checkpoint_roundtrip_zero_identity();
+    std::printf("[dbns injection] turbulent checkpoint and forced restart\n");
+    test_turbulent_checkpoint_and_forced_restart();
     std::printf("[dbns injection] ALL PASSED\n");
     return 0;
 }

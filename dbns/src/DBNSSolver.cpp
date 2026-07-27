@@ -100,6 +100,7 @@ DBNSSolver::DBNSSolver(const Mesh& mesh, const IdealGasEOS& eos,
 }
 
 void DBNSSolver::initUniform(const Primitive& V) {
+    initFromField_ = false;
     for (int ci = 0; ci < mesh_.nCells(); ++ci)
         W_[ci] = GasState::toConserved(V, eos_);
     // scale-aware positivity floors (units differ by orders across the test
@@ -109,6 +110,7 @@ void DBNSSolver::initUniform(const Primitive& V) {
 }
 
 void DBNSSolver::initField(const std::vector<Primitive>& V) {
+    initFromField_ = true;
     double rhoMax = 0.0, pMax = 0.0;
     for (int ci = 0; ci < mesh_.nCells(); ++ci) {
         W_[ci] = GasState::toConserved(V[ci], eos_);
@@ -909,6 +911,12 @@ SolveReport DBNSSolver::solve() {
     int nc = mesh_.nCells();
     double t = 0.0;
     double res0 = -1.0;
+    // prescribed-field initializations (restarts, frozen-mean marches)
+    // compute the gradients before the first property evaluation, so the
+    // first eddy viscosity is not formed at zero strain (the review's
+    // restart-initialization finding); uniform cold inits skip it by
+    // construction (see initFromField_)
+    if (initFromField_) computeGradients();
 
     // SSP-RK3 coefficients (Shu and Osher 1988); rkStages==1 -> forward Euler.
     auto evalSpatial = [&]() { computeGradients(); computeLimiters(); computeResidual(); };
@@ -1038,6 +1046,10 @@ SolveReport DBNSSolver::solveImplicitSteady() {
 
     double betaMax = std::max(sstCoeffs_.beta1, sstCoeffs_.beta2);
     double bStar = sstCoeffs_.betaStar;
+
+    // first-evaluation gradient initialization for prescribed-field
+    // starts (see the explicit driver's note and initFromField_)
+    if (initFromField_) computeGradients();
 
     // matrix-free off-diagonal action of neighbor `other` on cell ci
     auto neighborTerm = [&](int ci, int other, FaceID fi) -> StateVec {
@@ -1360,7 +1372,16 @@ SolveReport DBNSSolver::solveImplicitSteady() {
         // criterion first and reproduced its trajectory bit-exactly). The
         // full-CFL guard keeps a rejection-throttled solve from
         // masquerading as quiescent.
-        const bool quiescent = (startLimiterFrozen_ && cflScale >= 1.0
+        // and the injected correction must be exactly zero: a nonzero
+        // stored discrepancy is a fresh force, so the restart is NOT at a
+        // fixed point of the injected operator and its slowly developing
+        // response could sit under the member tolerance per step (the
+        // false-quiescence finding); forced members converge only by the
+        // registered relative decay of the injection response
+        const bool zeroInjection = dbTarget6_.empty()
+            || (injDiag_.maxDb == 0.0 && injDiag_.maxDq == 0.0);
+        const bool quiescent = (startLimiterFrozen_ && zeroInjection
+                                && cflScale >= 1.0
                                 && iter > freezeIter
                                 && lastMeanChange < settings_.convergenceTol
                                 && turbMax < settings_.convergenceTol);
@@ -1403,6 +1424,7 @@ SolveReport DBNSSolver::solveImplicitSteady() {
                        settings_.turbulent
                            ? std::max(lastKChange, lastOmChange) : 0.0)
             : relMax;
+        rep.quiescent = quiescentConverged;
     }
     return rep;
 }

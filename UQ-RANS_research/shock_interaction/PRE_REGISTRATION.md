@@ -944,6 +944,28 @@ clause threshold changes.
    bit-exactly. The two affected cases were re-solved under the restricted
    route before any record was consumed.
 
+   Second scope correction (2026-07-27, from the substrate review, before
+   any A-prime artifact exists): (i) the quiescence route additionally
+   requires an exactly zero injected correction. A nonzero stored
+   discrepancy is a fresh force, so its restart is not at a fixed point of
+   the injected operator and its slowly developing response can sit under
+   the member tolerance per step; forced members therefore converge only
+   by the registered relative decay of the injection response, and the
+   solve report carries the classification route so a forced member can
+   be asserted never to have ridden quiescence. (ii) Prescribed-field
+   initializations (member restarts, warm reloads, the frozen-mean march)
+   compute the discrete gradients before the first property evaluation:
+   the first eddy viscosity of a restart was previously formed at zero
+   strain (Bradshaw limiter unbound), a spurious operator transient in the
+   first residual that also polluted the member criterion's
+   injection-response reference. Uniform cold initializations skip the
+   pre-march gradient pass BY CONSTRUCTION and keep their historical
+   trajectories bit-identical (with prescribed boundary profiles even a
+   uniform field has nonzero boundary-cell gradients, so an unconditional
+   pass would have silently shifted the validated cold baselines); the
+   frozen-mean surface and the zero-correction checkpoint probes
+   regenerate under the corrected restart path.
+
 3. One landmark rule everywhere. The gate and audit paths now read the
    impingement half-rise through the registered rule (the records'
    smoothing width, linearly interpolated level crossing), replacing a

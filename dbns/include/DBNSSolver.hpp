@@ -35,6 +35,11 @@ struct SolveReport {
     int    iterations = 0;
     double finalResidual = 0.0;
     double tFinal = 0.0;
+    // true when the quiescence route classified the convergence (restored
+    // checkpoint, zero injected correction, full-CFL stationarity); false
+    // for the registered relative-decay route, so consumers can assert a
+    // forced member never rode quiescence
+    bool   quiescent = false;
     std::vector<double> residualHistory;   // density-equation L2 residual per report
 };
 
@@ -186,6 +191,16 @@ private:
     // and dimensional wall flows share this solver)
     double rhoFloor_ = 1e-10;
     double pFloor_ = 1e-10;
+
+    // true when the state came from initField (a restart or a prescribed
+    // nonuniform field): the march then computes the discrete gradients
+    // before its first property evaluation, so the first eddy viscosity is
+    // not formed at zero strain. Uniform cold initialisations skip it BY
+    // CONSTRUCTION, keeping their historical trajectories bit-identical
+    // (with a prescribed inflow profile the boundary ghosts make even a
+    // uniform field's Green-Gauss gradients nonzero at boundary cells, so
+    // an unconditional pre-march gradient pass would shift cold paths).
+    bool initFromField_ = false;
 
     // pipeline stages
     void updateProperties();                 // muLam, muT, SST blending

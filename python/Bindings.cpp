@@ -741,6 +741,7 @@ PYBIND11_MODULE(rans_sst_py, m) {
         .def_readonly("status", &SolveReport::status)
         .def_readonly("iterations", &SolveReport::iterations)
         .def_readonly("final_residual", &SolveReport::finalResidual)
+        .def_readonly("quiescent", &SolveReport::quiescent)
         .def_readonly("t_final", &SolveReport::tFinal);
 
     py::class_<DBNSSolver>(m, "DBNSSolver")
