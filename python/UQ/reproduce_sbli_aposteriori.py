@@ -70,7 +70,7 @@ from UQ.datasets.sbli_aposteriori import (
     N_MEMBERS, MEMBER_SEED, STATIONS)
 from UQ.reproduce_sbli_apriori import (
     _all_records, _configure, _fields_path, _wall_path, sbli_ident,
-    GATE_A_CF, GATE_A_STATION)
+    _require_adoption, GATE_A_CF, GATE_A_STATION)
 from UQ.datasets import dns_manifest
 
 FOLDS = ("s0.5", "s1.0", "s1.9")
@@ -177,8 +177,17 @@ def _targets_lineage(results_dir, fold, attached=False):
     lin[f"fields_{cond}.npz"] = cfp.file_sha(_fields_path(results_dir, cond))
     # the raw-input edge: member targets consume the records directly
     # (reference scales, mask spans, the record Mach), so the target
-    # identity binds the interaction dataset digests
-    lin["dns"] = dns_manifest.digests(dns_manifest.INTERACTION_SET)
+    # identity binds the interaction dataset digests. The exploratory
+    # far-transfer targets additionally TRAIN on the attached channel
+    # matrix's joint flux pool, a direct DNS consumer with no extraction
+    # intermediary, so that source belongs in their lineage too (an earlier
+    # form bound only the interaction sets, so replacing the attached
+    # training data left those targets and every member below them looking
+    # current)
+    dns_set = dns_manifest.INTERACTION_SET
+    if _is_exploratory(fold):
+        dns_set = dns_set + dns_manifest.ATTACHED_DQ_SET
+    lin["dns"] = dns_manifest.digests(dns_set)
     return lin
 
 
@@ -312,8 +321,13 @@ def _load_baseline(records, case, results_dir, quick, with_shock=True,
     if derived_probe:
         kw = {"max_iterations": 1, "convergence_tol": 1e-30}
     base = _configure(records[case], quick, with_shock=with_shock, **kw)
-    z = np.load(_fields_path(
-        results_dir, case if with_shock else "gate_a_attached"))
+    tag = case if with_shock else "gate_a_attached"
+    # the raw-input era gate at the coupled consumption site: a member or
+    # target never warm-starts from a baseline whose DNS adoption is stale
+    # (accepting a changed dataset does not authorize reusing solves made
+    # against the superseded one)
+    _require_adoption(results_dir, tag, f"coupled solve on baseline {tag}")
+    z = np.load(_fields_path(results_dir, tag))
     prim = z["primitive"]
     base.solver.init_field(prim)
     if member_caps and "limiter_recon" in z.files:
@@ -1118,16 +1132,26 @@ def stage_orchestrate(records, results_dir, quick, throttle, n_members,
     print("wrote", path)
 
 
-def _require_gates(results_dir, fold):
-    """Claim-bearing coupled stages run only on gate-passing configurations
-    (the recorded per-case ruling); the far-transfer target is exempt only
-    when explicitly labeled exploratory via QBTM_SBLI_EXPLORATORY=1."""
+def _require_manifest(results_dir):
+    """The raw-input gate of every coupled stage: the results universe's own
+    DNS manifest must verify against the live data. Ruled on the universe
+    the stage WRITES INTO, so the quick smoke path is gated by its own
+    manifest and never by the production one."""
     ok, why = dns_manifest.verify_manifest(
         os.path.join(results_dir, "dns_manifest.json"))
     if not ok:
         print(f"[gates] DNS manifest gate failed ({why}); run the a-priori "
               f"driver to adjudicate before any coupled stage")
         sys.exit(1)
+
+
+def _require_gates(results_dir, fold):
+    """Claim-bearing coupled stages run only on gate-passing configurations
+    (the recorded per-case ruling); the far-transfer target is exempt only
+    when explicitly labeled exploratory via QBTM_SBLI_EXPLORATORY=1. Carries
+    the manifest gate as well, so a single-fold worker verifies the source
+    data exactly once."""
+    _require_manifest(results_dir)
     path = os.path.join(results_dir, "gates_adjudication.json")
     if not os.path.isfile(path):
         print("[gates] no adjudication record; run the a-priori baselines "
@@ -1182,8 +1206,6 @@ def main():
     ap.add_argument("--throttle", type=int, default=4)
     ap.add_argument("--folds", default=",".join(FOLDS))
     args = ap.parse_args()
-    if args.stage != "zerocheck" and getattr(args, "fold", None):
-        _require_gates(args.results, args.fold)
 
     np.random.seed(SAMPLE_SEED)
     n_members = 3 if args.quick else N_MEMBERS
@@ -1197,6 +1219,29 @@ def main():
         # guard keeps a worker relaunch from redirecting twice
         if os.path.basename(os.path.normpath(args.results)) != "quick":
             args.results = os.path.join(args.results, "quick")
+
+    # the gates are enforced AFTER the result-path normalization, so a quick
+    # run is ruled by the universe it writes into, and for EVERY fold the
+    # invocation will touch: the orchestrate route carries no --fold, so an
+    # earlier form skipped the ruling entirely and generated targets for a
+    # whole matrix ungated (the review's bypass finding)
+    orchestrated = [f.strip() for f in args.folds.split(",") if f.strip()]
+    if args.stage == "orchestrate":
+        gated = list(orchestrated)
+        if os.environ.get("QBTM_SBLI_EXPLORATORY") == "1":
+            # the labeled exploratory phase this route runs at the end; its
+            # own gate-B failure is ruled here rather than mid-matrix
+            gated.append("faradiab")
+    elif args.stage == "zerocheck":
+        gated = []                      # pre-target probe, no fold claim
+    else:
+        gated = [args.fold] if getattr(args, "fold", None) else []
+    if gated:
+        for fold in gated:
+            _require_gates(args.results, fold)
+    else:
+        _require_manifest(args.results)
+
     records = _all_records()
 
     if args.stage == "targets":
@@ -1218,9 +1263,8 @@ def main():
         else:
             stage_score(records, args.results, args.fold, n_members)
     if args.stage == "orchestrate":
-        folds = [f.strip() for f in args.folds.split(",") if f.strip()]
         stage_orchestrate(records, args.results, args.quick, args.throttle,
-                          n_members, epochs, folds,
+                          n_members, epochs, orchestrated,
                           model_seeds=model_seeds)
     if args.stage == "zerocheck":
         cases = ([f.strip() for f in args.folds.split(",") if f.strip()]

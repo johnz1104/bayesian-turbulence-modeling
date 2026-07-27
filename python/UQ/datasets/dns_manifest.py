@@ -28,6 +28,16 @@ review's raw-input lineage finding). This module closes the input side:
 
 A missing dataset digests to None, which embeds into identities and can
 never match a real digest (fail closed).
+
+Verification is CLOSED over the registered set, not over the record: an
+earlier form compared only the entries the file happened to carry, so a
+manifest written against absent data (every digest None) and a manifest
+hand-reduced to an empty dataset block both verified successfully, and the
+per-process memo could rule on a digest computed before the data changed
+(the review's fail-open finding, reproduced before the fix). verify_manifest
+now requires exactly the registered datasets, requires each of them to be
+present on disk with content, validates the record's own identity block, and
+drops the memo for the verified set so the ruling is always a fresh pass.
 """
 import hashlib
 import json
@@ -49,6 +59,10 @@ DATASETS = {
 # directly; the far pools additionally read the attached sources)
 INTERACTION_SET = ("interaction_adiabatic", "interaction_heated")
 FAR_SET = INTERACTION_SET + ("gv_channel", "supersonic_tbl", "zdc_plate")
+# the attached joint-flux training pool of the far-transfer dq legs is the
+# committed channel matrix alone (the only attached source carrying the full
+# flux vector), so a consumer of that pool binds this set and not FAR_SET
+ATTACHED_DQ_SET = ("gv_channel",)
 
 _MEMO = {}
 
@@ -87,6 +101,17 @@ def digests(names, root=None):
     return {n: dataset_digest(n, root) for n in names}
 
 
+def forget(names, root=None):
+    """Drop the memoized digests of a dataset set, so the next lookup is a
+    fresh content pass. The memo exists because identity construction asks
+    for the same digests many times inside one process; a VERIFICATION must
+    never rule on a value cached before the data moved (a digest taken
+    while a dataset was absent memoizes None, and a digest taken before an
+    in-place edit memoizes the old content), so the gate drops it first."""
+    for n in names:
+        _MEMO.pop(os.path.abspath(_dataset_dir(n, root)), None)
+
+
 def _stats(name, root=None):
     base = _dataset_dir(name, root)
     n_files, n_bytes = 0, 0
@@ -100,10 +125,21 @@ def _stats(name, root=None):
     return n_files, n_bytes
 
 
+def manifest_ident(entries):
+    """Identity configuration of a manifest record: the recorded digest map
+    itself. Rebuilt from the loaded entries at verification, so removing,
+    adding or editing an entry no longer matches the stored fingerprint."""
+    return {"kind": "dns-manifest",
+            "manifest": {n: entries[n].get("digest") for n in sorted(entries)}}
+
+
 def write_manifest(path, names=tuple(DATASETS), root=None):
     """The checksummed DNS manifest record (freeze and baseline
     provenance): per-dataset digest, file count and byte count, carrying
-    the standard identity block."""
+    the standard identity block. Digests are taken fresh (the memo is
+    dropped first) so a record can never be written from a digest cached
+    before the data moved."""
+    forget(names, root)
     entries = {}
     for n in names:
         n_files, n_bytes = _stats(n, root)
@@ -111,22 +147,51 @@ def write_manifest(path, names=tuple(DATASETS), root=None):
                       "subdir": DATASETS[n],
                       "n_files": n_files, "bytes": n_bytes}
     rec = {"datasets": entries}
-    ident = {"kind": "dns-manifest",
-             "manifest": {n: entries[n]["digest"] for n in sorted(entries)}}
-    cfp.json_atomic(path, cfp.attach_json(rec, ident))
+    cfp.json_atomic(path, cfp.attach_json(rec, manifest_ident(entries)))
     return rec
 
 
-def verify_manifest(path, root=None):
-    """Compare the recorded manifest against the live data. Returns
-    (ok, reason); a missing manifest is reported as such (the caller
-    decides whether first-run bootstrap writes it)."""
+def verify_manifest(path, root=None, required=tuple(DATASETS)):
+    """Rule the recorded manifest against the live data, CLOSED over the
+    required dataset set. Returns (ok, reason); a missing manifest is
+    reported as such (the caller decides whether first-run bootstrap writes
+    it).
+
+    A formal run passes only when the record covers exactly `required`,
+    carries an unmodified identity block, and every required dataset is a
+    non-empty directory on disk whose fresh content digest equals the
+    recorded one. `required` is narrowed only by hermetic tests, never by a
+    production driver: a subset would reinstate the fail-open hole (an
+    absent dataset would simply drop out of the comparison)."""
     if not os.path.isfile(path):
         return False, "manifest absent"
     rec = json.load(open(path))
-    for name, entry in rec.get("datasets", {}).items():
+    entries = rec.get("datasets")
+    if not isinstance(entries, dict):
+        return False, "manifest carries no datasets block"
+    status, why = cfp.check_json(rec, manifest_ident(entries))
+    if status != "match":
+        return False, f"manifest record identity {status} ({why})"
+    want, have = set(required), set(entries)
+    if want - have:
+        return False, (f"manifest does not cover the registered datasets "
+                       f"{sorted(want - have)}")
+    if have - want:
+        return False, (f"manifest carries unrequired datasets "
+                       f"{sorted(have - want)}")
+    forget(required, root)
+    for name in sorted(want):
+        recorded = entries[name].get("digest")
+        if recorded is None:
+            return False, (f"dataset {name} was manifested with no digest "
+                           f"(absent when the record was written)")
+        if not os.path.isdir(_dataset_dir(name, root)):
+            return False, f"dataset {name} directory absent"
+        n_files, _ = _stats(name, root)
+        if n_files == 0:
+            return False, f"dataset {name} directory holds no files"
         live = dataset_digest(name, root)
-        if live != entry.get("digest"):
+        if live != recorded:
             return False, (f"dataset {name} changed: manifest "
-                           f"{entry.get('digest')}, live {live}")
+                           f"{recorded}, live {live}")
     return True, ""

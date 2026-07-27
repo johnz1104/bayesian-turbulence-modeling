@@ -2,8 +2,11 @@
 
 Reads only the study outputs (the numbers JSONs, the cached wall records and
 the a-posteriori member files) and the DNS records; writes the package
-figures. Panels degrade gracefully: a panel whose inputs are absent is
-skipped with a note, so the maker runs on partial (or quick) results.
+figures. A package render requires numbers that pass strict validation
+(present, identity-current, complete, produced by this build under the
+authorizing gate ruling); --allow-partial renders anyway and watermarks
+every panel INTERIM. Within a permitted render, panels degrade gracefully: a
+panel whose own inputs are absent is skipped with a note.
 
     python3 python/UQ/make_sbli_figures.py --results results/sbli \
         --out UQ-RANS_research/shock_interaction/figures
@@ -35,6 +38,26 @@ from UQ.datasets.sbli_aposteriori import STATIONS
 KIND_COLORS = {"flow": "tab:blue", "gauss": "tab:orange",
                "pooled": "tab:green"}
 LEGS = ("db", "dq_y", "dq_joint")
+
+# set by --allow-partial: every figure rendered from unvalidated, absent or
+# incomplete numbers carries a visible watermark, so an interim panel can
+# never be mistaken for a package figure once it leaves the console that
+# printed the warning (the review's unlabeled-escape-hatch finding)
+_INTERIM_REASON = None
+
+
+def _save(fig, out, name):
+    """Write one figure, stamped when the run is interim."""
+    if _INTERIM_REASON is not None:
+        fig.text(0.5, 0.5, "INTERIM\nNOT VALIDATED", transform=fig.transFigure,
+                 fontsize=44, color="red", alpha=0.18, rotation=30,
+                 ha="center", va="center", zorder=100)
+        fig.text(0.5, 0.005, f"interim render: {_INTERIM_REASON}",
+                 transform=fig.transFigure, fontsize=6, color="red",
+                 ha="center", va="bottom", zorder=100)
+    fig.savefig(os.path.join(out, name), dpi=160)
+    plt.close(fig)
+    print(f"wrote {name}" + (" (INTERIM)" if _INTERIM_REASON else ""))
 
 
 def _seed_dim_mean(per_seed, key):
@@ -86,9 +109,7 @@ def fig_gates(numbers, records, results_dir, out):
         ax.legend(fontsize=7)
         ax.set_title("gate B: interaction baselines")
     fig.tight_layout()
-    fig.savefig(os.path.join(out, "fig1_gates.png"), dpi=160)
-    plt.close(fig)
-    print("wrote fig1_gates.png")
+    _save(fig, out, "fig1_gates.png")
 
 
 def fig_loso(numbers, out):
@@ -122,9 +143,7 @@ def fig_loso(numbers, out):
             ax.set_ylabel("held-out coverage @0.9")
             ax.legend(fontsize=8)
     fig.tight_layout()
-    fig.savefig(os.path.join(out, "fig2_apriori_loso.png"), dpi=160)
-    plt.close(fig)
-    print("wrote fig2_apriori_loso.png")
+    _save(fig, out, "fig2_apriori_loso.png")
 
 
 def fig_regions(numbers, out):
@@ -166,9 +185,7 @@ def fig_regions(numbers, out):
                 ax.set_ylabel("coverage @0.9")
                 ax.legend(fontsize=8)
     fig.tight_layout()
-    fig.savefig(os.path.join(out, "fig3_apriori_regions.png"), dpi=160)
-    plt.close(fig)
-    print("wrote fig3_apriori_regions.png")
+    _save(fig, out, "fig3_apriori_regions.png")
 
 
 def fig_bands(records, results_dir, fold, n_members, out):
@@ -245,9 +262,7 @@ def fig_bands(records, results_dir, fold, n_members, out):
         ax.legend(fontsize=7)
         ax.set_title(f"{fold}: coupled wall {q}")
     fig.tight_layout()
-    fig.savefig(os.path.join(out, f"fig5_aposteriori_{fold}.png"), dpi=160)
-    plt.close(fig)
-    print(f"wrote fig5_aposteriori_{fold}.png")
+    _save(fig, out, f"fig5_aposteriori_{fold}.png")
 
 
 def fig_attached(apo_numbers, results_dir, out):
@@ -289,9 +304,7 @@ def fig_attached(apo_numbers, results_dir, out):
     ax.set_title("preserve-attached control")
     ax.legend(fontsize=8)
     fig.tight_layout()
-    fig.savefig(os.path.join(out, "fig6_attached_control.png"), dpi=160)
-    plt.close(fig)
-    print("wrote fig6_attached_control.png")
+    _save(fig, out, "fig6_attached_control.png")
 
 
 def main():
@@ -303,30 +316,34 @@ def main():
     ap.add_argument("--n-members", type=int, default=24)
     ap.add_argument("--allow-partial", action="store_true",
                     dest="allow_partial",
-                    help="render interim figures from unvalidated or "
-                         "incomplete numbers (NEVER for the evidence "
-                         "package; every panel is labeled by its inputs)")
+                    help="render interim figures from absent, unvalidated "
+                         "or incomplete numbers (NEVER for the evidence "
+                         "package; every panel is watermarked INTERIM)")
     args = ap.parse_args()
     os.makedirs(args.out, exist_ok=True)
 
+    global _INTERIM_REASON
     records = _all_records()
     numbers = {}
     p = os.path.join(args.results, "apriori_numbers.json")
-    if os.path.isfile(p):
-        # evidence figures refuse invalid or incomplete numbers outright
-        # (the review's completion finding); --allow-partial is the labeled
-        # interim escape hatch
-        from UQ.reproduce_sbli_apriori import validate_apriori_numbers
-        ok, why = validate_apriori_numbers(args.results, strict=True)
-        if ok or args.allow_partial:
-            if not ok:
-                print(f"NOTE: rendering PARTIAL evidence ({why}); never "
-                      f"package these figures")
+    # evidence figures refuse absent, invalid or incomplete numbers outright
+    # (the review's completion finding: validation that runs only when the
+    # file happens to exist lets the absent case render silently);
+    # --allow-partial is the escape hatch, and it WATERMARKS every panel
+    from UQ.reproduce_sbli_apriori import validate_apriori_numbers
+    ok, why = validate_apriori_numbers(args.results, strict=True)
+    if ok:
+        numbers = json.load(open(p))
+    elif args.allow_partial:
+        _INTERIM_REASON = why
+        print(f"NOTE: rendering PARTIAL evidence ({why}); every panel is "
+              f"watermarked, never package these figures")
+        if os.path.isfile(p):
             numbers = json.load(open(p))
-        else:
-            print(f"apriori numbers refused ({why}); rerun with "
-                  f"--allow-partial for labeled interim figures")
-            sys.exit(1)
+    else:
+        print(f"apriori numbers refused ({why}); rerun with "
+              f"--allow-partial for watermarked interim figures")
+        sys.exit(1)
     apo_numbers = {}
     p = os.path.join(args.results, "aposteriori_numbers.json")
     if os.path.isfile(p):

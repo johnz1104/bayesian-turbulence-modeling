@@ -68,6 +68,14 @@ def set_binding_provenance(sha):
     _BINDING_SHA = sha
 
 
+def binding_provenance():
+    """The binding hash registered in this process, or None when no binding
+    was imported. Read by publication gates comparing a recorded provenance
+    against the build doing the reading; never a cache identity (see the
+    module note on provenance versus identity)."""
+    return _BINDING_SHA
+
+
 def code_rev():
     """Short git revision of the working tree that writes a cache.
 

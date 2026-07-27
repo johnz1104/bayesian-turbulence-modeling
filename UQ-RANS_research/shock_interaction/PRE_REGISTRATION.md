@@ -1026,3 +1026,42 @@ clause threshold changes.
    temp files so concurrent writers of one cache cannot corrupt it;
    extraction caches are generated in one serialized baselines pass
    before any parallel model job.
+
+9. Raw-input gating closed and the publication gate tightened (2026-07-27,
+   still before any corrected-lineage extraction exists). The clause-8
+   machinery was verified adversarially and three holes were closed. (a)
+   Manifest verification is CLOSED over the registered dataset set: it
+   compared only the entries a record happened to carry, so a manifest
+   written while the data was absent (every digest null) and a record
+   hand-reduced to an empty dataset block both verified successfully. It
+   now requires exactly the registered datasets, each a non-empty
+   directory on disk whose FRESHLY recomputed digest matches (the
+   per-process memo is dropped first, so a ruling is never made on a
+   digest cached before the data moved), and validates the record's own
+   identity block. (b) Baselines are bound to the DNS era they were solved
+   in. A baseline cache identity covers its solver configuration but not
+   the source record that configuration was read from, so accepting a
+   changed dataset invalidated every extraction while leaving the
+   baselines those extractions are measured against reusable, which is the
+   mixed-era state the lineage work exists to prevent. Each baseline now
+   carries a per-case adoption record binding its exact fields-cache hash
+   to the digest of the campaign it was solved against; a stale or absent
+   record refuses reuse at the pass level and at every consumption site
+   (extraction, target, member warm start), and only a cold regeneration
+   restores currency. Rewriting the manifest never authorizes reuse. (c)
+   Completeness is RECOMPUTED from the published record down to the
+   per-seed model rows, never read off its own label, so an empty leg or a
+   short seed sweep cannot present as complete; the strict publication
+   gate additionally requires the identity fingerprint the expected
+   protocol configuration produces (the physics token and quick flag ride
+   in there), a recorded binding matching the build doing the validating,
+   and the authorizing gate adjudication named in the numbers' own
+   lineage. The figure maker enforces that gate on an ABSENT numbers file
+   as well, and its interim escape hatch watermarks every panel it
+   renders. Two coupled-side gaps close with them: the exploratory
+   far-transfer targets bind the attached training pool they are trained
+   from, and the orchestrated matrix enforces the manifest and the
+   per-fold gate ruling for every fold it will touch, after the quick-path
+   result redirection so a smoke run is ruled by the universe it writes
+   into. Nothing here changes a success band, a null shape, a fold
+   definition or a clause threshold.

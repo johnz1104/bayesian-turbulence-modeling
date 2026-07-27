@@ -15,6 +15,10 @@ Stages (composable into one numbers JSON, so long runs chunk cleanly):
               conformal line against its absolute-score control
   all         everything above
 
+Plus two operator actions that compute nothing: reconverge (the wall-transport
+equivalence audit and schema migration) and adopt-baselines (bind baselines
+that predate the DNS adoption sidecar to the verified manifest).
+
 Everything runs at the pre-registered settings (strides, epochs 400, seeds
 {0, 1, 2}, 128 draws per point); --quick is a smoke path (coarse grids, two
 epochs, one seed, quadrupled strides) whose outputs land in *_quick files and
@@ -186,6 +190,146 @@ def _save_fields(results_dir, case, solver):
                                               dtype=bool)
     cfp.savez_atomic(_fields_path(results_dir, case),
                      cfp.attach(arrays, sbli_ident("sbli_fields", case)))
+    # the solve just ran against the live source data: adopt it, so the
+    # cache carries the DNS era it was produced in (see _adoption_status)
+    _write_adoption(results_dir, case)
+
+
+# every baseline cache tag: the interaction solves, the attached gate-A
+# control, and the frozen-mean adiabatic transport march
+BASELINE_TAGS = ("gate_a_attached", "adiabatic", "adiabatic_frozenmean",
+                 "s0.5", "s0.75", "s1.0", "s1.4", "s1.9")
+
+
+def _baseline_campaign(tag):
+    """The raw DNS campaign a baseline was configured from: the adiabatic
+    2011 record drives the attached gate-A control, the free-running
+    adiabatic interaction solve and its frozen-mean march; every s-family
+    tag is a heated-campaign record. Per case rather than the whole
+    interaction set, so a change confined to one campaign never invalidates
+    baselines that never read it."""
+    return ("interaction_adiabatic"
+            if tag in ("gate_a_attached", "adiabatic", "adiabatic_frozenmean")
+            else "interaction_heated")
+
+
+def _adoption_path(results_dir, tag):
+    return os.path.join(results_dir, f"baseline_dns_{tag}.json")
+
+
+def _adoption_body(results_dir, tag):
+    """The adoption record: the campaign digest the baseline was solved
+    against, bound to the exact fields cache on disk."""
+    campaign = _baseline_campaign(tag)
+    return {"tag": tag, "campaign": campaign,
+            "dns": {campaign: dns_manifest.dataset_digest(campaign)},
+            "fields": cfp.file_sha(_fields_path(results_dir, tag))}
+
+
+def _write_adoption(results_dir, tag):
+    """Bind a baseline fields cache to the raw DNS era it was solved in.
+
+    The cache identity of a baseline covers its solver configuration but NOT
+    the source record that configuration was read from, while an extraction
+    identity DOES bind the campaign digest. Accepting a changed dataset
+    therefore invalidated every extraction while leaving the old baselines
+    "current", so a new discrepancy could be measured against a baseline
+    solved from superseded inflow conditions (the review's mixed-era
+    finding). This sidecar closes that: rewriting dns_manifest.json no
+    longer authorizes reuse, because the per-baseline record still names the
+    superseded digest. ONE FILE PER CASE, so the restricted parallel
+    baseline passes never race on a shared ledger."""
+    body = _adoption_body(results_dir, tag)
+    cfp.json_atomic(_adoption_path(results_dir, tag),
+                    cfp.attach_json(body, sbli_ident("baseline-dns", tag,
+                                                     adopt=body)))
+
+
+def _adoption_status(results_dir, tag):
+    """(status, reason) of a baseline's DNS adoption: "current", "absent"
+    (never adopted) or "stale" (the fields cache or the source campaign moved
+    since adoption). Fail-closed: anything but "current" refuses reuse."""
+    path = _adoption_path(results_dir, tag)
+    if not os.path.isfile(path):
+        return "absent", (f"baseline {tag} carries no DNS adoption record "
+                          f"(run --stage adopt-baselines to bind the "
+                          f"validated caches to the verified manifest)")
+    rec = json.load(open(path))
+    body = {k: rec[k] for k in ("tag", "campaign", "dns", "fields")
+            if k in rec}
+    status, why = cfp.check_json(rec, sbli_ident("baseline-dns", tag,
+                                                 adopt=body))
+    if status != "match":
+        return "stale", (f"baseline {tag} adoption record identity "
+                         f"{status} ({why})")
+    live_fields = cfp.file_sha(_fields_path(results_dir, tag))
+    if body.get("fields") != live_fields:
+        return "stale", (f"baseline {tag} fields cache changed since its "
+                         f"DNS adoption ({body.get('fields')} adopted, "
+                         f"{live_fields} on disk)")
+    for ds, adopted in sorted(body.get("dns", {}).items()):
+        live = dns_manifest.dataset_digest(ds)
+        if live != adopted:
+            return "stale", (f"baseline {tag} was solved against {ds} "
+                             f"digest {adopted}, live {live}: cold "
+                             f"regenerate it (--regen --cases {tag})")
+    return "current", ""
+
+
+def _require_adoption(results_dir, tag, action):
+    """Stop-and-report gate at a baseline CONSUMPTION site: a cached
+    baseline feeds an extraction, a target or a member solve only while its
+    DNS adoption is current. A refusal here is never worked around by
+    rewriting the manifest; the baseline is cold regenerated."""
+    status, why = _adoption_status(results_dir, tag)
+    if status == "current":
+        return
+    print(f"[dns] baseline currency FAILED for {action}: {why}")
+    sys.exit(1)
+
+
+def _audit_adoption(results_dir, tags, regen):
+    """Rule every baseline this pass would CONSUME (an identity-current
+    fields cache that will not be re-solved) before any stage runs, so a
+    mixed-era state stops the driver at the start instead of at the first
+    consumer. A --regen pass rebuilds its caches and re-adopts them, so the
+    audit stands down and the consumption-site gates carry the guarantee."""
+    if regen:
+        print("[dns] baseline adoption audit skipped (--regen re-adopts "
+              "every cache it rewrites)")
+        return
+    for tag in tags:
+        if not _npz_ident_ok(_fields_path(results_dir, tag),
+                             sbli_ident("sbli_fields", tag)):
+            continue          # re-solved in this pass; the solve adopts it
+        _require_adoption(results_dir, tag, f"cached baseline {tag}")
+
+
+def stage_adopt_baselines(results_dir):
+    """One-time adoption of baselines that predate the sidecar: bind each
+    identity-current fields cache to the campaign digest of the currently
+    VERIFIED manifest (the driver's manifest gate has already run, so this
+    can never adopt against unverified data). Every later solve writes its
+    own record, so this stage is an operator action for the migration only,
+    and it never adopts a cache whose producing configuration cannot be
+    proven from its identity."""
+    out = {}
+    for tag in BASELINE_TAGS:
+        path = _fields_path(results_dir, tag)
+        if not _npz_ident_ok(path, sbli_ident("sbli_fields", tag)):
+            out[tag] = "no identity-current fields cache"
+            print(f"[adopt] {tag}: skipped ({out[tag]})")
+            continue
+        before, _ = _adoption_status(results_dir, tag)
+        if before == "current":
+            out[tag] = "already current"
+            print(f"[adopt] {tag}: already current")
+            continue
+        _write_adoption(results_dir, tag)
+        body = _adoption_body(results_dir, tag)
+        out[tag] = f"adopted {body['campaign']} {body['dns'][body['campaign']]}"
+        print(f"[adopt] {tag}: {out[tag]} (was {before})")
+    return out
 
 
 def _gate_a_profile_metrics(base, record, cf_station):
@@ -301,6 +445,7 @@ def _warm_baseline(records, case, results_dir, quick, with_shock=True):
     tag = case if with_shock else "gate_a_attached"
     if frozen:
         tag = "adiabatic_frozenmean"
+    _require_adoption(results_dir, tag, f"extraction from baseline {tag}")
     prim = np.load(_fields_path(results_dir, tag))["primitive"]
     base.solver.init_field(prim)
     base.solver.prepare_properties()
@@ -442,15 +587,109 @@ def numbers_ident(results_dir, seeds, epochs, quick, lineage):
         "lineage": dict(sorted(lineage.items()))})
 
 
+# the published record's required content, to the depth a partial run can
+# truncate. Key presence alone was satisfied by empty leg dictionaries (the
+# review's finding: a numbers file whose every leg was {} labelled itself
+# complete), so completeness is ruled on the model rows themselves.
+LOSO_LEGS = ("dq_y", "dq_joint", "db", "dq_y_history")
+INSAMPLE_LEGS = ("dq_y", "dq_joint", "db")
+FAR_TRANSFER_LEGS = ("dq_y", "dq_joint", "db", "db_plates_sensitivity")
+FAR_CONFORMAL_KEYS = ("roles", "per_seed", "seed_mean", "seed_min_max")
+SCORED_MODELS = ("flow", "gauss", "pooled")
+HELD_FOLDS = ("s0.5", "s0.75", "s1.0", "s1.4", "s1.9")
+
+
+def _seed_rows_missing(node, path, seeds):
+    """Every scored model must carry one row per pinned seed."""
+    missing = []
+    for kind in SCORED_MODELS:
+        rows = node.get(kind) if isinstance(node, dict) else None
+        if not isinstance(rows, list) or not rows:
+            missing.append(f"{path}:{kind}")
+        elif seeds is not None and len(rows) != len(seeds):
+            missing.append(f"{path}:{kind}[{len(rows)}/{len(seeds)} seeds]")
+    return missing
+
+
+def numbers_missing(numbers, seeds=None):
+    """RECOMPUTE what the published numbers lack, from the record itself.
+
+    Returns the sorted list of absent stages, legs, folds and model rows; an
+    empty list is the completeness label. Both the writer and every strict
+    consumer call this, so the label can never be trusted over the content
+    (a hand-set or stale "complete": true is overruled)."""
+    missing = []
+    gates = numbers.get("gates")
+    if not isinstance(gates, dict) or not gates.get("A") or not gates.get("B"):
+        missing.append("gates")
+    for stage, legs in (("loso", LOSO_LEGS), ("insample", INSAMPLE_LEGS)):
+        block = numbers.get(stage)
+        if not isinstance(block, dict) or not block:
+            missing.append(stage)
+            continue
+        for leg in legs:
+            node = block.get(leg)
+            if not isinstance(node, dict) or not node:
+                missing.append(f"{stage}:{leg}")
+                continue
+            if stage == "insample":
+                # one train-on-all block per leg, no fold level
+                missing += _seed_rows_missing(node.get("models"),
+                                              f"{stage}:{leg}", seeds)
+                continue
+            for fold in HELD_FOLDS:
+                if fold not in node:
+                    missing.append(f"{stage}:{leg}:{fold}")
+                    continue
+                missing += _seed_rows_missing(node[fold].get("models"),
+                                              f"{stage}:{leg}:{fold}", seeds)
+    far = numbers.get("far")
+    if not isinstance(far, dict) or not far:
+        missing.append("far")
+        return sorted(set(missing))
+    for leg in FAR_TRANSFER_LEGS:
+        node = far.get("transfer", {}).get(leg)
+        if not isinstance(node, dict) or not node:
+            missing.append(f"far:transfer:{leg}")
+            continue
+        for fold in HELD_FOLDS:
+            if fold not in node:
+                missing.append(f"far:transfer:{leg}:{fold}")
+            else:
+                missing += _seed_rows_missing(node[fold].get("models"),
+                                              f"far:transfer:{leg}:{fold}",
+                                              seeds)
+    control = far.get("control", {}).get("dq_y")
+    if not isinstance(control, dict) or not control:
+        missing.append("far:control:dq_y")
+    conformal_block = far.get("conformal")
+    if not isinstance(conformal_block, dict):
+        conformal_block = {}
+    for key in FAR_CONFORMAL_KEYS:
+        if not conformal_block.get(key):
+            missing.append(f"far:conformal:{key}")
+    per_seed = conformal_block.get("per_seed") or {}
+    for sd in (seeds or ()):
+        if str(sd) not in per_seed:
+            missing.append(f"far:conformal:per_seed:{sd}")
+    return sorted(set(missing))
+
+
 def validate_apriori_numbers(results_dir, quick=False, strict=False,
                              expected_seeds=None, expected_epochs=None):
     """Transitive validation for consumers of the published numbers: the
     identity block must be present and every recorded lineage hash must
-    match the file on disk. strict additionally requires the completeness
-    label (all stages and legs present), the expected seeds and epochs
-    (defaults: the pinned production protocol), a current gate
-    adjudication whose recorded gate-record hashes still match disk, and
-    the binding provenance to be recorded. Returns (ok, reason)."""
+    match the file on disk.
+
+    strict is the publication gate: completeness RECOMPUTED from the record
+    (numbers_missing, so the label is never taken on trust) and agreeing
+    with the label, the expected seeds and epochs (defaults: the pinned
+    production protocol), an identity fingerprint equal to the one the
+    expected protocol configuration produces over the recorded lineage (the
+    physics token and quick flag ride in there), a recorded binding matching
+    the build doing the validating, and a bound, current gate adjudication
+    whose own recorded gate-record hashes still match disk. Returns
+    (ok, reason)."""
     suffix = "_quick" if quick else ""
     path = os.path.join(results_dir, f"apriori_numbers{suffix}.json")
     if not os.path.isfile(path):
@@ -460,7 +699,8 @@ def validate_apriori_numbers(results_dir, quick=False, strict=False,
     if not isinstance(ident, dict) or "config_json" not in ident:
         return False, "no identity block"
     stored = json.loads(ident["config_json"]).get("numbers", {})
-    for name, sha in stored.get("lineage", {}).items():
+    lineage = stored.get("lineage", {})
+    for name, sha in lineage.items():
         if name == "dns":
             for ds, dg in sha.items():
                 if dns_manifest.dataset_digest(ds) != dg:
@@ -470,20 +710,51 @@ def validate_apriori_numbers(results_dir, quick=False, strict=False,
             return False, f"lineage stale for {name}"
     if not strict:
         return True, ""
-    if not rec.get("complete", False):
-        return False, f"incomplete: {rec.get('missing', 'unlabeled')}"
     want_seeds = list(expected_seeds if expected_seeds is not None
                       else sbli_apriori.SEEDS)
     want_epochs = int(expected_epochs if expected_epochs is not None
                       else sbli_apriori.EPOCHS)
+    # completeness is RECOMPUTED from the record, never read off its own
+    # label (a stale or hand-set "complete": true is overruled), and the
+    # label itself must agree with the recomputation
+    missing = numbers_missing(rec, want_seeds)
+    if missing:
+        return False, f"incomplete: {missing}"
+    if not rec.get("complete", False):
+        return False, (f"complete content carrying a not-complete label "
+                       f"{rec.get('missing', 'unlabeled')}")
     if list(stored.get("seeds", [])) != want_seeds:
         return False, (f"seeds {stored.get('seeds')} do not match the "
                        f"expected {want_seeds}")
     if int(stored.get("epochs", -1)) != want_epochs:
         return False, (f"epochs {stored.get('epochs')} do not match the "
                        f"expected {want_epochs}")
+    # the identity must be the one the EXPECTED protocol configuration
+    # produces over the recorded lineage: this rules the physics schema
+    # token, the case set and the quick flag too, none of which the
+    # field-by-field checks above can see
+    if ident.get("fingerprint") != cfp.fingerprint(
+            numbers_ident(results_dir, want_seeds, want_epochs, quick,
+                          lineage)):
+        return False, ("numbers identity does not match the expected "
+                       "protocol configuration (physics token, case set or "
+                       "quick flag)")
     if "binding_sha" not in ident:
         return False, "no binding provenance recorded"
+    live_binding = cfp.binding_provenance()
+    if (live_binding is not None and ident["binding_sha"] != live_binding
+            and os.environ.get("QBTM_SBLI_ACCEPT_BINDING") != "1"):
+        # a published number is claim-bearing only against the build that
+        # produced it; the freeze record is the binding hash, so a consumer
+        # running a different build refuses rather than presenting numbers
+        # it cannot reproduce (set QBTM_SBLI_ACCEPT_BINDING=1 to rule the
+        # difference immaterial, which is an explicit operator judgement)
+        return False, (f"numbers were produced by binding "
+                       f"{ident['binding_sha']}, this build is "
+                       f"{live_binding}")
+    if "gates_adjudication.json" not in lineage:
+        return False, ("numbers do not bind the gate adjudication that "
+                       "authorized them")
     adjud_path = os.path.join(results_dir, "gates_adjudication.json")
     if not os.path.isfile(adjud_path):
         return False, "gates adjudication absent"
@@ -514,6 +785,10 @@ def stage_baselines(records, results_dir, quick, regen,
 
     def _runs(block):
         return only is None or block in only
+
+    # the raw-input era gate, before any solve or extraction: no cached
+    # baseline is consumed while its DNS adoption is stale or absent
+    _audit_adoption(results_dir, BASELINE_TAGS, regen)
 
     out = {"gates": {"B": {}}, "solves": {}}
     baselines = {}
@@ -974,7 +1249,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--stage", default="all",
                     choices=("baselines", "loso", "insample", "far",
-                             "assemble", "reconverge", "all"))
+                             "assemble", "reconverge", "adopt-baselines",
+                             "all"))
     ap.add_argument("--results", default="results/sbli")
     ap.add_argument("--quick", action="store_true")
     ap.add_argument("--regen", action="store_true")
@@ -1031,13 +1307,28 @@ def main():
         if os.environ.get("QBTM_SBLI_ACCEPT_DNS") == "1":
             dns_manifest.write_manifest(manifest_path)
             print(f"[dns] manifest REGENERATED under explicit acceptance "
-                  f"({why}); dependent caches will invalidate through "
-                  f"their identities")
+                  f"({why}); dependent caches invalidate through their "
+                  f"identities, and every baseline solved against the "
+                  f"superseded data loses currency until it is cold "
+                  f"regenerated")
         else:
             print(f"[dns] SOURCE DATA CHANGED: {why}; adjudicate the "
                   f"change, then rerun with QBTM_SBLI_ACCEPT_DNS=1 to "
                   f"accept and re-manifest")
             sys.exit(1)
+    # a bootstrapped or regenerated record is ruled AGAIN: writing the
+    # manifest records whatever is live, so absent or empty source data must
+    # still stop the run rather than pass on its own fresh record
+    ok, why = dns_manifest.verify_manifest(manifest_path)
+    if not ok:
+        print(f"[dns] manifest gate FAILED: {why}")
+        sys.exit(1)
+
+    if args.stage == "adopt-baselines":
+        # the migration action: bind the already validated baselines to the
+        # verified manifest above; no solve, no extraction, no numbers
+        stage_adopt_baselines(args.results)
+        return
 
     records = _all_records()
     if args.stage == "reconverge":
@@ -1127,20 +1418,12 @@ def main():
                          for k, v in sbli_apriori.TEST_STRIDE.items()},
         "quick": bool(args.quick),
     }
-    # the completeness label: a numbers file missing any stage or leg is
-    # marked complete false and lists what is absent, so a partial result
-    # can never read as authoritative (the review's completion finding)
-    missing = []
-    for stage_name, legs in (("loso", ("dq_y", "dq_joint", "db",
-                                       "dq_y_history")),
-                             ("insample", ("dq_y", "dq_joint", "db")),
-                             ("far", ("transfer", "control", "conformal"))):
-        if stage_name not in numbers:
-            missing.append(stage_name)
-            continue
-        for leg in legs:
-            if leg not in numbers[stage_name]:
-                missing.append(f"{stage_name}:{leg}")
+    # the completeness label: recomputed from the record's own content down
+    # to the per-seed model rows (numbers_missing), so a truncated stage, an
+    # empty leg or a short seed sweep can never read as authoritative (the
+    # review's completion finding). Every strict consumer recomputes the
+    # same way rather than trusting this label.
+    missing = numbers_missing(numbers, seeds)
     numbers["complete"] = not missing
     numbers["missing"] = missing
     if missing:
@@ -1154,6 +1437,11 @@ def main():
                 pth = SBLIAPriori._cache_path(args.results, c, st, True)
                 consumed[os.path.basename(pth)] = cfp.file_sha(pth)
     consumed["dns"] = dns_manifest.digests(dns_manifest.FAR_SET)
+    # the gate adjudication that authorized these stages is part of the
+    # lineage, not just a separately validated neighbour: the numbers must
+    # name the exact ruling they were produced under
+    consumed["gates_adjudication.json"] = cfp.file_sha(
+        os.path.join(args.results, "gates_adjudication.json"))
     cfp.json_atomic(numbers_path, cfp.attach_json(
         numbers, numbers_ident(args.results, seeds, epochs, args.quick,
                                consumed)))

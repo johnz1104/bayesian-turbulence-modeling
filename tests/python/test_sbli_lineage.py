@@ -8,7 +8,10 @@ in a temp tree, no DNS data, no solver. The solver-side gates (effective
 running realizability recording, injection conservation, sign and energy
 work, the zero-discrepancy bit identity, the frozen-mean transport mode)
 live in tests/cpp/test_dbns_injection.cpp."""
+import json
+import multiprocessing
 import os
+import shutil
 import sys
 
 import numpy as np
@@ -18,9 +21,10 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(_HERE, "..", "..", "python"))
 
 from UQ import cache_fingerprint as cfp
+from UQ.datasets import dns_manifest as dm
 from UQ.datasets.sbli_apriori import (extraction_ident,
                                       extraction_fields_path,
-                                      conformal_case_split)
+                                      conformal_case_split, sbli_ident)
 from UQ.datasets.heatflux_apriori import mach_family
 from UQ.datasets.gv_channel import GV_CASES
 from UQ import reproduce_sbli_aposteriori as apo
@@ -29,6 +33,22 @@ from UQ import reproduce_sbli_aposteriori as apo
 def _write_npz(path, cfg, **arrays):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     cfp.savez_atomic(path, cfp.attach(arrays, cfg))
+
+
+def _synthetic_dns_root(base, content=b"v1"):
+    """A source-data root carrying every REGISTERED dataset with one file
+    each: the hermetic stand-in for QBTM_DNS_DATA in the manifest and
+    adoption gates (no real DNS, no solver)."""
+    for name, sub in dm.DATASETS.items():
+        p = os.path.join(base, sub)
+        os.makedirs(p, exist_ok=True)
+        with open(os.path.join(p, "f.dat"), "wb") as f:
+            f.write(content + name.encode())
+    return base
+
+
+def _dataset_file(root, name):
+    return os.path.join(root, dm.DATASETS[name], "f.dat")
 
 
 def test_field_mutation_invalidates_extraction(tmp_path):
@@ -345,7 +365,6 @@ def test_assemble_drops_stale_stages_and_records_lineage(tmp_path):
 
 
 def test_dns_dataset_digest_and_manifest(tmp_path):
-    from UQ.datasets import dns_manifest as dm
     r1 = str(tmp_path / "rootA")
     r2 = str(tmp_path / "rootB")
     for r, content in ((r1, b"favre-data-v1"), (r2, b"favre-data-v2")):
@@ -357,17 +376,80 @@ def test_dns_dataset_digest_and_manifest(tmp_path):
     assert d1 and d2 and d1 != d2          # content drives the digest
     assert dm.dataset_digest("interaction_adiabatic", root=r1) == d1
     assert dm.dataset_digest("interaction_heated", root=r1) is None
-    # manifest roundtrip and change detection
+    # manifest roundtrip and change detection over a narrowed required set
+    # (only a hermetic test narrows it; a driver always rules the full
+    # registered set, see test_manifest_verification_is_closed)
     mpath = str(tmp_path / "dns_manifest.json")
-    dm.write_manifest(mpath, names=("interaction_adiabatic",), root=r1)
-    ok, _ = dm.verify_manifest(mpath, root=r1)
-    assert ok
-    ok, why = dm.verify_manifest(mpath, root=r2)
+    one = ("interaction_adiabatic",)
+    dm.write_manifest(mpath, names=one, root=r1)
+    ok, why = dm.verify_manifest(mpath, root=r1, required=one)
+    assert ok, why
+    ok, why = dm.verify_manifest(mpath, root=r2, required=one)
     assert not ok and "interaction_adiabatic" in why
 
 
+def test_manifest_verification_is_closed_over_the_registered_set(tmp_path):
+    # the review's fail-open finding, reproduced as a regression: verifying
+    # only the entries a record happens to carry passed a manifest written
+    # against absent data and a record reduced to an empty dataset block
+    root = _synthetic_dns_root(str(tmp_path / "root"))
+    mpath = str(tmp_path / "dns_manifest.json")
+    dm.write_manifest(mpath, root=root)
+    ok, why = dm.verify_manifest(mpath, root=root)
+    assert ok, why
+
+    # (a) every dataset absent: the digests record None and can never verify
+    empty_root = str(tmp_path / "absent")
+    os.makedirs(empty_root)
+    npath = str(tmp_path / "none_manifest.json")
+    dm.write_manifest(npath, root=empty_root)
+    ok, why = dm.verify_manifest(npath, root=empty_root)
+    assert not ok and "no digest" in why
+
+    # (b) the record hand-reduced to an empty dataset block: its identity no
+    # longer matches the entries it carries
+    rec = json.load(open(mpath))
+    rec["datasets"] = {}
+    rpath = str(tmp_path / "reduced.json")
+    cfp.json_atomic(rpath, rec)
+    ok, why = dm.verify_manifest(rpath, root=root)
+    assert not ok and "identity" in why
+
+    # (c) an entry dropped AND the identity block reforged to match: only
+    # the closed-set rule catches this one
+    rec = json.load(open(mpath))
+    rec["datasets"].pop("zdc_plate")
+    fpath = str(tmp_path / "forged.json")
+    cfp.json_atomic(fpath, cfp.attach_json(
+        {"datasets": rec["datasets"]}, dm.manifest_ident(rec["datasets"])))
+    ok, why = dm.verify_manifest(fpath, root=root)
+    assert not ok and "registered datasets" in why and "zdc_plate" in why
+
+    # (d) a dataset directory removed after manifesting
+    shutil.rmtree(os.path.join(root, dm.DATASETS["zdc_plate"]))
+    ok, why = dm.verify_manifest(mpath, root=root)
+    assert not ok and "zdc_plate" in why
+
+
+def test_manifest_verification_recomputes_and_requires_content(tmp_path):
+    root = _synthetic_dns_root(str(tmp_path / "root"))
+    mpath = str(tmp_path / "dns_manifest.json")
+    dm.write_manifest(mpath, root=root)          # memoizes every digest
+    # same-root mutation: the ruling must be a FRESH pass, not the digest
+    # memoized while writing the record moments earlier
+    with open(_dataset_file(root, "interaction_heated"), "wb") as f:
+        f.write(b"edited in place, different content and length")
+    ok, why = dm.verify_manifest(mpath, root=root)
+    assert not ok and "interaction_heated changed" in why
+    # a dataset emptied of files is refused even though its directory (and
+    # therefore a well-formed digest) still exists
+    dm.write_manifest(mpath, root=root)
+    os.remove(_dataset_file(root, "interaction_heated"))
+    ok, why = dm.verify_manifest(mpath, root=root)
+    assert not ok and "holds no files" in why
+
+
 def test_extraction_identity_binds_dns_digest(tmp_path, monkeypatch):
-    from UQ.datasets import dns_manifest as dm
     d = str(tmp_path / "results")
     os.makedirs(d)
     for tag, content in (("dataA", b"heated-v1"), ("dataB", b"heated-v2")):
@@ -386,37 +468,72 @@ def test_extraction_identity_binds_dns_digest(tmp_path, monkeypatch):
     assert cfp.fingerprint(identA) != cfp.fingerprint(identB)
 
 
-def test_strict_numbers_validation(tmp_path):
-    from UQ.reproduce_sbli_apriori import (numbers_ident,
-                                           validate_apriori_numbers,
-                                           _gate_ident)
-    from UQ.datasets.sbli_apriori import sbli_ident
-    d = str(tmp_path)
-    # a current gate adjudication with identity lineage
+def _complete_numbers(seeds):
+    """The smallest record satisfying every recomputed completeness clause:
+    each leg carries every held fold, each fold every scored model, each
+    model one row per pinned seed."""
+    from UQ.reproduce_sbli_apriori import (LOSO_LEGS, INSAMPLE_LEGS,
+                                           FAR_TRANSFER_LEGS,
+                                           SCORED_MODELS, HELD_FOLDS)
+
+    def rows():
+        return {k: [{"coverage_0.9": 0.9} for _ in seeds]
+                for k in SCORED_MODELS}
+
+    def folds():
+        return {f: {"models": rows()} for f in HELD_FOLDS}
+
+    return {
+        "gates": {"A": {"pass": True}, "B": {"s1.0": {"pass": True}}},
+        "loso": {leg: folds() for leg in LOSO_LEGS},
+        "insample": {leg: {"models": rows()} for leg in INSAMPLE_LEGS},
+        "far": {"transfer": {leg: folds() for leg in FAR_TRANSFER_LEGS},
+                "control": {"dq_y": {"family_M2": {}}},
+                "conformal": {"roles": {"disjoint": True},
+                              "per_seed": {str(s): {"q_abs": 1.0}
+                                           for s in seeds},
+                              "seed_mean": {"s1.0": {}},
+                              "seed_min_max": {"s1.0": {}}}},
+        "complete": True, "missing": [],
+    }
+
+
+def _adjudication_universe(d):
+    """A current gate adjudication with identity lineage; returns the
+    numbers lineage that binds it."""
+    from UQ.reproduce_sbli_apriori import _gate_ident
     cfp.savez_atomic(os.path.join(d, "fields_s1.0.npz"),
                      {"primitive": np.zeros((2, 6))})
     gpath = os.path.join(d, "gate_b_s1.0.json")
     cfp.json_atomic(gpath, cfp.attach_json({"pass": True},
                                            _gate_ident(d, "s1.0")))
     lin = {"gate_b_s1.0.json": cfp.file_sha(gpath)}
-    cfp.json_atomic(os.path.join(d, "gates_adjudication.json"),
-                    cfp.attach_json({"gate_a_pass": True},
-                                    sbli_ident("gates-adjudication",
-                                               "all-cases",
-                                               adjud={"lineage": lin})))
-    full = {"gates": {}, "complete": True, "missing": [],
-            "loso": {k: {} for k in ("dq_y", "dq_joint", "db",
-                                     "dq_y_history")},
-            "insample": {k: {} for k in ("dq_y", "dq_joint", "db")},
-            "far": {k: {} for k in ("transfer", "control", "conformal")}}
+    apath = os.path.join(d, "gates_adjudication.json")
+    cfp.json_atomic(apath, cfp.attach_json(
+        {"gate_a_pass": True}, sbli_ident("gates-adjudication", "all-cases",
+                                          adjud={"lineage": lin})))
+    return {"gates_adjudication.json": cfp.file_sha(apath)}
+
+
+def test_strict_numbers_validation(tmp_path):
+    from UQ.reproduce_sbli_apriori import (numbers_ident,
+                                           validate_apriori_numbers)
+    d = str(tmp_path)
+    consumed = _adjudication_universe(d)
+    full = _complete_numbers((0,))
+    npath = os.path.join(d, "apriori_numbers.json")
+
+    def _publish(rec, lineage=None, seeds=(0,), epochs=2, quick=False):
+        cfp.json_atomic(npath, cfp.attach_json(
+            rec, numbers_ident(d, seeds, epochs, quick,
+                               consumed if lineage is None else lineage)))
+
     # importing the solver binding registers the binding provenance
     # process-wide; clear it to exercise the no-provenance refusal, then
     # restore the real value at the end
     saved_binding = cfp._BINDING_SHA
     cfp.set_binding_provenance(None)
-    cfp.json_atomic(os.path.join(d, "apriori_numbers.json"),
-                    cfp.attach_json(full, numbers_ident(d, (0,), 2, False,
-                                                        {})))
+    _publish(full)
     # non-strict passes on lineage alone; strict needs binding provenance
     ok, _ = validate_apriori_numbers(d)
     assert ok
@@ -424,28 +541,149 @@ def test_strict_numbers_validation(tmp_path):
                                        expected_epochs=2)
     assert not ok and "binding" in why
     cfp.set_binding_provenance("abc123")
-    cfp.json_atomic(os.path.join(d, "apriori_numbers.json"),
-                    cfp.attach_json(full, numbers_ident(d, (0,), 2, False,
-                                                        {})))
+    _publish(full)
     ok, why = validate_apriori_numbers(d, strict=True, expected_seeds=(0,),
                                        expected_epochs=2)
     assert ok, why
+    # numbers produced by a DIFFERENT build refuse: a published number is
+    # claim-bearing only against the binary that produced it
+    cfp.set_binding_provenance("def456")
+    ok, why = validate_apriori_numbers(d, strict=True, expected_seeds=(0,),
+                                       expected_epochs=2)
+    assert not ok and "abc123" in why and "def456" in why
+    os.environ["QBTM_SBLI_ACCEPT_BINDING"] = "1"
+    ok, why = validate_apriori_numbers(d, strict=True, expected_seeds=(0,),
+                                       expected_epochs=2)
+    assert ok, why
+    os.environ.pop("QBTM_SBLI_ACCEPT_BINDING")
+    cfp.set_binding_provenance("abc123")
     # wrong protocol settings refuse
     ok, why = validate_apriori_numbers(d, strict=True,
                                        expected_seeds=(0, 1, 2),
                                        expected_epochs=2)
     assert not ok and "seeds" in why
+    # a record whose identity was built for the quick universe refuses even
+    # though every field-by-field check passes (the fingerprint carries the
+    # physics token and the quick flag)
+    _publish(full, quick=True)
+    ok, why = validate_apriori_numbers(d, strict=True, expected_seeds=(0,),
+                                       expected_epochs=2)
+    assert not ok and "protocol configuration" in why
+    # numbers that do not name the authorizing gate adjudication refuse
+    _publish(full, lineage={})
+    ok, why = validate_apriori_numbers(d, strict=True, expected_seeds=(0,),
+                                       expected_epochs=2)
+    assert not ok and "gate adjudication" in why
     # an incomplete result refuses under strict
     partial = dict(full)
+    partial["far"] = {}
     partial["complete"] = False
     partial["missing"] = ["far"]
-    cfp.json_atomic(os.path.join(d, "apriori_numbers.json"),
-                    cfp.attach_json(partial, numbers_ident(d, (0,), 2,
-                                                           False, {})))
+    _publish(partial)
     ok, why = validate_apriori_numbers(d, strict=True, expected_seeds=(0,),
                                        expected_epochs=2)
     assert not ok and "incomplete" in why
     cfp.set_binding_provenance(saved_binding)
+
+
+def test_numbers_completeness_is_recomputed_not_labeled(tmp_path):
+    # the review's finding: presence-only completeness declared a record
+    # whose every leg was an empty dictionary complete and valid
+    from UQ.reproduce_sbli_apriori import (numbers_ident, numbers_missing,
+                                           validate_apriori_numbers,
+                                           LOSO_LEGS, INSAMPLE_LEGS)
+    d = str(tmp_path)
+    consumed = _adjudication_universe(d)
+    hollow = {"gates": {"A": {}, "B": {}},
+              "loso": {k: {} for k in LOSO_LEGS},
+              "insample": {k: {} for k in INSAMPLE_LEGS},
+              "far": {k: {} for k in ("transfer", "control", "conformal")},
+              "complete": True, "missing": []}
+    missing = numbers_missing(hollow, (0,))
+    assert "gates" in missing and "loso:dq_y" in missing
+    assert "far:transfer:dq_y" in missing
+    saved_binding = cfp._BINDING_SHA
+    cfp.set_binding_provenance("abc123")
+    cfp.json_atomic(os.path.join(d, "apriori_numbers.json"),
+                    cfp.attach_json(hollow, numbers_ident(d, (0,), 2, False,
+                                                          consumed)))
+    ok, why = validate_apriori_numbers(d, strict=True, expected_seeds=(0,),
+                                       expected_epochs=2)
+    assert not ok and "incomplete" in why
+    # a short seed sweep is caught at the model rows, not just at the legs
+    short = _complete_numbers((0,))
+    assert not numbers_missing(short, (0,))
+    assert any("seeds" in m for m in numbers_missing(short, (0, 1, 2)))
+    cfp.set_binding_provenance(saved_binding)
+
+
+def test_baseline_dns_adoption_gates_reuse(tmp_path, monkeypatch):
+    # the review's mixed-era finding: accepting changed source data rewrote
+    # the manifest and invalidated the extractions, but left the baselines
+    # those extractions are measured against reusable
+    from UQ.reproduce_sbli_apriori import (_adoption_status, _audit_adoption,
+                                           _fields_path,
+                                           stage_adopt_baselines)
+    root = _synthetic_dns_root(str(tmp_path / "root"))
+    monkeypatch.setenv("QBTM_DNS_DATA", root)
+    dm.forget(tuple(dm.DATASETS))
+    d = str(tmp_path / "results")
+    os.makedirs(d)
+    for tag in ("s1.0", "gate_a_attached"):
+        cfp.savez_atomic(_fields_path(d, tag),
+                         cfp.attach({"primitive": np.zeros((3, 6))},
+                                    sbli_ident("sbli_fields", tag)))
+    # an identity-current baseline with no adoption record is NOT current
+    assert _adoption_status(d, "s1.0")[0] == "absent"
+    with pytest.raises(SystemExit):
+        _audit_adoption(d, ("s1.0",), False)
+    stage_adopt_baselines(d)
+    assert _adoption_status(d, "s1.0")[0] == "current"
+    assert _adoption_status(d, "gate_a_attached")[0] == "current"
+    # a heated-campaign correction strands the heated baseline; rewriting
+    # the manifest cannot authorize its reuse, only a cold regeneration can
+    with open(_dataset_file(root, "interaction_heated"), "wb") as f:
+        f.write(b"corrected campaign")
+    dm.forget(tuple(dm.DATASETS))
+    status, why = _adoption_status(d, "s1.0")
+    assert status == "stale" and "interaction_heated" in why
+    with pytest.raises(SystemExit):
+        _audit_adoption(d, ("s1.0",), False)
+    # and the adiabatic-campaign baselines are untouched by that change
+    # (per-case campaigns, so a correction never over-invalidates)
+    assert _adoption_status(d, "gate_a_attached")[0] == "current"
+    # the record is bound to the exact fields cache as well
+    cfp.savez_atomic(_fields_path(d, "gate_a_attached"),
+                     cfp.attach({"primitive": np.ones((3, 6))},
+                                sbli_ident("sbli_fields", "gate_a_attached")))
+    status, why = _adoption_status(d, "gate_a_attached")
+    assert status == "stale" and "fields cache changed" in why
+
+
+def test_faradiab_targets_bind_the_attached_training_pool(tmp_path,
+                                                          monkeypatch):
+    # the exploratory far-transfer targets TRAIN on the attached channel
+    # matrix, a direct DNS consumer with no extraction intermediary
+    d = str(tmp_path / "results")
+    os.makedirs(d)
+    for tag, content in (("dataA", b"gv-v1"), ("dataB", b"gv-v2")):
+        r = _synthetic_dns_root(str(tmp_path / tag))
+        with open(_dataset_file(r, "gv_channel"), "wb") as f:
+            f.write(content)
+    for tag in ("adiabatic", "s1.0"):
+        cfp.savez_atomic(os.path.join(d, f"fields_{tag}.npz"),
+                         {"primitive": np.zeros((3, 6))})
+
+    def _fp(fold):
+        return cfp.fingerprint(apo._targets_config(
+            d, fold, "flow", 0, 3, 2, "objective-basis"))
+
+    monkeypatch.setenv("QBTM_DNS_DATA", str(tmp_path / "dataA"))
+    far_a, fold_a = _fp("faradiab"), _fp("s1.0")
+    monkeypatch.setenv("QBTM_DNS_DATA", str(tmp_path / "dataB"))
+    far_b, fold_b = _fp("faradiab"), _fp("s1.0")
+    assert far_a != far_b      # replacing the training pool invalidates them
+    assert fold_a == fold_b    # and only the leg that actually reads it
 
 
 def test_atomic_writers_use_per_pid_temps(tmp_path):
@@ -458,3 +696,39 @@ def test_atomic_writers_use_per_pid_temps(tmp_path):
     assert os.listdir(d) == sorted(["x.npz", "y.json"]) or \
         sorted(os.listdir(d)) == ["x.npz", "y.json"]
     assert str(os.getpid()) not in "".join(os.listdir(d))
+
+
+def _concurrent_writer(npz_path, json_path, tag, n, barrier):
+    """One writer process of the atomic-write race: a payload identifying
+    this writer, written repeatedly to the SAME paths as the other."""
+    arr = np.full(8192, float(tag))
+    barrier.wait()
+    for _ in range(n):
+        cfp.savez_atomic(npz_path, {"a": arr})
+        cfp.json_atomic(json_path, {"tag": tag, "pad": [tag] * 4096})
+
+
+def test_atomic_writers_survive_concurrent_processes(tmp_path):
+    # the sequential check above would also pass the shared-temp writer it
+    # replaced; the race is what the per-writer temp name exists for, so two
+    # barrier-synchronized processes publish to one path and the survivor
+    # must be ONE writer's complete payload (a shared temp let one writer
+    # truncate or publish another's half-written bytes)
+    ctx = multiprocessing.get_context("fork")   # children only write arrays
+    d = str(tmp_path)
+    p, q = os.path.join(d, "x.npz"), os.path.join(d, "y.json")
+    barrier = ctx.Barrier(2)
+    procs = [ctx.Process(target=_concurrent_writer,
+                         args=(p, q, tag, 40, barrier)) for tag in (1, 2)]
+    for pr in procs:
+        pr.start()
+    for pr in procs:
+        pr.join(120)
+    assert [pr.exitcode for pr in procs] == [0, 0]
+    a = np.load(p)["a"]
+    assert a.shape == (8192,) and len(set(a.tolist())) == 1
+    assert a[0] in (1.0, 2.0)
+    rec = json.load(open(q))
+    assert rec["pad"] == [rec["tag"]] * 4096
+    # and no temp residue survives either writer
+    assert sorted(os.listdir(d)) == ["x.npz", "y.json"]
