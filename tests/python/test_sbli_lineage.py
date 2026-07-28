@@ -470,66 +470,129 @@ def test_extraction_identity_binds_dns_digest(tmp_path, monkeypatch):
 
 def _complete_numbers(seeds):
     """The smallest record satisfying every recomputed completeness clause:
-    each leg carries every held fold, each fold every scored model, each
-    model one row per pinned seed."""
+    every leg, every held fold, every scored model, one row per pinned model
+    seed carrying the registered metric keys, the materialized seed mean and
+    min-max range, the independent-campaign surfaces, the full committed
+    attached-control matrix and the frozen conformal split."""
     from UQ.reproduce_sbli_apriori import (LOSO_LEGS, INSAMPLE_LEGS,
                                            FAR_TRANSFER_LEGS,
-                                           SCORED_MODELS, HELD_FOLDS)
+                                           SCORED_MODELS, HELD_FOLDS,
+                                           INDEPENDENT_SURFACE)
+    from UQ.datasets.sbli_apriori import SCORE_KEYS, SAMPLE_SEED
 
-    def rows():
-        return {k: [{"coverage_0.9": 0.9} for _ in seeds]
+    def row(seed, regions=True):
+        r = {k: [0.9] for k in SCORE_KEYS}
+        r["model_seed"] = seed
+        r["sample_seed"] = SAMPLE_SEED
+        if regions:
+            r["region_scores"] = {"interaction": {"crps": [0.9], "n": 9}}
+        return r
+
+    def block(regions=True):
+        return {k: {"per_seed": [row(s, regions) for s in seeds],
+                    "model_seeds": list(seeds), "sample_seed": SAMPLE_SEED,
+                    "seed_mean": {"crps": [0.9]},
+                    "seed_min_max": {"min": {"crps": [0.9]},
+                                     "max": {"crps": [0.9]}}}
                 for k in SCORED_MODELS}
 
-    def folds():
-        return {f: {"models": rows()} for f in HELD_FOLDS}
+    def folds(surface=False):
+        out = {f: {"models": block()} for f in HELD_FOLDS}
+        if surface:
+            out["s1.0"][INDEPENDENT_SURFACE] = {"models": block()}
+        return out
 
-    # the attached health gate runs over the real channel matrix, so the
-    # fixture carries real case tags: the roles declare the expected set and
-    # the control must cover every one of them per family
-    tags = list(GV_CASES[:4])
+    # the attached health gate runs over the COMMITTED channel matrix
     control = {}
-    for t in tags:
-        control.setdefault(f"family_{mach_family(t)}", {})[t] = rows()
+    for t in GV_CASES:
+        control.setdefault(f"family_{mach_family(t)}", {})[t] = \
+            block(regions=False)
+    transfer = {leg: folds() for leg in FAR_TRANSFER_LEGS}
+    for leg in FAR_TRANSFER_LEGS:
+        if leg.startswith("db"):
+            transfer[leg][INDEPENDENT_SURFACE] = {"models": block()}
+    fit, cal = conformal_case_split(GV_CASES)
     return {
         "gates": {"A": {"pass": True}, "B": {"s1.0": {"pass": True}}},
-        "loso": {leg: folds() for leg in LOSO_LEGS},
-        "insample": {leg: {"models": rows()} for leg in INSAMPLE_LEGS},
-        "far": {"transfer": {leg: folds() for leg in FAR_TRANSFER_LEGS},
+        "loso": {leg: folds(surface=(leg == "db")) for leg in LOSO_LEGS},
+        "insample": {leg: {"models": block(regions=False)}
+                     for leg in INSAMPLE_LEGS},
+        "far": {"transfer": transfer,
                 "control": {"dq_y": control},
                 "conformal": {"roles": {"disjoint": True,
-                                        "fit_cases": tags[0::2],
-                                        "calibration_cases": tags[1::2]},
-                              "per_seed": {str(s): {"q_abs": 1.0,
-                                                    "cases": {"s1.0": {}}}
-                                           for s in seeds},
+                                        "fit_cases": list(fit),
+                                        "calibration_cases": list(cal)},
+                              "per_seed": {
+                                  str(s): {"q_abs": 1.0,
+                                           "cases": {f: {} for f in HELD_FOLDS}}
+                                  for s in seeds},
                               "seed_mean": {"s1.0": {}},
                               "seed_min_max": {"s1.0": {}}}},
         "complete": True, "missing": [],
     }
 
 
-def _adjudication_universe(d):
-    """A current gate adjudication with identity lineage; returns the
-    numbers lineage that binds it."""
-    from UQ.reproduce_sbli_apriori import _gate_ident
-    cfp.savez_atomic(os.path.join(d, "fields_s1.0.npz"),
-                     {"primitive": np.zeros((2, 6))})
-    gpath = os.path.join(d, "gate_b_s1.0.json")
-    cfp.json_atomic(gpath, cfp.attach_json({"pass": True},
-                                           _gate_ident(d, "s1.0")))
-    lin = {"gate_b_s1.0.json": cfp.file_sha(gpath)}
+def _production_universe(d, seeds, epochs):
+    """A complete, identity-consistent results universe: baselines with
+    their DNS adoption, wall and gate records bound to them, extraction
+    caches at both strides, the gate adjudication, the basis-feasibility
+    evidence, the three stage partials, and the lineage roster the published
+    numbers must name. This is the whole chain the strict publication gate
+    walks, so an adversarial mutation anywhere in it is testable."""
+    import UQ.reproduce_sbli_apriori as ap
+    from UQ.datasets.sbli_apriori import (TEST_STRIDE, _train_stride,
+                                          SBLIAPriori)
+    for tag in ap.BASELINE_TAGS:
+        cfp.savez_atomic(ap._fields_path(d, tag),
+                         cfp.attach({"primitive": np.zeros((3, 6))},
+                                    sbli_ident("sbli_fields", tag)))
+        ap._write_adoption(d, tag)
+    for case in list(TEST_STRIDE) + ["gate_a_attached"]:
+        cfp.savez_atomic(ap._wall_path(d, case), cfp.attach(
+            {"Cf": np.zeros(4), "St": np.zeros(4)},
+            sbli_ident("sbli_wall", case, wall={"lineage": {
+                "fields": cfp.file_sha(ap._fields_path(d, case))}})))
+    for c in TEST_STRIDE:
+        for st in (TEST_STRIDE[c], _train_stride(c)):
+            cfp.savez_atomic(SBLIAPriori._cache_path(d, c, st, True),
+                             cfp.attach({"features": np.zeros((2, 6))},
+                                        extraction_ident(c, st, True, d)))
+    lin = {}
+    gates = [("gate_a_attached", "gate_a.json")]
+    gates += [(c, f"gate_b_{c}.json") for c in sorted(TEST_STRIDE)]
+    for case, name in gates:
+        gp = os.path.join(d, name)
+        cfp.json_atomic(gp, cfp.attach_json({"pass": True},
+                                            ap._gate_ident(d, case)))
+        lin[name] = cfp.file_sha(gp)
     apath = os.path.join(d, "gates_adjudication.json")
     cfp.json_atomic(apath, cfp.attach_json(
         {"gate_a_pass": True}, sbli_ident("gates-adjudication", "all-cases",
                                           adjud={"lineage": lin})))
-    return {"gates_adjudication.json": cfp.file_sha(apath)}
+    bpath = ap._basis_evidence_path(d)
+    cfp.json_atomic(bpath, cfp.attach_json(
+        {"all_pass": True}, ap._basis_ident(d, ap.HELD_FOLDS)))
+    consumed = {}
+    for stage in ("loso", "insample", "far"):
+        pp = os.path.join(d, f"apriori_{stage}.json")
+        cfp.json_atomic(pp, cfp.attach_json(
+            {stage: {}}, ap._partial_ident(d, stage, None, seeds, epochs)))
+        consumed[os.path.basename(pp)] = cfp.file_sha(pp)
+    consumed["gates_adjudication.json"] = cfp.file_sha(apath)
+    consumed[os.path.basename(bpath)] = cfp.file_sha(bpath)
+    consumed["dns"] = dm.digests(dm.FAR_SET)
+    return consumed
 
 
-def test_strict_numbers_validation(tmp_path):
+def test_strict_numbers_validation(tmp_path, monkeypatch):
     from UQ.reproduce_sbli_apriori import (numbers_ident,
                                            validate_apriori_numbers)
-    d = str(tmp_path)
-    consumed = _adjudication_universe(d)
+    root = _synthetic_dns_root(str(tmp_path / "root"))
+    monkeypatch.setenv("QBTM_DNS_DATA", root)
+    dm.forget(tuple(dm.DATASETS))
+    d = str(tmp_path / "results")
+    os.makedirs(d)
+    consumed = _production_universe(d, (0,), 2)
     full = _complete_numbers((0,))
     npath = os.path.join(d, "apriori_numbers.json")
 
@@ -580,10 +643,18 @@ def test_strict_numbers_validation(tmp_path):
                                        expected_epochs=2)
     assert not ok and "protocol configuration" in why
     # numbers that do not name the authorizing gate adjudication refuse
-    _publish(full, lineage={})
+    _publish(full, lineage={k: v for k, v in consumed.items()
+                            if k != "gates_adjudication.json"})
     ok, why = validate_apriori_numbers(d, strict=True, expected_seeds=(0,),
                                        expected_epochs=2)
     assert not ok and "gate adjudication" in why
+    # a lineage that names fewer sources than the protocol requires refuses
+    # even though every hash it DOES name is current (a restricted run)
+    _publish(full, lineage={k: v for k, v in consumed.items()
+                            if k != "apriori_far.json"})
+    ok, why = validate_apriori_numbers(d, strict=True, expected_seeds=(0,),
+                                       expected_epochs=2)
+    assert not ok and "production roster" in why and "apriori_far" in why
     # an incomplete result refuses under strict
     partial = dict(full)
     partial["far"] = {}
@@ -596,6 +667,105 @@ def test_strict_numbers_validation(tmp_path):
     cfp.set_binding_provenance(saved_binding)
 
 
+def test_strict_validation_is_transitive_through_every_parent(tmp_path,
+                                                              monkeypatch):
+    # the review's finding: strict validation trusted the hash list stored
+    # in the numbers record, so mutating a parent FIELDS file after
+    # publication left the whole chain looking valid (every recorded hash
+    # still matched, because nobody re-checked a child against its parents)
+    from UQ.reproduce_sbli_apriori import (numbers_ident, _fields_path,
+                                           _wall_path, _basis_evidence_path,
+                                           validate_apriori_numbers)
+    root = _synthetic_dns_root(str(tmp_path / "root"))
+    monkeypatch.setenv("QBTM_DNS_DATA", root)
+    dm.forget(tuple(dm.DATASETS))
+    d = str(tmp_path / "results")
+    os.makedirs(d)
+    saved_binding = cfp._BINDING_SHA
+    cfp.set_binding_provenance("abc123")
+
+    def _fresh():
+        consumed = _production_universe(d, (0,), 2)
+        cfp.json_atomic(os.path.join(d, "apriori_numbers.json"),
+                        cfp.attach_json(_complete_numbers((0,)),
+                                        numbers_ident(d, (0,), 2, False,
+                                                      consumed)))
+        ok, why = validate_apriori_numbers(d, strict=True,
+                                           expected_seeds=(0,),
+                                           expected_epochs=2)
+        assert ok, why
+
+    # (a) a mutated parent fields file: the numbers and the partials still
+    # carry their recorded hashes, but the extraction, the wall record and
+    # the adoption no longer match the state they were built from
+    _fresh()
+    cfp.savez_atomic(_fields_path(d, "s1.0"),
+                     cfp.attach({"primitive": np.ones((3, 6))},
+                                sbli_ident("sbli_fields", "s1.0")))
+    ok, why = validate_apriori_numbers(d, strict=True, expected_seeds=(0,),
+                                       expected_epochs=2)
+    assert not ok, "a mutated parent fields file must break the chain"
+
+    # (b) a mutated WALL record: the far conformal scale is read from it, so
+    # the far partial identity moves with it
+    _fresh()
+    cfp.savez_atomic(_wall_path(d, "s1.0"), cfp.attach(
+        {"Cf": np.ones(4), "St": np.ones(4)},
+        sbli_ident("sbli_wall", "s1.0", wall={"lineage": {
+            "fields": cfp.file_sha(_fields_path(d, "s1.0"))}})))
+    ok, why = validate_apriori_numbers(d, strict=True, expected_seeds=(0,),
+                                       expected_epochs=2)
+    assert not ok and "apriori_far.json" in why, why
+
+    # (c) a mutated basis-evidence artifact: the db legs' representation
+    # decision rests on it, so it is lineage and not a neighbour
+    _fresh()
+    cfp.json_atomic(_basis_evidence_path(d), {"all_pass": False})
+    ok, why = validate_apriori_numbers(d, strict=True, expected_seeds=(0,),
+                                       expected_epochs=2)
+    assert not ok and "basis_feasibility" in why, why
+
+    # (d) a baseline whose DNS adoption goes stale after publication
+    _fresh()
+    with open(_dataset_file(root, "interaction_heated"), "wb") as f:
+        f.write(b"corrected campaign")
+    dm.forget(tuple(dm.DATASETS))
+    ok, why = validate_apriori_numbers(d, strict=True, expected_seeds=(0,),
+                                       expected_epochs=2)
+    assert not ok, "a superseded DNS campaign must break the chain"
+    cfp.set_binding_provenance(saved_binding)
+
+
+def test_cases_restriction_is_refused_outside_solve_stages(tmp_path):
+    # --cases partitions the SOLVES; restricting a scoring or assembling
+    # stage with it drops folds from the study while the partial identity
+    # still claims the full extraction universe
+    import subprocess
+    root = os.path.abspath(os.path.join(_HERE, "..", ".."))
+    env = dict(os.environ)
+    env["PYTHONPATH"] = os.pathsep.join([os.path.join(root, "build"),
+                                         os.path.join(root, "python")])
+    marker = "--cases is a baselines and reconverge"
+    for stage in ("loso", "insample", "far", "assemble", "all"):
+        r = subprocess.run(
+            [sys.executable,
+             os.path.join(root, "python", "UQ", "reproduce_sbli_apriori.py"),
+             "--stage", stage, "--results", str(tmp_path / "res"),
+             "--cases", "s1.0"],
+            capture_output=True, text=True, env=env, cwd=root)
+        assert marker in r.stdout, (stage, r.stdout[-300:], r.stderr[-300:])
+        assert r.returncode == 1, stage
+    # the solve stages keep the restriction: the refusal is scope, not a ban
+    r = subprocess.run(
+        [sys.executable, "-c",
+         "import sys; sys.argv = ['x', '--stage', 'baselines', '--cases',"
+         " 's1.0', '--results', 'r']; "
+         "from UQ.reproduce_sbli_apriori import main; "
+         "import argparse; print('accepted')"],
+        capture_output=True, text=True, env=env, cwd=root)
+    assert "accepted" in r.stdout, r.stderr[-300:]
+
+
 def test_numbers_completeness_is_recomputed_not_labeled(tmp_path):
     # the review's finding: presence-only completeness declared a record
     # whose every leg was an empty dictionary complete and valid
@@ -603,7 +773,7 @@ def test_numbers_completeness_is_recomputed_not_labeled(tmp_path):
                                            validate_apriori_numbers,
                                            LOSO_LEGS, INSAMPLE_LEGS)
     d = str(tmp_path)
-    consumed = _adjudication_universe(d)
+    consumed = {"gates_adjudication.json": None}
     hollow = {"gates": {"A": {}, "B": {}},
               "loso": {k: {} for k in LOSO_LEGS},
               "insample": {k: {} for k in INSAMPLE_LEGS},
@@ -653,13 +823,128 @@ def test_completeness_reaches_the_attached_control_and_conformal_seeds():
     assert f"far:control:dq_y:{fam}:{tag}:pooled" in numbers_missing(rec,
                                                                      seeds)
     rec = _complete_numbers(seeds)
-    rec["far"]["control"]["dq_y"][fam][tag]["flow"] = [{"coverage_0.9": 0.9}]
+    blk = rec["far"]["control"]["dq_y"][fam][tag]["flow"]
+    blk["per_seed"] = blk["per_seed"][:1]
     assert any("seeds" in m and "far:control" in m
                for m in numbers_missing(rec, seeds))
     # an empty conformal per-seed entry no longer counts as present
     rec = _complete_numbers(seeds)
     rec["far"]["conformal"]["per_seed"]["1"] = {"q_abs": 1.0}
     assert "far:conformal:per_seed:1" in numbers_missing(rec, seeds)
+
+
+def test_completeness_rests_on_fixed_constants_not_the_record(tmp_path):
+    # the review's fail-open finding: the control roster was read from the
+    # result's own conformal roles, so deleting a case from BOTH places
+    # passed. It is now ruled against the committed channel matrix.
+    from UQ.reproduce_sbli_apriori import numbers_missing, HELD_FOLDS
+    seeds = (0, 1)
+    rec = _complete_numbers(seeds)
+    assert not numbers_missing(rec, seeds)
+    dropped = GV_CASES[0]
+    fam = f"family_{mach_family(dropped)}"
+    del rec["far"]["control"]["dq_y"][fam][dropped]
+    roles = rec["far"]["conformal"]["roles"]
+    roles["fit_cases"] = [c for c in roles["fit_cases"] if c != dropped]
+    roles["calibration_cases"] = [c for c in roles["calibration_cases"]
+                                  if c != dropped]
+    missing = numbers_missing(rec, seeds)
+    assert f"far:control:dq_y:{fam}:{dropped}" in missing
+    assert "far:conformal:roles:case_split" in missing
+    # a shortened conformal test-case set is caught as well
+    rec = _complete_numbers(seeds)
+    del rec["far"]["conformal"]["per_seed"]["0"]["cases"][HELD_FOLDS[-1]]
+    assert (f"far:conformal:per_seed:0:{HELD_FOLDS[-1]}"
+            in numbers_missing(rec, seeds))
+    # and so are the missing independent-campaign db surfaces
+    from UQ.reproduce_sbli_apriori import INDEPENDENT_SURFACE
+    rec = _complete_numbers(seeds)
+    del rec["loso"]["db"]["s1.0"][INDEPENDENT_SURFACE]
+    assert f"loso:db:s1.0:{INDEPENDENT_SURFACE}" in numbers_missing(rec,
+                                                                    seeds)
+    rec = _complete_numbers(seeds)
+    del rec["far"]["transfer"]["db"][INDEPENDENT_SURFACE]
+    assert (f"far:transfer:db:{INDEPENDENT_SURFACE}"
+            in numbers_missing(rec, seeds))
+
+
+def test_seed_protocol_is_reported_and_the_draw_seed_is_fixed():
+    # model seeds train separately, the sampling seed is the registered 0
+    # for every draw, and both are recorded; the seed mean and min-max range
+    # are materialized for every block, not only the conformal line
+    from UQ.datasets.sbli_apriori import (SBLIAPriori, SAMPLE_SEED,
+                                          SCORE_KEYS)
+    from UQ.reproduce_sbli_apriori import numbers_missing
+    rng = np.random.default_rng(0)
+    X, Y = rng.normal(size=(120, 6)), rng.normal(size=(120, 2))
+    study = SBLIAPriori.__new__(SBLIAPriori)
+    rows = [study._fit_and_score("gauss", X, Y, X[:60], Y[:60], s,
+                                 epochs=2)[0] for s in (0, 1, 2)]
+    assert [r["model_seed"] for r in rows] == [0, 1, 2]
+    assert {r["sample_seed"] for r in rows} == {SAMPLE_SEED}
+    for key in SCORE_KEYS:
+        assert key in rows[0], key
+    # the draw is taken at the fixed seed, so a seedless-fit model scores
+    # identically whatever the model seed (the conflation the protocol
+    # forbids would have moved every number here)
+    a = study._fit_and_score("pooled", X, Y, X[:60], Y[:60], 0, epochs=2)[0]
+    b = study._fit_and_score("pooled", X, Y, X[:60], Y[:60], 2, epochs=2)[0]
+    assert a["crps"] == b["crps"]
+    summary = SBLIAPriori.seed_summary(rows)
+    assert set(summary) == {"per_seed", "model_seeds", "sample_seed",
+                            "seed_mean", "seed_min_max"}
+    assert summary["model_seeds"] == [0, 1, 2]
+    for d in range(2):
+        lo = summary["seed_min_max"]["min"]["crps"][d]
+        hi = summary["seed_min_max"]["max"]["crps"][d]
+        assert lo <= summary["seed_mean"]["crps"][d] <= hi
+    # the seed labels are reported, never averaged into a score
+    assert "model_seed" not in summary["seed_mean"]
+    # completeness requires the materialized summary on every block
+    rec = _complete_numbers((0, 1))
+    del rec["loso"]["dq_y"]["s1.0"]["models"]["flow"]["seed_mean"]
+    assert "loso:dq_y:s1.0:flow:seed_mean" in numbers_missing(rec, (0, 1))
+    rec = _complete_numbers((0, 1))
+    del rec["insample"]["db"]["models"]["gauss"]["seed_min_max"]
+    assert "insample:db:gauss:seed_min_max" in numbers_missing(rec, (0, 1))
+    # and an empty row is refused: row COUNT alone used to be the whole test
+    rec = _complete_numbers((0, 1))
+    rec["loso"]["dq_y"]["s1.0"]["models"]["flow"]["per_seed"][0] = {
+        "model_seed": 0}
+    assert any("per_seed[0]" in m for m in numbers_missing(rec, (0, 1)))
+
+
+def test_basis_gate_reports_rank_and_condition_and_reverts_on_failure():
+    # the registered gate reports rank and condition alongside the residual,
+    # and its FAILURE must revert the independent-campaign surface to raw
+    # components too (far transfer always did; the LOSO surface applied the
+    # basis map to predictions that were already raw components)
+    from UQ.datasets.sbli_apriori import SBLIAPriori
+    rng = np.random.default_rng(0)
+    n = 40
+    M = rng.normal(size=(n, 3, 3))
+    g = rng.normal(size=(n, 3))
+    ext = {"region": np.array(["interaction"] * n),
+           "db_free": np.einsum("nij,nj->ni", M, g),
+           "g_basis": g, "basis_M": M}
+    rec = SBLIAPriori.basis_feasibility(ext)
+    assert rec["gate_pass"] and rec["rel_residual_median"] < 1e-8
+    for key in ("rank_median", "rank_min", "cond_median", "cond_p90",
+                "n_rank_deficient"):
+        assert key in rec, key
+    assert rec["rank_min"] == 3 and rec["n_rank_deficient"] == 0
+    # a rank-deficient map: the third tensor is a copy of the first, so the
+    # deployed basis cannot span the target space
+    M2 = M.copy()
+    M2[:, 2, :] = M2[:, 0, :]
+    ext2 = dict(ext, basis_M=M2)
+    rec2 = SBLIAPriori.basis_feasibility(ext2)
+    # the RANK carries the deficiency; the condition number is reported over
+    # the achievable subspace (the shared convention of
+    # UQ.discrepancy.basis_diagnostics), so it stays finite and modest and
+    # is not the quantity that detects a collapsed basis
+    assert rec2["rank_min"] == 2 and rec2["n_rank_deficient"] == n
+    assert np.isfinite(rec2["cond_median"])
 
 
 def test_baseline_dns_adoption_gates_reuse(tmp_path, monkeypatch):
@@ -918,3 +1203,69 @@ def test_atomic_writers_survive_concurrent_processes(tmp_path):
     assert rec["pad"] == [rec["tag"]] * 4096
     # and no temp residue survives either writer
     assert sorted(os.listdir(d)) == ["x.npz", "y.json"]
+
+
+def _synthetic_study(n_heated=12, n_adiabatic=7):
+    """A minimal SBLIAPriori over synthetic extractions: enough structure to
+    exercise the split logic without a solver, a DNS record or training."""
+    from UQ.datasets.sbli_apriori import SBLIAPriori
+    rng = np.random.default_rng(0)
+
+    def _ext(n, with_dq=True):
+        return {"features": rng.normal(size=(n, 7)),
+                "dq": rng.normal(size=(n, 3)) if with_dq else None,
+                "db_free": rng.normal(size=(n, 3)),
+                "g_basis": rng.normal(size=(n, 3)),
+                "basis_M": rng.normal(size=(n, 3, 3)),
+                "region": np.array(["interaction"] * n)}
+
+    cases = ["s0.5", "s0.75", "s1.0", "s1.4", "s1.9"]
+    test_sets = {c: _ext(n_heated) for c in cases}
+    test_sets["adiabatic"] = _ext(n_adiabatic, with_dq=False)
+    train_sets = {c: _ext(n_heated) for c in cases + ["adiabatic"]}
+    return SBLIAPriori(test_sets, train_sets, None, None)
+
+
+def test_feasibility_reversion_reaches_the_independent_surface(monkeypatch):
+    # the registered raw-component reversion must reach EVERY surface of the
+    # db leg. Far transfer always applied it; the LOSO independent-campaign
+    # surface applied the basis map to predictions that were already raw
+    # components, silently undoing the reversion on exactly the surface the
+    # db leg's independent evidence rests on
+    from UQ.datasets.sbli_apriori import SBLIAPriori
+    study = _synthetic_study()
+    seen = []
+
+    def _stub(self, kind, X_tr, Y_tr, X_te, Y_te, seed, epochs=400,
+              component_map=None, sample_seed=0):
+        seen.append((len(X_te), component_map))
+        rng = np.random.default_rng(seed)
+        return ({"crps": [0.0]},
+                rng.normal(size=(len(X_te), 8, Y_te.shape[1])))
+
+    monkeypatch.setattr(SBLIAPriori, "_fit_and_score", _stub)
+
+    def _surface_maps():
+        # the adiabatic extraction is the only one with seven rows
+        return [cm for n, cm in seen if n == 7]
+
+    # gate PASSING: the surface is scored through the deployed basis map
+    monkeypatch.setattr(SBLIAPriori, "db_gate",
+                        lambda self: {"all_pass": True})
+    res = study.loso("db", seeds=(0,), epochs=1)
+    maps = _surface_maps()
+    assert maps and all(m is not None for m in maps)
+    assert (res["s1.0"]["independent_campaign_surface"]["representation"]
+            == "objective-basis")
+
+    # gate FAILING: the models predict raw components, so no map is applied
+    seen.clear()
+    monkeypatch.setattr(SBLIAPriori, "db_gate",
+                        lambda self: {"all_pass": False})
+    res = study.loso("db", seeds=(0,), epochs=1)
+    maps = _surface_maps()
+    assert maps and all(m is None for m in maps), "reversion not applied"
+    assert (res["s1.0"]["independent_campaign_surface"]["representation"]
+            == "raw-components")
+    # and the within-fold scoring follows the same convention
+    assert all(cm is None for n, cm in seen if n == 12)

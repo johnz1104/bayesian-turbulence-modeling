@@ -1096,3 +1096,63 @@ clause threshold changes.
     verifies in full. This changes no ruling, only the cost of making it
     once per member rather than re-reading the whole source corpus. No
     success band, null shape, fold definition or clause threshold changes.
+
+11. Protocol enforcement, scoring completion and publication lineage
+    (2026-07-27, still before any corrected-lineage extraction exists). A
+    deeper review of the substrate found six ways the implementation did not
+    yet realize this document. All are closed; none changes a success band,
+    a null shape, a fold definition or a clause threshold.
+
+    (a) The sampling seed is now distinct from the model seed everywhere.
+    Predictive draws were taken at the MODEL seed in both the ordinary
+    scoring path and the far conformal line, so the reported per-seed spread
+    mixed training variability with Monte Carlo noise, which is not the
+    estimand clause 1 of the 2026-07-21 addendum defines. Every draw is now
+    taken at the registered sampling seed 0, and both seeds are recorded in
+    every score row, every seed-resolved block and the partial identities.
+
+    (b) The objective-basis gate is completed and bound. It now reports the
+    rank and condition of the DEPLOYED map alongside the reconstruction
+    residual (conventions shared with UQ.discrepancy.basis_diagnostics: a
+    relative singular-value tolerance, the condition taken over the
+    achievable subspace, so the RANK is what reports a collapsed basis), the
+    persisted evidence carries an identity bound to the exact heated test
+    extractions it measured, and that artifact is part of the published
+    numbers' lineage. The registered raw-component reversion now reaches the
+    LOSO independent-campaign surface, which applied the basis map to
+    predictions that were already raw components and so silently undid the
+    reversion on the surface the db leg's independent evidence rests on.
+
+    (c) The registered diagnostics are produced in the original scoring
+    pass. Every score row carries reliability error and the PIT uniformity
+    p-value (on the randomized PIT, seeded at the sampling seed, since the
+    discrete statistic has the wrong null) with the PIT histogram and the
+    median absolute error, and every fold row carries the same metric set
+    read PER REGION, not coverage alone. Models are not persisted, so these
+    could not have been added afterwards without retraining.
+
+    (d) The seed-resolved reporting contract is materialized everywhere.
+    Every model, fold and configuration of every leg (LOSO, in-sample, far
+    transfer, the attached control and the independent-campaign surfaces)
+    now carries per_seed with the seed mean and the min-max range beside it,
+    the shape only the conformal line had. Seed labels are reported, never
+    averaged.
+
+    (e) Publication lineage is transitive and roster-derived. The far
+    partial binds the wall caches its conformal scale is read from; the
+    strict gate derives the expected file roster from this protocol instead
+    of trusting the roster the record declares; and every named source is
+    re-validated against its own parents (partial to extraction to fields
+    and DNS campaign, adjudication to gate record to fields and wall,
+    baseline to its DNS adoption), so a mutation anywhere in the chain
+    surfaces at the gate rather than passing on stale recorded hashes.
+
+    (f) Completeness rests on fixed constants and the CLI cannot silently
+    narrow the study. The attached control is ruled against the committed
+    channel matrix rather than the record's own declaration, per-seed rows
+    must carry the registered metric keys, the conformal test-case set and
+    the frozen fit/calibration split are ruled against the pinned rosters,
+    the independent-campaign db surfaces are required, and --cases (a
+    solve-partitioning flag) is refused for the scoring and assembling
+    stages, which would otherwise publish a partial whose identity still
+    claims the full extraction universe.

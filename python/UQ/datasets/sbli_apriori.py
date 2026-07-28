@@ -42,6 +42,51 @@ from .sbli_discrepancy import interaction_study, objective_basis
 EPOCHS = 400
 SAMPLES_PER_POINT = 128
 SEEDS = (0, 1, 2)
+# The registered sampling seed, DISTINCT from the model seed (the dated
+# seed-resolved addendum): model seeds train separately, and every
+# predictive draw is taken at this one fixed seed. Reusing the model seed
+# for the draw made the reported per-seed spread a mixture of training
+# variability and Monte Carlo noise, which is not the estimand the protocol
+# defines. Both seeds are recorded in every score row and in the identities.
+SAMPLE_SEED = 0
+
+# the score keys every row carries whatever the leg (energy_score rides only
+# on multi-component targets, so it is not in the universal set)
+SCORE_KEYS = ("coverage_0.9", "sharpness_0.9", "coverage_0.5",
+              "sharpness_0.5", "crps", "reliability_error", "pit_pvalue")
+# the pre-registered region labels a graded score is reported over
+REGIONS = ("pre_switch", "upstream", "interaction", "relaxation")
+
+
+def _reduce_tree(rows, op):
+    """Reduce a list of matching score structures elementwise with op.
+
+    Scores are nested (scalars, per-component lists, per-region dicts of the
+    same), and the protocol reports the seed mean and min-max range of ALL
+    of them, so the reduction follows the structure rather than a fixed key
+    list. Keys absent from any row are dropped (never silently averaged over
+    a shorter set), and non-numeric leaves are dropped rather than coerced.
+    """
+    if not rows:
+        return {}
+    if isinstance(rows[0], dict):
+        keys = set(rows[0])
+        for r in rows[1:]:
+            keys &= set(r)
+        out = {}
+        for k in sorted(keys):
+            red = _reduce_tree([r[k] for r in rows], op)
+            if red is not None:
+                out[k] = red
+        return out
+    if isinstance(rows[0], (list, tuple)):
+        n = min(len(r) for r in rows)
+        cols = [_reduce_tree([r[i] for r in rows], op) for i in range(n)]
+        return None if any(c is None for c in cols) else cols
+    if isinstance(rows[0], bool) or not isinstance(rows[0], (int, float)):
+        return None
+    return float(op([float(r) for r in rows]))
+
 
 # Physics schema token for every SBLI cache identity (the fingerprint
 # machinery of UQ.cache_fingerprint): bump exactly when the producing model
@@ -210,11 +255,35 @@ class SBLIAPriori:
         den = np.maximum(np.linalg.norm(db_free, axis=1), 1e-300)
         rel = num / den
         med = float(np.median(rel))
-        return {"n_interaction_samples": int(keep.sum()),
-                "rel_residual_median": med,
-                "rel_residual_p90": float(np.percentile(rel, 90)),
-                "gate_median_max": float(gate_median),
-                "gate_pass": bool(med <= gate_median)}
+        out = {"n_interaction_samples": int(keep.sum()),
+               "rel_residual_median": med,
+               "rel_residual_p90": float(np.percentile(rel, 90)),
+               "gate_median_max": float(gate_median),
+               "gate_pass": bool(med <= gate_median)}
+        # the registered gate reports the RANK and CONDITION of the deployed
+        # map alongside the residual: on a 2-D mean flow the three
+        # normalized tensors span the trace-free space, and a rank drop or a
+        # blown condition number is how an unusable basis presents even when
+        # the residual happens to look small. Same conventions as
+        # UQ.discrepancy.basis_diagnostics (relative singular-value
+        # tolerance; a rank-zero sample conditions to infinity, never to the
+        # misleading 1.0 a naive 0/0 would give).
+        sv = np.linalg.svd(M, compute_uv=False)
+        lead = np.maximum(sv[:, 0], 1e-300)
+        keep_sv = sv > 1e-10 * lead[:, None]
+        rank = keep_sv.sum(axis=1)
+        smin = np.where(keep_sv, sv, np.inf).min(axis=1)
+        cond = np.where(rank > 0, sv[:, 0] / np.maximum(smin, 1e-300),
+                        np.inf)
+        finite = np.isfinite(cond)
+        out["rank_median"] = float(np.median(rank))
+        out["rank_min"] = int(np.min(rank))
+        out["cond_median"] = (float(np.median(cond[finite]))
+                              if finite.any() else float("inf"))
+        out["cond_p90"] = (float(np.percentile(cond[finite], 90))
+                           if finite.any() else float("inf"))
+        out["n_rank_deficient"] = int((rank < M.shape[1]).sum())
+        return out
 
     @staticmethod
     def _target(extraction, leg, db_raw=False):
@@ -252,17 +321,19 @@ class SBLIAPriori:
         raise ValueError(kind)
 
     def _fit_and_score(self, kind, X_tr, Y_tr, X_te, Y_te, seed,
-                       epochs=EPOCHS, component_map=None):
+                       epochs=EPOCHS, component_map=None,
+                       sample_seed=SAMPLE_SEED):
         model = self._make(kind, X_tr.shape[1], Y_tr.shape[1], seed)
         model.fit(X_tr, Y_tr, epochs=epochs, lr=1e-3, batch=256)
-        # the committed draw-seeding pattern: the pooled diagnostic takes a
-        # seed, the torch models are seeded through the global generator
+        # the draw is taken at the REGISTERED sampling seed, never at the
+        # model seed: the two are distinct by protocol, so the per-seed
+        # spread reports training variability alone
         if kind == "pooled":
             S = np.asarray(model.sample(X_te, n_per=SAMPLES_PER_POINT,
-                                        seed=seed))
+                                        seed=sample_seed))
         else:
             import torch
-            torch.manual_seed(seed)
+            torch.manual_seed(sample_seed)
             S = np.asarray(model.sample(X_te, n_per=SAMPLES_PER_POINT))
         if component_map is not None:
             # draws live in basis-coefficient space; the pre-registered
@@ -270,26 +341,74 @@ class SBLIAPriori:
             # so the per-sample exact linear map is applied BEFORE scoring
             # and Y_te is already the component-space truth
             S = np.einsum("nij,nmj->nmi", component_map, S)
+        out = self._score_block(Y_te, S)
+        out["model_seed"] = int(seed)
+        out["sample_seed"] = int(sample_seed)
+        return out, S
+
+    @staticmethod
+    def _score_block(Y, S):
+        """The registered metric set on one (truth, draws) pair: coverage
+        and sharpness at both nominal levels, CRPS per component, the joint
+        energy score, and the calibration diagnostics the protocol names
+        alongside them (reliability error over the level grid, and the PIT
+        uniformity p-value), plus the median absolute error as the
+        region-comparable point error."""
         out = {}
         for level in (0.9, 0.5):
             covs, shps = [], []
-            for d in range(Y_te.shape[1]):
+            for d in range(Y.shape[1]):
                 cov, shp = evaluation.coverage_from_samples(
-                    Y_te[:, d], S[:, :, d], level=level)
+                    Y[:, d], S[:, :, d], level=level)
                 covs.append(float(cov))
                 shps.append(float(shp))
             out[f"coverage_{level:g}"] = covs
             out[f"sharpness_{level:g}"] = shps
-        out["crps"] = [float(evaluation.crps_ensemble(Y_te[:, d], S[:, :, d]))
-                       for d in range(Y_te.shape[1])]
-        if Y_te.shape[1] > 1:
-            out["energy_score"] = float(evaluation.energy_score(Y_te, S))
-        return out, S
+        out["crps"] = [float(evaluation.crps_ensemble(Y[:, d], S[:, :, d]))
+                       for d in range(Y.shape[1])]
+        out["reliability_error"] = [
+            float(evaluation.reliability_error(Y[:, d], S[:, :, d]))
+            for d in range(Y.shape[1])]
+        # RANDOMIZED PIT for the uniformity test: the discrete
+        # rank-of-truth-among-draws statistic has the wrong KS null (the
+        # helper says so in its own docstring), and the randomization is
+        # seeded at the registered sampling seed so the diagnostic is
+        # reproducible
+        pit = [evaluation.pit_values_randomized(Y[:, d], S[:, :, d],
+                                                seed=SAMPLE_SEED)
+               for d in range(Y.shape[1])]
+        out["pit_pvalue"] = [float(evaluation.pit_uniformity_pvalue(p))
+                             for p in pit]
+        out["pit_histogram"] = [
+            [float(v) for v in evaluation.pit_histogram(p)[0]] for p in pit]
+        out["median_abs_error"] = [
+            float(np.median(np.abs(Y[:, d] - np.median(S[:, :, d], axis=1))))
+            for d in range(Y.shape[1])]
+        if Y.shape[1] > 1:
+            out["energy_score"] = float(evaluation.energy_score(Y, S))
+        return out
+
+    @staticmethod
+    def _region_scores(Y, S, regions):
+        """The region-graded reading of the same registered metrics: the
+        protocol reports reliability and PIT diagnostics and the point error
+        PER REGION as well as per fold, not coverage alone (a global number
+        hides the interaction band, which is the region the whole study is
+        about). Regions with fewer than five samples are omitted rather than
+        reported on noise."""
+        out = {}
+        for name in REGIONS:
+            m = regions == name
+            if m.sum() < 5:
+                continue
+            out[name] = SBLIAPriori._score_block(Y[m], S[m])
+            out[name]["n"] = int(m.sum())
+        return out
 
     @staticmethod
     def _region_coverage(Y, S, regions, level=0.9):
         out = {}
-        for name in ("pre_switch", "upstream", "interaction", "relaxation"):
+        for name in REGIONS:
             m = regions == name
             if m.sum() < 5:
                 continue
@@ -297,6 +416,27 @@ class SBLIAPriori:
                 Y[m][:, d], S[m][:, :, d], level=level)[0])
                 for d in range(Y.shape[1])]
         return out
+
+    @staticmethod
+    def seed_summary(per_seed):
+        """The registered seed-resolved reporting block for one model and
+        configuration: the per-seed rows kept in full, with the seed mean
+        and the min-max range materialized alongside them (every criterion
+        is read on the mean, and the range is the reported spread). Applied
+        to every leg, not only the conformal line."""
+        # the seed bookkeeping is reported, never averaged (the mean of the
+        # seed labels is not a number about the science)
+        rows = [{k: v for k, v in r.items()
+                 if k not in ("model_seed", "sample_seed")}
+                for r in per_seed]
+        return {"per_seed": list(per_seed),
+                "model_seeds": [int(r.get("model_seed", -1))
+                                for r in per_seed],
+                "sample_seed": int(per_seed[0].get("sample_seed",
+                                                   SAMPLE_SEED)),
+                "seed_mean": _reduce_tree(rows, np.mean),
+                "seed_min_max": {"min": _reduce_tree(rows, np.min),
+                                 "max": _reduce_tree(rows, np.max)}}
 
     # ---- pre-registered splits ---------------------------------------------------
 
@@ -346,8 +486,10 @@ class SBLIAPriori:
                         component_map=cmap)
                     scores["region_coverage_0.9"] = self._region_coverage(
                         Y_te, S, regions)
+                    scores["region_scores"] = self._region_scores(
+                        Y_te, S, regions)
                     per_seed.append(scores)
-                per_model[kind] = per_seed
+                per_model[kind] = self.seed_summary(per_seed)
             results[held] = {"n_train": int(len(X_tr)),
                              "n_test": int(len(X_te)),
                              "models": per_model}
@@ -357,7 +499,13 @@ class SBLIAPriori:
                 adia = self.test_sets["adiabatic"]
                 X_ad = self._features(adia, history)
                 Y_ad = adia["db_free"]
-                cmap_ad = adia["basis_M"]
+                # under the registered feasibility reversion the models
+                # already predict RAW components, so no map is applied (the
+                # far-transfer surface has always followed this rule; this
+                # one applied basis_M to raw predictions, which is the
+                # reversion silently undone on exactly the surface the db
+                # leg's independent evidence rests on)
+                cmap_ad = None if db_raw else adia["basis_M"]
                 surface = {}
                 for kind in ("flow", "gauss", "pooled"):
                     per_seed = []
@@ -366,9 +514,11 @@ class SBLIAPriori:
                             kind, X_tr, Y_tr, X_ad, Y_ad, seed, epochs,
                             component_map=cmap_ad)
                         per_seed.append(scores)
-                    surface[kind] = per_seed
+                    surface[kind] = self.seed_summary(per_seed)
                 results[held]["independent_campaign_surface"] = {
-                    "n_test": int(len(X_ad)), "models": surface}
+                    "n_test": int(len(X_ad)), "models": surface,
+                    "representation": ("raw-components" if db_raw
+                                       else "objective-basis")}
         return results
 
     def insample(self, leg, history=False, seeds=SEEDS, epochs=EPOCHS):
@@ -396,10 +546,10 @@ class SBLIAPriori:
             cmap = None
         out = {}
         for kind in ("flow", "gauss", "pooled"):
-            out[kind] = [self._fit_and_score(kind, X_tr, Y_tr, X_te, Y_te,
-                                             seed, epochs,
-                                             component_map=cmap)[0]
-                         for seed in seeds]
+            out[kind] = self.seed_summary(
+                [self._fit_and_score(kind, X_tr, Y_tr, X_te, Y_te,
+                                     seed, epochs, component_map=cmap)[0]
+                 for seed in seeds])
         return {"n_train": int(len(X_tr)), "n_test": int(len(X_te)),
                 "models": out}
 
@@ -548,8 +698,10 @@ class SBLIAPriori:
                         component_map=cmap)
                     scores["region_coverage_0.9"] = self._region_coverage(
                         Y_te, S, regions)
+                    scores["region_scores"] = self._region_scores(
+                        Y_te, S, regions)
                     per_seed.append(scores)
-                per_model[kind] = per_seed
+                per_model[kind] = self.seed_summary(per_seed)
             results[case] = {"n_train": int(len(X_tr)),
                              "n_test": int(len(X_te)),
                              "models": per_model}
@@ -564,9 +716,9 @@ class SBLIAPriori:
             cmap_ad = None if db_raw else adia["basis_M"]
             per_model = {}
             for kind in ("flow", "gauss", "pooled"):
-                per_model[kind] = [self._fit_and_score(
+                per_model[kind] = self.seed_summary([self._fit_and_score(
                     kind, X_tr, Y_tr, X_ad, Y_ad, seed, epochs,
-                    component_map=cmap_ad)[0] for seed in seeds]
+                    component_map=cmap_ad)[0] for seed in seeds])
             results["independent_campaign_surface"] = {
                 "n_test": int(len(X_ad)), "models": per_model,
                 "baseline_route": "frozen-mean"}
@@ -597,9 +749,10 @@ class SBLIAPriori:
                 Y_te = self.attached.cases[t]["dq"][:, cols]
                 per_model = {}
                 for kind in ("flow", "gauss", "pooled"):
-                    per_model[kind] = [self._fit_and_score(
-                        kind, X_tr, Y_tr, X_te, Y_te, seed, epochs)[0]
-                        for seed in seeds]
+                    per_model[kind] = self.seed_summary([
+                        self._fit_and_score(kind, X_tr, Y_tr, X_te, Y_te,
+                                            seed, epochs)[0]
+                        for seed in seeds])
                 per_case[t] = per_model
             results[f"family_{fam}"] = per_case
         return results

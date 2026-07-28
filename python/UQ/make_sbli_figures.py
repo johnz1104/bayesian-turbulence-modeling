@@ -60,12 +60,20 @@ def _save(fig, out, name):
     print(f"wrote {name}" + (" (INTERIM)" if _INTERIM_REASON else ""))
 
 
-def _seed_dim_mean(per_seed, key):
+def _rows(block):
+    """The per-seed rows of a scored-model block (the registered
+    seed-resolved shape: per_seed with the seed mean and range alongside)."""
+    if isinstance(block, dict):
+        return block.get("per_seed") or []
+    return block or []
+
+
+def _seed_dim_mean(block, key):
     vals = []
-    for s in per_seed:
+    for s in _rows(block):
         v = np.asarray(s[key], dtype=float)
         vals.append(float(np.mean(v)))
-    return float(np.mean(vals))
+    return float(np.mean(vals)) if vals else float("nan")
 
 
 def fig_gates(numbers, records, results_dir, out):
@@ -128,9 +136,9 @@ def fig_loso(numbers, out):
         for kind in ("flow", "gauss", "pooled"):
             ys = []
             for held in folds:
-                per_seed = loso[leg][held]["models"].get(kind)
-                ys.append(_seed_dim_mean(per_seed, "coverage_0.9")
-                          if per_seed else np.nan)
+                block = loso[leg][held]["models"].get(kind)
+                ys.append(_seed_dim_mean(block, "coverage_0.9")
+                          if _rows(block) else np.nan)
             ax.plot(xs, ys, "o-", color=KIND_COLORS[kind], label=kind,
                     ms=4)
         ax.axhline(0.9, color="k", lw=0.8, ls="--")
@@ -162,7 +170,7 @@ def fig_regions(numbers, out):
         for kind in ("flow", "gauss"):
             acc = {}
             for held, block in loso[leg].items():
-                per_seed = block["models"].get(kind)
+                per_seed = _rows(block["models"].get(kind))
                 if not per_seed:
                     continue
                 for s in per_seed:

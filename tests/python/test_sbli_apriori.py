@@ -125,14 +125,25 @@ def test_loso_smoke_epoch():
     assert set(res) == set(cases)
     one = res["s0"]["models"]
     assert set(one) == {"flow", "gauss", "pooled"}
-    scores = one["flow"][0]
+    # the registered seed-resolved block: the per-seed rows with the seed
+    # mean and min-max range materialized beside them
+    block = one["flow"]
+    assert set(block) >= {"per_seed", "seed_mean", "seed_min_max"}
+    scores = block["per_seed"][0]
     assert len(scores["coverage_0.9"]) == 1
     assert "region_coverage_0.9" in scores
     for reg in scores["region_coverage_0.9"].values():
         assert 0.0 <= reg[0] <= 1.0
+    # the registered calibration diagnostics ride in the same pass, per fold
+    # and per region
+    assert "reliability_error" in scores and "pit_pvalue" in scores
+    assert scores["region_scores"]
+    # the draw is taken at the registered sampling seed, not the model seed
+    assert scores["model_seed"] == 0
+    assert scores["sample_seed"] == sbli_apriori.SAMPLE_SEED
     # the joint leg carries the energy score
     res_j = study.insample("dq_joint", history=False, seeds=(0,), epochs=1)
-    assert "energy_score" in res_j["models"]["flow"][0]
+    assert "energy_score" in res_j["models"]["flow"]["per_seed"][0]
     # the db leg exercises the feasibility gate and the basis component map
     # on the in-sample split too (this path once referenced the reversion
     # flag before computing it, a defect only this leg reaches)

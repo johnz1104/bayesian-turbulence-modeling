@@ -52,6 +52,7 @@ from UQ.datasets.sbli_apriori import (SBLIAPriori, TEST_STRIDE, SBLI_PHYSICS,
                                       extraction_fields_path,
                                       conformal_case_split)
 from UQ.datasets.heatflux_apriori import mach_family
+from UQ.datasets.gv_channel import GV_CASES
 from UQ.datasets import dns_manifest
 
 DRIVER_SEED = 0
@@ -143,9 +144,37 @@ def _partial_ident(results_dir, stage, leg, seeds, epochs):
     dns_set = (dns_manifest.FAR_SET if stage == "far"
                else dns_manifest.INTERACTION_SET)
     lin["dns"] = dns_manifest.digests(dns_set)
+    if stage == "far":
+        # the conformal line's normalizing scale is the BASELINE predicted
+        # wall flux read from the wall caches (_st_scale), so those caches
+        # are INPUTS of this stage, not neighbours: without this edge a
+        # regenerated wall record changed the published normalized coverage
+        # while the partial identity stayed valid (verified by test)
+        for c in sorted(TEST_STRIDE):
+            p = _wall_path(results_dir, c)
+            lin[os.path.basename(p)] = cfp.file_sha(p)
     return sbli_ident("apriori-partial", f"{stage}:{leg or 'all'}",
                       part={"seeds": list(seeds), "epochs": int(epochs),
+                            "sample_seed": int(sbli_apriori.SAMPLE_SEED),
                             "lineage": lin})
+
+
+def _basis_evidence_path(results_dir):
+    return os.path.join(results_dir, "basis_feasibility.json")
+
+
+def _basis_ident(results_dir, cases):
+    """Identity of the persisted objective-basis feasibility evidence: the
+    gate is a MEASUREMENT on the heated test extractions, so the record
+    binds those exact extraction caches. Published unfingerprinted it could
+    not be told apart from a reading of superseded extractions, while the
+    db legs' representation decision rests entirely on it."""
+    lin = {}
+    for c in sorted(cases):
+        p = SBLIAPriori._cache_path(results_dir, c, TEST_STRIDE[c], True)
+        lin[os.path.basename(p)] = cfp.file_sha(p)
+    return sbli_ident("basis-feasibility", "heated-test-extractions",
+                      basis={"cases": sorted(cases), "lineage": lin})
 
 
 def _save_wall(results_dir, case, w):
@@ -696,56 +725,88 @@ FAR_TRANSFER_LEGS = ("dq_y", "dq_joint", "db", "db_plates_sensitivity")
 FAR_CONFORMAL_KEYS = ("roles", "per_seed", "seed_mean", "seed_min_max")
 SCORED_MODELS = ("flow", "gauss", "pooled")
 HELD_FOLDS = ("s0.5", "s0.75", "s1.0", "s1.4", "s1.9")
+# the legs carrying the labeled independent-campaign second truth surface
+INDEPENDENT_SURFACE = "independent_campaign_surface"
+# the attached health gate's roster is the COMMITTED channel matrix, read
+# from the constant and never from the result's own declaration: deriving
+# the expectation from the record made deleting a case from both the roles
+# and the control a passing state (the review's fail-open finding)
+CONTROL_CASES = tuple(GV_CASES)
+CONTROL_FAMILIES = tuple(sorted({f"family_{mach_family(t)}"
+                                 for t in GV_CASES}))
 
 
-def _seed_rows_missing(node, path, seeds):
-    """Every scored model must carry one row per pinned seed."""
+def _seed_block_missing(node, path, seeds, regions=False):
+    """Every scored model must carry the registered seed-resolved block:
+    one row per pinned model seed, each row carrying the registered metric
+    keys, plus the materialized seed mean and min-max range. Row COUNT alone
+    was checked before, so empty rows and a missing summary both passed."""
     missing = []
     for kind in SCORED_MODELS:
-        rows = node.get(kind) if isinstance(node, dict) else None
-        if not isinstance(rows, list) or not rows:
+        block = node.get(kind) if isinstance(node, dict) else None
+        if not isinstance(block, dict) or not block:
             missing.append(f"{path}:{kind}")
+            continue
+        rows = block.get("per_seed")
+        if not isinstance(rows, list) or not rows:
+            missing.append(f"{path}:{kind}:per_seed")
         elif seeds is not None and len(rows) != len(seeds):
-            missing.append(f"{path}:{kind}[{len(rows)}/{len(seeds)} seeds]")
+            missing.append(f"{path}:{kind}:per_seed"
+                           f"[{len(rows)}/{len(seeds)} seeds]")
+        else:
+            for i, row in enumerate(rows):
+                if not isinstance(row, dict):
+                    missing.append(f"{path}:{kind}:per_seed[{i}]")
+                    continue
+                for key in sbli_apriori.SCORE_KEYS:
+                    if row.get(key) is None:
+                        missing.append(f"{path}:{kind}:per_seed[{i}]:{key}")
+                # the region-graded reading is registered alongside the
+                # fold reading, so a fold row without it is incomplete
+                if regions and not row.get("region_scores"):
+                    missing.append(f"{path}:{kind}:per_seed[{i}]"
+                                   f":region_scores")
+            got = [r.get("model_seed") for r in rows
+                   if isinstance(r, dict)]
+            if seeds is not None and got != list(seeds):
+                missing.append(f"{path}:{kind}:per_seed:model_seeds{got}")
+        if not block.get("seed_mean"):
+            missing.append(f"{path}:{kind}:seed_mean")
+        rng = block.get("seed_min_max")
+        if not isinstance(rng, dict) or not rng.get("min") or \
+                not rng.get("max"):
+            missing.append(f"{path}:{kind}:seed_min_max")
     return missing
 
 
-def _control_missing(control, roles, seeds):
-    """The attached leave-one-Mach-family-out health gate, ruled to the same
-    depth as every other block: each pinned family, each of its channel
-    cases, each scored model, one row per seed. A non-empty dictionary was
-    accepted before, so the health gate of the far-transfer clause was the
-    one line completeness never actually reached.
-
-    The expected case set is the record's OWN conformal roles (fit plus
-    calibration is exactly the channel matrix the control runs over, both
-    built from the same converged pool in the same run), so the rule needs
-    no second copy of the matrix; without usable roles the structural
-    clauses still apply."""
-    missing = []
+def _control_missing(control, seeds):
+    """The attached leave-one-Mach-family-out health gate, ruled against the
+    COMMITTED channel matrix: every pinned family, every case in it, every
+    scored model, one row per seed. A non-empty dictionary passed before, so
+    the health gate of the far-transfer clause was the one line completeness
+    never actually reached."""
     if not isinstance(control, dict) or not control:
         return ["far:control:dq_y"]
-    cases = set()
-    if isinstance(roles, dict):
-        cases = set(roles.get("fit_cases") or ()) | \
-            set(roles.get("calibration_cases") or ())
-    if cases:
-        for tag in sorted(cases):
-            fam = f"family_{mach_family(tag)}"
-            if fam not in control:
-                missing.append(f"far:control:dq_y:{fam}")
-            elif tag not in control[fam]:
-                missing.append(f"far:control:dq_y:{fam}:{tag}")
-    for fam in sorted(control):
-        block = control[fam]
-        if not isinstance(block, dict) or not block:
+    missing = []
+    for fam in CONTROL_FAMILIES:
+        if not isinstance(control.get(fam), dict) or not control[fam]:
             missing.append(f"far:control:dq_y:{fam}")
-            continue
-        for tag in sorted(block):
-            missing += _seed_rows_missing(block[tag],
-                                          f"far:control:dq_y:{fam}:{tag}",
-                                          seeds)
+    for tag in CONTROL_CASES:
+        fam = f"family_{mach_family(tag)}"
+        block = control.get(fam)
+        if not isinstance(block, dict):
+            continue                       # the family itself is reported
+        if tag not in block:
+            missing.append(f"far:control:dq_y:{fam}:{tag}")
+        else:
+            missing += _seed_block_missing(block[tag],
+                                           f"far:control:dq_y:{fam}:{tag}",
+                                           seeds)
+    for fam in sorted(control):
+        if fam not in CONTROL_FAMILIES:
+            missing.append(f"far:control:dq_y:{fam}:unregistered")
     return missing
+
 
 
 def numbers_missing(numbers, seeds=None):
@@ -771,15 +832,27 @@ def numbers_missing(numbers, seeds=None):
                 continue
             if stage == "insample":
                 # one train-on-all block per leg, no fold level
-                missing += _seed_rows_missing(node.get("models"),
-                                              f"{stage}:{leg}", seeds)
+                missing += _seed_block_missing(node.get("models"),
+                                               f"{stage}:{leg}", seeds)
                 continue
             for fold in HELD_FOLDS:
                 if fold not in node:
                     missing.append(f"{stage}:{leg}:{fold}")
                     continue
-                missing += _seed_rows_missing(node[fold].get("models"),
-                                              f"{stage}:{leg}:{fold}", seeds)
+                missing += _seed_block_missing(node[fold].get("models"),
+                                               f"{stage}:{leg}:{fold}",
+                                               seeds, regions=True)
+            if leg == "db":
+                # the labeled independent-campaign second truth surface of
+                # the db leg (scored on the s1.0 fold), a registered part of
+                # the evidence and not an optional extra
+                surf = node.get("s1.0", {}).get(INDEPENDENT_SURFACE)
+                if not isinstance(surf, dict) or not surf:
+                    missing.append(f"{stage}:db:s1.0:{INDEPENDENT_SURFACE}")
+                else:
+                    missing += _seed_block_missing(
+                        surf.get("models"),
+                        f"{stage}:db:s1.0:{INDEPENDENT_SURFACE}", seeds)
     far = numbers.get("far")
     if not isinstance(far, dict) or not far:
         missing.append("far")
@@ -793,9 +866,17 @@ def numbers_missing(numbers, seeds=None):
             if fold not in node:
                 missing.append(f"far:transfer:{leg}:{fold}")
             else:
-                missing += _seed_rows_missing(node[fold].get("models"),
-                                              f"far:transfer:{leg}:{fold}",
-                                              seeds)
+                missing += _seed_block_missing(node[fold].get("models"),
+                                               f"far:transfer:{leg}:{fold}",
+                                               seeds, regions=True)
+        if leg.startswith("db"):
+            surf = node.get(INDEPENDENT_SURFACE)
+            if not isinstance(surf, dict) or not surf:
+                missing.append(f"far:transfer:{leg}:{INDEPENDENT_SURFACE}")
+            else:
+                missing += _seed_block_missing(
+                    surf.get("models"),
+                    f"far:transfer:{leg}:{INDEPENDENT_SURFACE}", seeds)
     conformal_block = far.get("conformal")
     if not isinstance(conformal_block, dict):
         conformal_block = {}
@@ -805,11 +886,23 @@ def numbers_missing(numbers, seeds=None):
     per_seed = conformal_block.get("per_seed") or {}
     for sd in (seeds or ()):
         entry = per_seed.get(str(sd))
-        # a per-seed key must carry its scored cases, not just exist
+        # a per-seed key must carry its scored cases, and the SCORED SET is
+        # the pinned interaction roster: a shortened test-case set passed
+        # while the key was merely present
         if not isinstance(entry, dict) or not entry.get("cases"):
             missing.append(f"far:conformal:per_seed:{sd}")
-    missing += _control_missing(far.get("control", {}).get("dq_y"),
-                                conformal_block.get("roles"), seeds)
+            continue
+        for case in HELD_FOLDS:
+            if case not in entry["cases"]:
+                missing.append(f"far:conformal:per_seed:{sd}:{case}")
+    roles = conformal_block.get("roles")
+    if isinstance(roles, dict):
+        # the frozen split covers the committed matrix exactly once
+        fit = list(roles.get("fit_cases") or ())
+        cal = list(roles.get("calibration_cases") or ())
+        if sorted(fit + cal) != sorted(CONTROL_CASES) or set(fit) & set(cal):
+            missing.append("far:conformal:roles:case_split")
+    missing += _control_missing(far.get("control", {}).get("dq_y"), seeds)
     return sorted(set(missing))
 
 
@@ -905,7 +998,157 @@ def validate_apriori_numbers(results_dir, quick=False, strict=False,
     for name, sha in alin.items():
         if cfp.file_sha(os.path.join(results_dir, name)) != sha:
             return False, f"gate lineage stale for {name}"
+    # the roster the PROTOCOL requires, not the one the record declares: a
+    # restricted run publishes a valid-looking numbers file whose lineage
+    # simply names fewer sources
+    ok, why = _lineage_roster_ok(results_dir, lineage, suffix)
+    if not ok:
+        return False, why
+    # and each named source is validated against ITS OWN parents, so the
+    # chain holds all the way down: hash equality alone left a mutated
+    # fields file invisible (the partial and the numbers both still matched
+    # their recorded hashes, because nobody re-checked the extraction
+    # against the fields it was built from)
+    return _validate_lineage_recursive(results_dir, lineage, suffix,
+                                       want_seeds, want_epochs, alin)
+
+
+def _expected_rosters(results_dir, suffix):
+    """The file rosters a COMPLETE production run consumes, as the protocol
+    defines them: the assembled route (one partial per stage, or the full
+    per-leg set of a memory-bounded sweep) and the in-process all-stage
+    route (the extraction caches themselves). Every roster carries the
+    published evidence artifacts. Returned as a list of acceptable name
+    sets."""
+    always = {"gates_adjudication.json", "dns",
+              os.path.basename(_basis_evidence_path(results_dir))}
+    extraction_names = set()
+    for c in sorted(TEST_STRIDE):
+        for st in (TEST_STRIDE[c], sbli_apriori._train_stride(c)):
+            extraction_names.add(os.path.basename(
+                SBLIAPriori._cache_path(results_dir, c, st, True)))
+    rosters = [always | extraction_names]
+    stage_legs = {"loso": LOSO_LEGS, "insample": INSAMPLE_LEGS, "far": None}
+    per_stage, per_leg = set(), set()
+    for stage, legs in stage_legs.items():
+        per_stage.add(f"apriori_{stage}{suffix}.json")
+        if legs is None:
+            per_leg.add(f"apriori_{stage}{suffix}.json")
+        else:
+            for leg in legs:
+                per_leg.add(f"apriori_{stage}_{leg}{suffix}.json")
+    rosters.append(always | per_stage)
+    rosters.append(always | per_leg)
+    return rosters
+
+
+def _lineage_roster_ok(results_dir, lineage, suffix):
+    """The recorded lineage must be exactly one of the protocol rosters."""
+    got = set(lineage)
+    expected = _expected_rosters(results_dir, suffix)
+    for roster in expected:
+        if got == roster:
+            return True, ""
+    closest = min(expected, key=lambda r: len(r ^ got))
+    return False, (f"lineage roster is not a complete production roster: "
+                   f"missing {sorted(closest - got)}, unexpected "
+                   f"{sorted(got - closest)}")
+
+
+def _validate_lineage_recursive(results_dir, lineage, suffix, seeds, epochs,
+                                adjud_lineage):
+    """Validate every named source against its OWN identity and parents:
+    partial to extraction to fields and DNS, gate record to fields and wall,
+    fields to its adoption record. Each step is the file's own identity
+    check, so a mutation anywhere in the chain surfaces here."""
+    for name in sorted(lineage):
+        if name == "dns":
+            continue
+        path = os.path.join(results_dir, name)
+        if name.startswith("apriori_"):
+            stage, leg = _partial_name_parts(name, suffix)
+            status, why = cfp.check_json(
+                json.load(open(path)),
+                _partial_ident(results_dir, stage, leg, seeds, epochs))
+            if status != "match":
+                return False, f"partial {name} identity {status}: {why}"
+        elif name == os.path.basename(_basis_evidence_path(results_dir)):
+            # the gate is MEASURED on the heated test extractions (the
+            # adiabatic campaign carries no dq and never enters it)
+            status, why = cfp.check_json(
+                json.load(open(path)),
+                _basis_ident(results_dir, HELD_FOLDS))
+            if status != "match":
+                return False, (f"basis feasibility evidence identity "
+                               f"{status}: {why}")
+        elif name.startswith("extract_"):
+            case, stride = _extraction_name_parts(name)
+            if not _npz_ident_ok(path, extraction_ident(case, stride, True,
+                                                        results_dir)):
+                return False, (f"extraction {name} is not current against "
+                               f"its fields cache and DNS campaign")
+    # the extraction caches every partial consumed, and their parents
+    for case in sorted(TEST_STRIDE):
+        for st in (TEST_STRIDE[case], sbli_apriori._train_stride(case)):
+            p = SBLIAPriori._cache_path(results_dir, case, st, True)
+            if not _npz_ident_ok(p, extraction_ident(case, st, True,
+                                                     results_dir)):
+                return False, (f"extraction {os.path.basename(p)} is not "
+                               f"current against its fields cache and DNS "
+                               f"campaign")
+        tag = ("adiabatic_frozenmean" if case == "adiabatic" else case)
+        if not _npz_ident_ok(_fields_path(results_dir, tag),
+                             sbli_ident("sbli_fields", tag)):
+            return False, f"fields cache for {tag} is not identity-current"
+        status, why = _adoption_status(results_dir, tag)
+        if status != "current":
+            return False, f"baseline {tag} DNS adoption is {status}: {why}"
+    # the gate records the adjudication rests on, against their own parents
+    for name in sorted(adjud_lineage):
+        case = _gate_name_case(name)
+        if case is None:
+            continue
+        if not _json_ident_ok(os.path.join(results_dir, name),
+                              _gate_ident(results_dir, case)):
+            return False, (f"gate record {name} is not current against its "
+                           f"fields and wall caches")
+        if not _npz_ident_ok(_wall_path(results_dir, case), sbli_ident(
+                "sbli_wall", case, wall={"lineage": {"fields": cfp.file_sha(
+                    _fields_path(results_dir, case))}})):
+            return False, (f"wall record for {case} is not current against "
+                           f"its fields cache")
     return True, ""
+
+
+def _partial_name_parts(name, suffix):
+    """(stage, leg) of a partial file name; leg None for a stage partial."""
+    core = name[len("apriori_"):-len(".json")]
+    if suffix and core.endswith(suffix):
+        core = core[:-len(suffix)]
+    for stage in ("loso", "insample", "far"):
+        if core == stage:
+            return stage, None
+        if core.startswith(stage + "_"):
+            return stage, core[len(stage) + 1:]
+    return core, None
+
+
+def _extraction_name_parts(name):
+    """(case, stride) of an extraction cache file name."""
+    core = name[len("extract_"):-len(".npz")]
+    if core.endswith("_hist"):
+        core = core[:-len("_hist")]
+    case, _, stride = core.rpartition("_s")
+    sx, _, sy = stride.partition("x")
+    return case, (int(sx), int(sy))
+
+
+def _gate_name_case(name):
+    if name == "gate_a.json":
+        return "gate_a_attached"
+    if name.startswith("gate_b_") and name.endswith(".json"):
+        return name[len("gate_b_"):-len(".json")]
+    return None
 
 
 def stage_baselines(records, results_dir, quick, regen,
@@ -1093,8 +1336,10 @@ def stage_baselines(records, results_dir, quick, regen,
     heated = {c: e for c, e in study.test_sets.items()
               if e["dq"] is not None}
     if heated:
-        cfp.json_atomic(os.path.join(results_dir, "basis_feasibility.json"),
-                        study.db_gate())
+        cfp.json_atomic(_basis_evidence_path(results_dir),
+                        cfp.attach_json(study.db_gate(),
+                                        _basis_ident(results_dir,
+                                                     sorted(heated))))
     return out, study
 
 
@@ -1188,7 +1433,8 @@ def stage_far(study, seeds, epochs, records):
         case_abs, case_norm = [], []
         for tag in cal_tags:
             rec = study.attached.cases[tag]
-            torch.manual_seed(seed)
+            # the REGISTERED sampling seed, distinct from the model seed
+            torch.manual_seed(sbli_apriori.SAMPLE_SEED)
             S = np.asarray(model.sample(rec["features"], n_per=128))
             m = np.median(S[:, :, 0], axis=1)
             resid = np.abs(rec["dq"][:, 1] - m)
@@ -1200,6 +1446,8 @@ def stage_far(study, seeds, epochs, records):
         q_norm = float(conformal.conformal_quantile(
             np.asarray(case_norm), alpha=0.10))
         entry = {"q_abs": q_abs, "q_norm": q_norm,
+                 "model_seed": int(seed),
+                 "sample_seed": int(sbli_apriori.SAMPLE_SEED),
                  "calibration_case_scores": {"absolute": case_abs,
                                              "normalized": case_norm},
                  "cases": {}}
@@ -1208,7 +1456,7 @@ def stage_far(study, seeds, epochs, records):
                 continue
             X_te = study._features(ext, history=False)
             Y_te = ext["dq"][:, 1]
-            torch.manual_seed(seed)
+            torch.manual_seed(sbli_apriori.SAMPLE_SEED)
             S_te = np.asarray(model.sample(X_te, n_per=128))
             m_te = np.median(S_te[:, :, 0], axis=1)
             resid = np.abs(Y_te - m_te)
@@ -1406,7 +1654,11 @@ def main():
     ap.add_argument("--cases", default="",
                     help="comma list restricting the baseline solves (e.g. "
                          "adiabatic,s0.5); partitions run in parallel and a "
-                         "final unrestricted pass assembles the cached gates")
+                         "final unrestricted pass assembles the cached "
+                         "gates. BASELINE AND RECONVERGE STAGES ONLY: a "
+                         "scoring stage restricted this way would publish a "
+                         "partial whose identity still claims the full "
+                         "extraction universe")
     ap.add_argument("--legs", default="",
                     help="comma list restricting a loso/insample stage to "
                          "named target legs (dq_y, dq_joint, db, "
@@ -1414,6 +1666,17 @@ def main():
                          "memory-bounded path on small machines is one leg "
                          "per process, merged by the assemble stage")
     args = ap.parse_args()
+
+    # --cases partitions the SOLVES; a scoring or assembling stage
+    # restricted this way silently drops folds from the study while its
+    # partial identity still claims the full extraction universe, so the
+    # restriction is refused outside the operations it was built for, before
+    # any gate or record load runs
+    if args.cases and args.stage not in ("baselines", "reconverge"):
+        print(f"[scope] --cases is a baselines and reconverge restriction; "
+              f"the {args.stage} stage runs over the pinned case set or not "
+              f"at all")
+        sys.exit(1)
 
     np.random.seed(DRIVER_SEED)
     seeds = (0,) if args.quick else sbli_apriori.SEEDS
@@ -1577,9 +1840,12 @@ def main():
     consumed["dns"] = dns_manifest.digests(dns_manifest.FAR_SET)
     # the gate adjudication that authorized these stages is part of the
     # lineage, not just a separately validated neighbour: the numbers must
-    # name the exact ruling they were produced under
+    # name the exact ruling they were produced under, and likewise the
+    # basis-feasibility evidence the db legs' representation rests on
     consumed["gates_adjudication.json"] = cfp.file_sha(
         os.path.join(args.results, "gates_adjudication.json"))
+    consumed[os.path.basename(_basis_evidence_path(args.results))] = \
+        cfp.file_sha(_basis_evidence_path(args.results))
     cfp.json_atomic(numbers_path, cfp.attach_json(
         numbers, numbers_ident(args.results, seeds, epochs, args.quick,
                                consumed)))
