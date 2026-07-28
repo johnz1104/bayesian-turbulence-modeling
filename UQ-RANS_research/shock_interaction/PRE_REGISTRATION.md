@@ -1156,3 +1156,130 @@ clause threshold changes.
     solve-partitioning flag) is refused for the scoring and assembling
     stages, which would otherwise publish a partial whose identity still
     claims the full extraction universe.
+
+12. Closure of clause-11 enforcement gaps (2026-07-27, same day, still
+    before any corrected-lineage extraction exists). Adversarial review
+    verified the producing code in clause 11 but found that the publication
+    validator could still certify records that the producer itself would
+    never write, and that the basis diagnostic did not in fact use the
+    convention named there. These are enforcement corrections only; no
+    success band, null shape, fold definition, model, target, or threshold
+    changes.
+
+    (a) Score completeness now validates the entire registered schema, not
+    a subset: PIT histogram and median absolute error everywhere, energy
+    score on every multivariate leg, and the same metric set plus sample
+    count inside each reported region. Model and sampling seeds must equal
+    their pinned values in every row and block, and the stored seed mean and
+    min-max are recomputed from the per-seed rows rather than accepted by
+    presence.
+
+    (b) Scientific rosters are exact. Gate A and all six Gate-B cases must
+    reproduce the frozen ruling (five heated cases pass, adiabatic fails);
+    the primary and plate-sensitivity db pools must contain exactly the
+    registered GV, TBL and, where applicable, ZDC cases with no skipped
+    inputs; the conformal fit/calibration roles must equal the frozen
+    alternation rather than merely form some disjoint partition; and every
+    conformal seed and scored case carries its registered values.
+
+    (c) Nested lineage is closed over protocol constants. The gate
+    adjudication must name gate A and all six Gate-B records and reproduce
+    the frozen body; the numbers DNS edge must equal the full registered
+    FAR_SET digest map, including for the in-process all-stage route; and
+    the sampling seed is part of both the numbers identity and body.
+
+    (d) The deployed-basis rank and condition now follow the exact
+    UQ.discrepancy.basis_diagnostics convention cited by the registration:
+    eigenvalue rank tolerance on the Gram matrix and condition over its
+    achievable nonzero spectrum. The superseded direct singular-value
+    implementation used a different effective tolerance and reported the
+    square root of the registered condition.
+
+    (e) A case-restricted baseline solve is accepted only as an explicitly
+    restricted --only pass, which cannot write gate adjudication,
+    extractions, or feasibility evidence. The final serialized,
+    unrestricted pass alone may authorize Phase A.
+
+13. Phase-boundary and coupled-publication enforcement (2026-07-27, same
+    pre-extraction state). The closure audit was extended through the
+    downstream consumers so that a correct Phase-A artifact cannot be
+    bypassed or weakened on entry to the pilot or matrix. These are
+    execution and evidence-integrity rules; the coupled model, ensemble
+    sizes, convergence rule, success criteria and registered nulls are
+    unchanged.
+
+    (a) Phase P and Phase M require a strictly valid, complete Phase-A
+    numbers artifact on the same model-seed, sampling-seed, epoch, DNS,
+    gate and build lineage before generating any coupled target. Spawned
+    member workers inherit that ruling only from their live orchestrating
+    parent and from their target/member content lineage.
+
+    (b) The coupled gate consumes the same closed adjudication validator as
+    Phase A: gate A plus all six Gate-B records, their current parent
+    identities and the frozen five-pass/adiabatic-fail body. A
+    re-fingerprinted subset cannot authorize a pilot or matrix.
+
+    (c) A DNS run token is issued only after a fresh full-manifest
+    verification and is accepted only by a direct child of the issuing
+    orchestration process. A token left by a crashed or completed run
+    therefore cannot bypass a later raw-input check.
+
+    (d) A formal matrix uses exactly the three registered propagated folds.
+    A nonzero worker exit is an operationally missing artifact, never
+    reclassified as a scientifically non-converged member, and stops the
+    orchestration before publication. Each fold score binds the exact
+    target, requested-member, deterministic-family, wall, gate and DNS
+    roster; seed summaries and the any-seed instability label are
+    recomputed from the per-seed rows.
+
+    (e) The combined coupled numbers file is written final only when all
+    three fold-score artifacts pass their transitive validators, all
+    requested member records are present (their solver status may honestly
+    be non-converged), no worker failed, and the Phase-A dependency remains
+    current. Otherwise only a clearly named progress artifact is written.
+    Evidence-package figures require both strict Phase-A and strict
+    coupled-number validation; the existing explicit partial escape hatch
+    remains watermarked and non-package.
+
+    (f) The Phase-P stop is executable, not chat-only. The lineage-clean
+    pilot uses the production restart/member path for the zero-discrepancy
+    control, seed-0 running-k flow member and moderated 3C corner. Its
+    independent abort panel reuses the flow member and adds the seed-0
+    Gaussian member and a full-amplitude 3C corner with verbose traces on.
+    The artifact binds those exact targets and members, the current Phase-A
+    result, zero-check, gates and DNS. It never launches or authorizes the
+    matrix. After review, a separate identity-bound adjudication records
+    either stop or proceed-abort-off plus the natural-language rationale;
+    Phase M and every final fold score require a current proceed record.
+    No pre-review direct command may generate members outside this pilot
+    roster. Enabling an early-abort rule remains a later dated amendment;
+    absent one, the authorized matrix runs with the registered off values.
+
+    (g) The recursive Phase-A publication gate authenticates the DNS
+    adoption of every gate baseline as well as every extraction baseline.
+    In particular, Gate A and the free-running adiabatic Gate-B solve are
+    gate-only parents (the adiabatic a-priori extraction deliberately uses
+    the frozen-mean fallback), so their adoption sidecars are checked on
+    the gate-record branch of the lineage. Deleting or forging either
+    sidecar after production therefore invalidates Phase A before Phase P
+    can begin.
+
+    (h) A strict publication validation drops the process-local DNS digest
+    memo before walking its source lineage. This makes the validation a
+    fresh input ruling: an in-place source edit made after an earlier
+    digest lookup in the same process cannot remain hidden behind the
+    performance cache.
+
+    (i) Phase-A completeness also rules the human-readable protocol body
+    and labels, not only the fingerprint configuration: driver, model and
+    sampling seeds, epochs, draws per point and quick/production mode must
+    equal the registered values, while `complete` must be true and
+    `missing` exactly empty. Malformed numbers or identity JSON returns a
+    closed refusal rather than raising through a publication consumer.
+
+    (j) The same rule reaches the coupled publication: the complete Phase-M
+    protocol block (member and corner budgets, tolerance, abort-off ruling,
+    folds, model and sampling seeds, target families, amplitudes, stations
+    and deployment mask) is both fingerprinted and compared exactly. The
+    Phase-P artifact likewise requires its verbose-trace declaration, and
+    the review adjudication must name the exact pilot file it authorizes.

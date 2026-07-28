@@ -37,6 +37,7 @@ from ..generative import GenerativeDiscrepancyModel
 from ..gaussian_modelform import GaussianDiscrepancyModel
 from .heatflux_apriori import HeatFluxAPriori, PooledGaussianDiagnostic, \
     mach_family
+from .gv_channel import GV_CASES
 from .sbli_discrepancy import interaction_study, objective_basis
 
 EPOCHS = 400
@@ -53,7 +54,8 @@ SAMPLE_SEED = 0
 # the score keys every row carries whatever the leg (energy_score rides only
 # on multi-component targets, so it is not in the universal set)
 SCORE_KEYS = ("coverage_0.9", "sharpness_0.9", "coverage_0.5",
-              "sharpness_0.5", "crps", "reliability_error", "pit_pvalue")
+              "sharpness_0.5", "crps", "reliability_error", "pit_pvalue",
+              "pit_histogram", "median_abs_error")
 # the pre-registered region labels a graded score is reported over
 REGIONS = ("pre_switch", "upstream", "interaction", "relaxation")
 
@@ -232,6 +234,11 @@ class SBLIAPriori:
             train_sets[case] = SBLIAPriori._extract_cached(
                 record, base, _train_stride(case), history, results_dir)
         attached = HeatFluxAPriori.build(root=root)
+        if tuple(attached.gv) != tuple(GV_CASES):
+            raise RuntimeError(
+                "registered attached channel matrix is incomplete: "
+                f"expected {list(GV_CASES)}, loaded {attached.gv}, "
+                f"skipped {attached.skipped}")
         return SBLIAPriori(test_sets, train_sets, attached, results_dir)
 
     # ---- target and feature views ----------------------------------------------
@@ -265,24 +272,26 @@ class SBLIAPriori:
         # normalized tensors span the trace-free space, and a rank drop or a
         # blown condition number is how an unusable basis presents even when
         # the residual happens to look small. Same conventions as
-        # UQ.discrepancy.basis_diagnostics (relative singular-value
-        # tolerance; a rank-zero sample conditions to infinity, never to the
-        # misleading 1.0 a naive 0/0 would give).
-        sv = np.linalg.svd(M, compute_uv=False)
-        lead = np.maximum(sv[:, 0], 1e-300)
-        keep_sv = sv > 1e-10 * lead[:, None]
-        rank = keep_sv.sum(axis=1)
-        smin = np.where(keep_sv, sv, np.inf).min(axis=1)
-        cond = np.where(rank > 0, sv[:, 0] / np.maximum(smin, 1e-300),
+        # UQ.discrepancy.basis_diagnostics: rank and condition are taken on
+        # the basis Gram matrix, with a relative EIGENVALUE tolerance. Using
+        # a 1e-10 singular-value tolerance and sigma_max/sigma_min instead
+        # would both admit much weaker directions and report the square root
+        # of the registered condition number.
+        G = np.einsum("noi,noj->nij", M, M)
+        ev = np.maximum(np.linalg.eigvalsh(G), 0.0)
+        lead = np.maximum(ev[:, -1], 1e-300)
+        keep_ev = ev > 1e-10 * lead[:, None]
+        rank = keep_ev.sum(axis=1)
+        emin = np.where(keep_ev, ev, np.inf).min(axis=1)
+        cond = np.where(rank > 0,
+                        lead / np.minimum(emin, lead),
                         np.inf)
-        finite = np.isfinite(cond)
         out["rank_median"] = float(np.median(rank))
         out["rank_min"] = int(np.min(rank))
-        out["cond_median"] = (float(np.median(cond[finite]))
-                              if finite.any() else float("inf"))
-        out["cond_p90"] = (float(np.percentile(cond[finite], 90))
-                           if finite.any() else float("inf"))
+        out["cond_median"] = float(np.median(cond))
+        out["cond_p90"] = float(np.percentile(cond, 90))
         out["n_rank_deficient"] = int((rank < M.shape[1]).sum())
+        out["n_condition_infinite"] = int((~np.isfinite(cond)).sum())
         return out
 
     @staticmethod
@@ -341,13 +350,13 @@ class SBLIAPriori:
             # so the per-sample exact linear map is applied BEFORE scoring
             # and Y_te is already the component-space truth
             S = np.einsum("nij,nmj->nmi", component_map, S)
-        out = self._score_block(Y_te, S)
+        out = self._score_block(Y_te, S, sample_seed=sample_seed)
         out["model_seed"] = int(seed)
         out["sample_seed"] = int(sample_seed)
         return out, S
 
     @staticmethod
-    def _score_block(Y, S):
+    def _score_block(Y, S, sample_seed=SAMPLE_SEED):
         """The registered metric set on one (truth, draws) pair: coverage
         and sharpness at both nominal levels, CRPS per component, the joint
         energy score, and the calibration diagnostics the protocol names
@@ -375,7 +384,7 @@ class SBLIAPriori:
         # seeded at the registered sampling seed so the diagnostic is
         # reproducible
         pit = [evaluation.pit_values_randomized(Y[:, d], S[:, :, d],
-                                                seed=SAMPLE_SEED)
+                                                seed=sample_seed)
                for d in range(Y.shape[1])]
         out["pit_pvalue"] = [float(evaluation.pit_uniformity_pvalue(p))
                              for p in pit]
@@ -389,7 +398,7 @@ class SBLIAPriori:
         return out
 
     @staticmethod
-    def _region_scores(Y, S, regions):
+    def _region_scores(Y, S, regions, sample_seed=SAMPLE_SEED):
         """The region-graded reading of the same registered metrics: the
         protocol reports reliability and PIT diagnostics and the point error
         PER REGION as well as per fold, not coverage alone (a global number
@@ -401,7 +410,8 @@ class SBLIAPriori:
             m = regions == name
             if m.sum() < 5:
                 continue
-            out[name] = SBLIAPriori._score_block(Y[m], S[m])
+            out[name] = SBLIAPriori._score_block(
+                Y[m], S[m], sample_seed=sample_seed)
             out[name]["n"] = int(m.sum())
         return out
 
@@ -650,6 +660,13 @@ class SBLIAPriori:
                 "n_boundary_layers_expected": len(TBL_CASES),
                 "n_boundary_layers_found": n_bl,
                 "plates_sensitivity": bool(plates_sensitivity)}
+        expected = list(GV_CASES) + list(TBL_CASES)
+        if plates_sensitivity:
+            expected += list(ZDC_CASES)
+        if sorted(cases) != sorted(expected) or skipped:
+            raise RuntimeError(
+                "registered far db pool is incomplete: "
+                f"expected {expected}, loaded {cases}, skipped {skipped}")
         return (np.concatenate(X), np.concatenate(F), np.concatenate(G),
                 meta)
 

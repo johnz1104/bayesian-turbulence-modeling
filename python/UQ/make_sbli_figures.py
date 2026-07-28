@@ -32,7 +32,8 @@ from UQ.reproduce_sbli_aposteriori import (_member_path, _member_config,
                                            _corner_member_path,
                                            _load_member, KINDS, FOLDS,
                                            MODEL_SEEDS,
-                                           fold_score_lineage_ok)
+                                           fold_score_lineage_ok,
+                                           validate_aposteriori_numbers)
 from UQ.datasets.sbli_aposteriori import STATIONS
 
 KIND_COLORS = {"flow": "tab:blue", "gauss": "tab:orange",
@@ -354,8 +355,20 @@ def main():
         sys.exit(1)
     apo_numbers = {}
     p = os.path.join(args.results, "aposteriori_numbers.json")
-    if os.path.isfile(p):
+    ok, why = validate_aposteriori_numbers(args.results, strict=True)
+    if ok:
         apo_numbers = json.load(open(p))
+    elif args.allow_partial:
+        prior = f"{_INTERIM_REASON}; " if _INTERIM_REASON else ""
+        _INTERIM_REASON = prior + why
+        print(f"NOTE: rendering PARTIAL coupled evidence ({why}); every "
+              "panel is watermarked, never package these figures")
+        if os.path.isfile(p):
+            apo_numbers = json.load(open(p))
+    else:
+        print(f"a-posteriori numbers refused ({why}); rerun with "
+              f"--allow-partial for watermarked interim figures")
+        sys.exit(1)
 
     fig_gates(numbers, records, args.results, args.out)
     fig_loso(numbers, args.out)

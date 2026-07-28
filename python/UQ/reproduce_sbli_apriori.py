@@ -53,6 +53,8 @@ from UQ.datasets.sbli_apriori import (SBLIAPriori, TEST_STRIDE, SBLI_PHYSICS,
                                       conformal_case_split)
 from UQ.datasets.heatflux_apriori import mach_family
 from UQ.datasets.gv_channel import GV_CASES
+from UQ.datasets.supersonic_tbl import TBL_CASES
+from UQ.datasets.zdc_flatplate import ZDC_CASES
 from UQ.datasets import dns_manifest
 
 DRIVER_SEED = 0
@@ -712,6 +714,9 @@ def numbers_ident(results_dir, seeds, epochs, quick, lineage):
     extraction caches for an in-process all-stage run)."""
     return sbli_ident("apriori-numbers", "all-cases", numbers={
         "seeds": list(seeds), "epochs": int(epochs), "quick": bool(quick),
+        "driver_seed": DRIVER_SEED,
+        "sample_seed": int(sbli_apriori.SAMPLE_SEED),
+        "samples_per_point": int(sbli_apriori.SAMPLES_PER_POINT),
         "lineage": dict(sorted(lineage.items()))})
 
 
@@ -734,14 +739,88 @@ INDEPENDENT_SURFACE = "independent_campaign_surface"
 CONTROL_CASES = tuple(GV_CASES)
 CONTROL_FAMILIES = tuple(sorted({f"family_{mach_family(t)}"
                                  for t in GV_CASES}))
+GATE_B_CASES = tuple(sorted(TEST_STRIDE))
+GATE_B_PASS_CASES = tuple(sorted(HELD_FOLDS))
+GATE_B_FAIL_CASES = ("adiabatic",)
 
 
-def _seed_block_missing(node, path, seeds, regions=False):
+def _tree_close(a, b, rtol=1e-13, atol=1e-15):
+    """Exact-structure, floating-tolerant equality for materialized score
+    summaries. A summary is evidence derived from per-seed rows, not an
+    independent declaration; strict completeness recomputes it."""
+    if isinstance(a, dict) or isinstance(b, dict):
+        if not isinstance(a, dict) or not isinstance(b, dict) \
+                or set(a) != set(b):
+            return False
+        return all(_tree_close(a[k], b[k], rtol, atol) for k in a)
+    if isinstance(a, (list, tuple)) or isinstance(b, (list, tuple)):
+        if not isinstance(a, (list, tuple)) \
+                or not isinstance(b, (list, tuple)) or len(a) != len(b):
+            return False
+        return all(_tree_close(x, y, rtol, atol) for x, y in zip(a, b))
+    if isinstance(a, bool) or isinstance(b, bool):
+        return a is b
+    if isinstance(a, (int, float)) and isinstance(b, (int, float)):
+        return bool(np.isclose(float(a), float(b), rtol=rtol, atol=atol,
+                               equal_nan=True))
+    return a == b
+
+
+def _finite_tree(value):
+    """True for a nonempty numeric scalar/list/dict with no NaN or Inf."""
+    if isinstance(value, dict):
+        return bool(value) and all(_finite_tree(v) for v in value.values())
+    if isinstance(value, (list, tuple)):
+        return bool(value) and all(_finite_tree(v) for v in value)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    return bool(np.isfinite(float(value)))
+
+
+def _score_row_missing(row, path, multivariate=False, regions=False):
+    """Validate the registered metric schema of one score row, including
+    the same schema inside every reported region."""
+    missing = []
+    required = list(sbli_apriori.SCORE_KEYS)
+    if multivariate:
+        required.append("energy_score")
+    for key in required:
+        if key not in row or not _finite_tree(row[key]):
+            missing.append(f"{path}:{key}")
+    if not regions:
+        return missing
+    region_scores = row.get("region_scores")
+    if not isinstance(region_scores, dict) or not region_scores:
+        missing.append(f"{path}:region_scores")
+        return missing
+    if "interaction" not in region_scores:
+        missing.append(f"{path}:region_scores:interaction")
+    for region, scores in region_scores.items():
+        rpath = f"{path}:region_scores:{region}"
+        if region not in sbli_apriori.REGIONS:
+            missing.append(f"{rpath}:unregistered")
+            continue
+        if not isinstance(scores, dict):
+            missing.append(rpath)
+            continue
+        for key in required:
+            if key not in scores or not _finite_tree(scores[key]):
+                missing.append(f"{rpath}:{key}")
+        if not isinstance(scores.get("n"), int) or scores["n"] < 5:
+            missing.append(f"{rpath}:n")
+    return missing
+
+
+def _seed_block_missing(node, path, seeds, regions=False,
+                        multivariate=False):
     """Every scored model must carry the registered seed-resolved block:
     one row per pinned model seed, each row carrying the registered metric
     keys, plus the materialized seed mean and min-max range. Row COUNT alone
     was checked before, so empty rows and a missing summary both passed."""
     missing = []
+    if isinstance(node, dict):
+        for extra in sorted(set(node) - set(SCORED_MODELS)):
+            missing.append(f"{path}:{extra}:unregistered-model")
     for kind in SCORED_MODELS:
         block = node.get(kind) if isinstance(node, dict) else None
         if not isinstance(block, dict) or not block:
@@ -753,29 +832,47 @@ def _seed_block_missing(node, path, seeds, regions=False):
         elif seeds is not None and len(rows) != len(seeds):
             missing.append(f"{path}:{kind}:per_seed"
                            f"[{len(rows)}/{len(seeds)} seeds]")
-        else:
+        rows_current = isinstance(rows, list) and rows \
+            and (seeds is None or len(rows) == len(seeds))
+        if rows_current:
             for i, row in enumerate(rows):
                 if not isinstance(row, dict):
                     missing.append(f"{path}:{kind}:per_seed[{i}]")
                     continue
-                for key in sbli_apriori.SCORE_KEYS:
-                    if row.get(key) is None:
-                        missing.append(f"{path}:{kind}:per_seed[{i}]:{key}")
-                # the region-graded reading is registered alongside the
-                # fold reading, so a fold row without it is incomplete
-                if regions and not row.get("region_scores"):
-                    missing.append(f"{path}:{kind}:per_seed[{i}]"
-                                   f":region_scores")
+                rpath = f"{path}:{kind}:per_seed[{i}]"
+                missing += _score_row_missing(
+                    row, rpath, multivariate=multivariate, regions=regions)
+                if seeds is not None and row.get("model_seed") != seeds[i]:
+                    missing.append(f"{rpath}:model_seed")
+                if row.get("sample_seed") != sbli_apriori.SAMPLE_SEED:
+                    missing.append(f"{rpath}:sample_seed")
             got = [r.get("model_seed") for r in rows
                    if isinstance(r, dict)]
             if seeds is not None and got != list(seeds):
                 missing.append(f"{path}:{kind}:per_seed:model_seeds{got}")
-        if not block.get("seed_mean"):
+        if block.get("model_seeds") != list(seeds or ()):
+            missing.append(f"{path}:{kind}:model_seeds")
+        if block.get("sample_seed") != sbli_apriori.SAMPLE_SEED:
+            missing.append(f"{path}:{kind}:sample_seed")
+        if not isinstance(block.get("seed_mean"), dict) \
+                or not block["seed_mean"]:
             missing.append(f"{path}:{kind}:seed_mean")
         rng = block.get("seed_min_max")
         if not isinstance(rng, dict) or not rng.get("min") or \
                 not rng.get("max"):
             missing.append(f"{path}:{kind}:seed_min_max")
+        if rows_current and all(isinstance(r, dict) for r in rows):
+            try:
+                expected = SBLIAPriori.seed_summary(rows)
+            except (KeyError, TypeError, ValueError):
+                missing.append(f"{path}:{kind}:seed_summary:malformed")
+            else:
+                if not _tree_close(block.get("seed_mean"),
+                                   expected["seed_mean"]):
+                    missing.append(f"{path}:{kind}:seed_mean:mismatch")
+                if not _tree_close(block.get("seed_min_max"),
+                                   expected["seed_min_max"]):
+                    missing.append(f"{path}:{kind}:seed_min_max:mismatch")
     return missing
 
 
@@ -791,6 +888,14 @@ def _control_missing(control, seeds):
     for fam in CONTROL_FAMILIES:
         if not isinstance(control.get(fam), dict) or not control[fam]:
             missing.append(f"far:control:dq_y:{fam}")
+            continue
+        expected = {t for t in CONTROL_CASES
+                    if f"family_{mach_family(t)}" == fam}
+        got = set(control[fam])
+        for tag in sorted(expected - got):
+            missing.append(f"far:control:dq_y:{fam}:{tag}")
+        for tag in sorted(got - expected):
+            missing.append(f"far:control:dq_y:{fam}:{tag}:unregistered")
     for tag in CONTROL_CASES:
         fam = f"family_{mach_family(tag)}"
         block = control.get(fam)
@@ -808,8 +913,34 @@ def _control_missing(control, seeds):
     return missing
 
 
+def _db_pool_missing(node, path, plates_sensitivity):
+    """The far db training pool is a fixed scientific input roster, not
+    optional metadata. Require the exact channel/TBL pool and, for the
+    labeled sensitivity, the exact plate extension."""
+    missing = []
+    pool = node.get("pool") if isinstance(node, dict) else None
+    if not isinstance(pool, dict):
+        return [f"{path}:pool"]
+    expected = list(GV_CASES) + list(TBL_CASES)
+    if plates_sensitivity:
+        expected += list(ZDC_CASES)
+    if sorted(pool.get("cases") or ()) != sorted(expected):
+        missing.append(f"{path}:pool:cases")
+    if pool.get("skipped") != {}:
+        missing.append(f"{path}:pool:skipped")
+    if pool.get("n_boundary_layers_expected") != len(TBL_CASES):
+        missing.append(f"{path}:pool:n_boundary_layers_expected")
+    if pool.get("n_boundary_layers_found") != len(TBL_CASES):
+        missing.append(f"{path}:pool:n_boundary_layers_found")
+    if pool.get("plates_sensitivity") != bool(plates_sensitivity):
+        missing.append(f"{path}:pool:plates_sensitivity")
+    if node.get("representation") not in (
+            "objective-basis",
+            "raw-components (registered feasibility reversion)"):
+        missing.append(f"{path}:representation")
+    return missing
 
-def numbers_missing(numbers, seeds=None):
+def numbers_missing(numbers, seeds=None, frozen_gates=True):
     """RECOMPUTE what the published numbers lack, from the record itself.
 
     Returns the sorted list of absent stages, legs, folds and model rows; an
@@ -818,8 +949,29 @@ def numbers_missing(numbers, seeds=None):
     (a hand-set or stale "complete": true is overruled)."""
     missing = []
     gates = numbers.get("gates")
-    if not isinstance(gates, dict) or not gates.get("A") or not gates.get("B"):
+    if not isinstance(gates, dict) or not isinstance(gates.get("A"), dict) \
+            or not isinstance(gates.get("B"), dict) or not gates["B"]:
         missing.append("gates")
+    else:
+        if gates["A"].get("pass") is not True:
+            missing.append("gates:A:pass")
+        gate_b = gates["B"]
+        if set(gate_b) != set(GATE_B_CASES):
+            missing.append("gates:B:case_roster")
+        got_pass = sorted(c for c, row in gate_b.items()
+                          if isinstance(row, dict) and row.get("pass") is True)
+        got_fail = sorted(c for c, row in gate_b.items()
+                          if not isinstance(row, dict)
+                          or row.get("pass") is not True)
+        if frozen_gates:
+            if got_pass != list(GATE_B_PASS_CASES):
+                missing.append("gates:B:pass_roster")
+            if got_fail != list(GATE_B_FAIL_CASES):
+                missing.append("gates:B:fail_roster")
+        elif any(not isinstance(row, dict)
+                 or not isinstance(row.get("pass"), bool)
+                 for row in gate_b.values()):
+            missing.append("gates:B:pass_flags")
     for stage, legs in (("loso", LOSO_LEGS), ("insample", INSAMPLE_LEGS)):
         block = numbers.get(stage)
         if not isinstance(block, dict) or not block:
@@ -833,7 +985,9 @@ def numbers_missing(numbers, seeds=None):
             if stage == "insample":
                 # one train-on-all block per leg, no fold level
                 missing += _seed_block_missing(node.get("models"),
-                                               f"{stage}:{leg}", seeds)
+                                               f"{stage}:{leg}", seeds,
+                                               multivariate=leg in
+                                               ("dq_joint", "db"))
                 continue
             for fold in HELD_FOLDS:
                 if fold not in node:
@@ -841,7 +995,9 @@ def numbers_missing(numbers, seeds=None):
                     continue
                 missing += _seed_block_missing(node[fold].get("models"),
                                                f"{stage}:{leg}:{fold}",
-                                               seeds, regions=True)
+                                               seeds, regions=True,
+                                               multivariate=leg in
+                                               ("dq_joint", "db"))
             if leg == "db":
                 # the labeled independent-campaign second truth surface of
                 # the db leg (scored on the s1.0 fold), a registered part of
@@ -852,7 +1008,8 @@ def numbers_missing(numbers, seeds=None):
                 else:
                     missing += _seed_block_missing(
                         surf.get("models"),
-                        f"{stage}:db:s1.0:{INDEPENDENT_SURFACE}", seeds)
+                        f"{stage}:db:s1.0:{INDEPENDENT_SURFACE}", seeds,
+                        multivariate=True)
     far = numbers.get("far")
     if not isinstance(far, dict) or not far:
         missing.append("far")
@@ -868,7 +1025,10 @@ def numbers_missing(numbers, seeds=None):
             else:
                 missing += _seed_block_missing(node[fold].get("models"),
                                                f"far:transfer:{leg}:{fold}",
-                                               seeds, regions=True)
+                                               seeds, regions=True,
+                                               multivariate=leg in
+                                               ("dq_joint", "db",
+                                                "db_plates_sensitivity"))
         if leg.startswith("db"):
             surf = node.get(INDEPENDENT_SURFACE)
             if not isinstance(surf, dict) or not surf:
@@ -876,14 +1036,22 @@ def numbers_missing(numbers, seeds=None):
             else:
                 missing += _seed_block_missing(
                     surf.get("models"),
-                    f"far:transfer:{leg}:{INDEPENDENT_SURFACE}", seeds)
+                    f"far:transfer:{leg}:{INDEPENDENT_SURFACE}", seeds,
+                    multivariate=True)
+        if leg.startswith("db"):
+            missing += _db_pool_missing(
+                node, f"far:transfer:{leg}",
+                plates_sensitivity=(leg == "db_plates_sensitivity"))
     conformal_block = far.get("conformal")
     if not isinstance(conformal_block, dict):
         conformal_block = {}
     for key in FAR_CONFORMAL_KEYS:
         if not conformal_block.get(key):
             missing.append(f"far:conformal:{key}")
+    expected_fit, expected_cal = conformal_case_split(CONTROL_CASES)
     per_seed = conformal_block.get("per_seed") or {}
+    if set(per_seed) != {str(s) for s in (seeds or ())}:
+        missing.append("far:conformal:per_seed:seed_roster")
     for sd in (seeds or ()):
         entry = per_seed.get(str(sd))
         # a per-seed key must carry its scored cases, and the SCORED SET is
@@ -892,18 +1060,160 @@ def numbers_missing(numbers, seeds=None):
         if not isinstance(entry, dict) or not entry.get("cases"):
             missing.append(f"far:conformal:per_seed:{sd}")
             continue
+        if entry.get("model_seed") != sd:
+            missing.append(f"far:conformal:per_seed:{sd}:model_seed")
+        if entry.get("sample_seed") != sbli_apriori.SAMPLE_SEED:
+            missing.append(f"far:conformal:per_seed:{sd}:sample_seed")
+        if not _finite_tree(entry.get("q_abs")) \
+                or not _finite_tree(entry.get("q_norm")):
+            missing.append(f"far:conformal:per_seed:{sd}:quantiles")
+        calibration = entry.get("calibration_case_scores")
+        if not isinstance(calibration, dict) \
+                or len(calibration.get("absolute") or ()) \
+                != len(expected_cal) \
+                or len(calibration.get("normalized") or ()) \
+                != len(expected_cal) \
+                or not _finite_tree(calibration.get("absolute")) \
+                or not _finite_tree(calibration.get("normalized")):
+            missing.append(
+                f"far:conformal:per_seed:{sd}:calibration_case_scores")
+        if set(entry["cases"]) != set(HELD_FOLDS):
+            missing.append(f"far:conformal:per_seed:{sd}:case_roster")
         for case in HELD_FOLDS:
             if case not in entry["cases"]:
                 missing.append(f"far:conformal:per_seed:{sd}:{case}")
+                continue
+            row = entry["cases"][case]
+            if not isinstance(row, dict) \
+                    or not _finite_tree(row.get("absolute")) \
+                    or not _finite_tree(row.get("normalized")) \
+                    or not isinstance(row.get("n"), int) or row["n"] <= 0:
+                missing.append(f"far:conformal:per_seed:{sd}:{case}:scores")
     roles = conformal_block.get("roles")
     if isinstance(roles, dict):
-        # the frozen split covers the committed matrix exactly once
+        # the exact frozen alternation, not merely any disjoint partition of
+        # the same union (swapping fit and calibration cases changes the
+        # conformal result while satisfying the weaker check)
         fit = list(roles.get("fit_cases") or ())
         cal = list(roles.get("calibration_cases") or ())
-        if sorted(fit + cal) != sorted(CONTROL_CASES) or set(fit) & set(cal):
+        if fit != list(expected_fit) or cal != list(expected_cal) \
+                or roles.get("disjoint") is not True \
+                or roles.get("n_calibration_cases") != len(expected_cal):
             missing.append("far:conformal:roles:case_split")
+    else:
+        missing.append("far:conformal:roles:case_split")
+    if per_seed and all(str(sd) in per_seed for sd in (seeds or ())):
+        expected_mean = {}
+        expected_range = {}
+        for case in HELD_FOLDS:
+            vals_a = [per_seed[str(sd)].get("cases", {}).get(case, {}).get(
+                "absolute") for sd in (seeds or ())]
+            vals_n = [per_seed[str(sd)].get("cases", {}).get(case, {}).get(
+                "normalized") for sd in (seeds or ())]
+            if not any(v is None for v in vals_a + vals_n):
+                expected_mean[case] = {
+                    "absolute": float(np.mean(vals_a)),
+                    "normalized": float(np.mean(vals_n))}
+                expected_range[case] = {
+                    "absolute": [float(np.min(vals_a)),
+                                 float(np.max(vals_a))],
+                    "normalized": [float(np.min(vals_n)),
+                                   float(np.max(vals_n))]}
+        if not _tree_close(conformal_block.get("seed_mean"), expected_mean):
+            missing.append("far:conformal:seed_mean:mismatch")
+        if not _tree_close(conformal_block.get("seed_min_max"),
+                           expected_range):
+            missing.append("far:conformal:seed_min_max:mismatch")
     missing += _control_missing(far.get("control", {}).get("dq_y"), seeds)
     return sorted(set(missing))
+
+
+def _expected_adjud_lineage(results_dir):
+    """The exact gate-record roster authorizing every claim-bearing phase."""
+    names = ["gate_a.json"] + [
+        f"gate_b_{case}.json" for case in GATE_B_CASES]
+    return {name: cfp.file_sha(os.path.join(results_dir, name))
+            for name in names}
+
+
+def validate_gate_adjudication(results_dir, frozen=True):
+    """Validate the gate authority against protocol constants and parents.
+
+    ``frozen`` is true for every production phase: the adjudication must
+    reproduce the pre-registered five-heated-pass / adiabatic-fail ruling.
+    A quick smoke universe may measure a different outcome, but it must
+    still carry the complete roster, a disjoint pass/fail partition, and
+    gate records whose identities and pass flags agree with the
+    adjudication.  In neither mode may the record define its own expected
+    lineage by naming only a subset of gates.
+    """
+    path = os.path.join(results_dir, "gates_adjudication.json")
+    if not os.path.isfile(path):
+        return False, "gates adjudication absent"
+    try:
+        adjud = json.load(open(path))
+    except (OSError, ValueError) as exc:
+        return False, f"gates adjudication unreadable: {exc}"
+    if not isinstance(adjud, dict):
+        return False, "gates adjudication is not a record"
+    ident = adjud.get(cfp.IDENTITY_JSON_KEY)
+    if not isinstance(ident, dict) or "config_json" not in ident:
+        return False, "gates adjudication carries no identity block"
+    try:
+        ident_config = json.loads(ident["config_json"])
+    except (TypeError, ValueError):
+        return False, "gates adjudication identity config is unreadable"
+    if not isinstance(ident_config, dict) \
+            or not isinstance(ident_config.get("adjud"), dict):
+        return False, "gates adjudication identity has no adjud mapping"
+    recorded = ident_config["adjud"].get("lineage", {})
+    expected = _expected_adjud_lineage(results_dir)
+    if any(v is None for v in expected.values()):
+        absent = sorted(k for k, v in expected.items() if v is None)
+        return False, f"gate records absent: {absent}"
+    if recorded != expected:
+        got_roster = (sorted(recorded) if isinstance(recorded, dict)
+                      else type(recorded).__name__)
+        return False, (f"gate adjudication roster is not the registered "
+                       f"roster: expected {sorted(expected)}, got "
+                       f"{got_roster}")
+    status, why = cfp.check_json(adjud, sbli_ident(
+        "gates-adjudication", "all-cases",
+        adjud={"lineage": expected}))
+    if status != "match":
+        return False, f"gate adjudication identity {status}: {why}"
+    if adjud.get("gate_a_pass") is not True:
+        return False, "gate A did not pass"
+    got_pass = adjud.get("gate_b_pass_cases")
+    got_fail = adjud.get("gate_b_fail_cases")
+    if not isinstance(got_pass, list) or not isinstance(got_fail, list):
+        return False, "gate B pass/fail rosters are absent"
+    if frozen:
+        if got_pass != list(GATE_B_PASS_CASES) \
+                or got_fail != list(GATE_B_FAIL_CASES):
+            return False, ("gate adjudication body does not match the "
+                           "frozen ruling")
+    elif set(got_pass) & set(got_fail) \
+            or set(got_pass) | set(got_fail) != set(GATE_B_CASES) \
+            or len(got_pass) + len(got_fail) != len(GATE_B_CASES):
+        return False, "gate B pass/fail rosters are not an exact partition"
+
+    expected_pass = set(got_pass)
+    for name in sorted(expected):
+        case = _gate_name_case(name)
+        gate_path = os.path.join(results_dir, name)
+        try:
+            gate = json.load(open(gate_path))
+        except (OSError, ValueError) as exc:
+            return False, f"gate record {name} unreadable: {exc}"
+        if not _json_ident_ok(gate_path, _gate_ident(results_dir, case)):
+            return False, (f"gate record {name} is not current against "
+                           "its fields and wall caches")
+        should_pass = case == "gate_a_attached" or case in expected_pass
+        if gate.get("pass") is not should_pass:
+            return False, (f"gate record {name} pass flag disagrees with "
+                           "the adjudication")
+    return True, ""
 
 
 def validate_apriori_numbers(results_dir, quick=False, strict=False,
@@ -925,14 +1235,38 @@ def validate_apriori_numbers(results_dir, quick=False, strict=False,
     path = os.path.join(results_dir, f"apriori_numbers{suffix}.json")
     if not os.path.isfile(path):
         return False, "numbers file absent"
-    rec = json.load(open(path))
+    try:
+        rec = json.load(open(path))
+    except (OSError, ValueError) as exc:
+        return False, f"numbers file unreadable: {exc}"
+    if not isinstance(rec, dict):
+        return False, "numbers file is not a record"
     ident = rec.get(cfp.IDENTITY_JSON_KEY)
     if not isinstance(ident, dict) or "config_json" not in ident:
         return False, "no identity block"
-    stored = json.loads(ident["config_json"]).get("numbers", {})
+    try:
+        identity_config = json.loads(ident["config_json"])
+    except (TypeError, ValueError):
+        return False, "numbers identity config is unreadable"
+    if not isinstance(identity_config, dict) \
+            or not isinstance(identity_config.get("numbers"), dict):
+        return False, "numbers identity config has no numbers mapping"
+    stored = identity_config["numbers"]
     lineage = stored.get("lineage", {})
+    if not isinstance(lineage, dict):
+        return False, "numbers lineage is not a mapping"
+    if strict:
+        # A strict publication ruling is an input verification, not merely
+        # another identity construction. Drop all memoized source digests
+        # before walking the lineage so an in-place DNS edit made after an
+        # earlier lookup in this process cannot be hidden by the digest
+        # cache. The first source comparison below repopulates the memo once
+        # for the rest of this validation pass.
+        dns_manifest.forget(dns_manifest.FAR_SET)
     for name, sha in lineage.items():
         if name == "dns":
+            if not isinstance(sha, dict):
+                return False, "numbers DNS lineage is not a mapping"
             for ds, dg in sha.items():
                 if dns_manifest.dataset_digest(ds) != dg:
                     return False, f"dns digest stale for {ds}"
@@ -948,18 +1282,26 @@ def validate_apriori_numbers(results_dir, quick=False, strict=False,
     # completeness is RECOMPUTED from the record, never read off its own
     # label (a stale or hand-set "complete": true is overruled), and the
     # label itself must agree with the recomputation
-    missing = numbers_missing(rec, want_seeds)
+    missing = numbers_missing(rec, want_seeds, frozen_gates=not quick)
     if missing:
         return False, f"incomplete: {missing}"
-    if not rec.get("complete", False):
+    if rec.get("complete") is not True or rec.get("missing") != []:
         return False, (f"complete content carrying a not-complete label "
                        f"{rec.get('missing', 'unlabeled')}")
+    expected_dns = dns_manifest.digests(dns_manifest.FAR_SET)
+    if lineage.get("dns") != expected_dns:
+        return False, ("numbers DNS lineage is not the exact registered "
+                       f"set: expected {expected_dns}, got "
+                       f"{lineage.get('dns')}")
     if list(stored.get("seeds", [])) != want_seeds:
         return False, (f"seeds {stored.get('seeds')} do not match the "
                        f"expected {want_seeds}")
-    if int(stored.get("epochs", -1)) != want_epochs:
+    if stored.get("epochs") != want_epochs:
         return False, (f"epochs {stored.get('epochs')} do not match the "
                        f"expected {want_epochs}")
+    if stored.get("sample_seed") != sbli_apriori.SAMPLE_SEED:
+        return False, (f"sampling seed {stored.get('sample_seed')} does not "
+                       f"match the registered {sbli_apriori.SAMPLE_SEED}")
     # the identity must be the one the EXPECTED protocol configuration
     # produces over the recorded lineage: this rules the physics schema
     # token, the case set and the quick flag too, none of which the
@@ -970,6 +1312,21 @@ def validate_apriori_numbers(results_dir, quick=False, strict=False,
         return False, ("numbers identity does not match the expected "
                        "protocol configuration (physics token, case set or "
                        "quick flag)")
+    config = rec.get("config")
+    expected_body = {
+        "driver_seed": DRIVER_SEED,
+        "seeds": want_seeds,
+        "epochs": want_epochs,
+        "sample_seed": sbli_apriori.SAMPLE_SEED,
+        "samples_per_point": sbli_apriori.SAMPLES_PER_POINT,
+        "quick": bool(quick),
+    }
+    if not isinstance(config, dict):
+        return False, "numbers body carries no protocol configuration"
+    for key, value in expected_body.items():
+        if config.get(key) != value:
+            return False, (f"numbers body {key}={config.get(key)!r} does "
+                           f"not match the registered {value!r}")
     if "binding_sha" not in ident:
         return False, "no binding provenance recorded"
     live_binding = cfp.binding_provenance()
@@ -986,18 +1343,10 @@ def validate_apriori_numbers(results_dir, quick=False, strict=False,
     if "gates_adjudication.json" not in lineage:
         return False, ("numbers do not bind the gate adjudication that "
                        "authorized them")
-    adjud_path = os.path.join(results_dir, "gates_adjudication.json")
-    if not os.path.isfile(adjud_path):
-        return False, "gates adjudication absent"
-    adjud = json.load(open(adjud_path))
-    aident = adjud.get(cfp.IDENTITY_JSON_KEY)
-    if not isinstance(aident, dict) or "config_json" not in aident:
-        return False, "gates adjudication carries no identity block"
-    alin = json.loads(aident["config_json"]).get("adjud", {}).get("lineage",
-                                                                  {})
-    for name, sha in alin.items():
-        if cfp.file_sha(os.path.join(results_dir, name)) != sha:
-            return False, f"gate lineage stale for {name}"
+    ok, why = validate_gate_adjudication(results_dir, frozen=not quick)
+    if not ok:
+        return False, why
+    expected_alin = _expected_adjud_lineage(results_dir)
     # the roster the PROTOCOL requires, not the one the record declares: a
     # restricted run publishes a valid-looking numbers file whose lineage
     # simply names fewer sources
@@ -1010,7 +1359,8 @@ def validate_apriori_numbers(results_dir, quick=False, strict=False,
     # their recorded hashes, because nobody re-checked the extraction
     # against the fields it was built from)
     return _validate_lineage_recursive(results_dir, lineage, suffix,
-                                       want_seeds, want_epochs, alin)
+                                       want_seeds, want_epochs,
+                                       expected_alin)
 
 
 def _expected_rosters(results_dir, suffix):
@@ -1117,6 +1467,16 @@ def _validate_lineage_recursive(results_dir, lineage, suffix, seeds, epochs,
                     _fields_path(results_dir, case))}})):
             return False, (f"wall record for {case} is not current against "
                            f"its fields cache")
+        # Gate A and the free-running adiabatic Gate-B baseline are not
+        # extraction parents (the adiabatic a-priori surface deliberately
+        # uses the frozen-mean fallback).  Without ruling their sidecars
+        # here, deleting or forging either adoption record after Phase A
+        # left the gate record/current fields chain apparently valid even
+        # though its raw-DNS era was no longer authenticated.
+        status, why = _adoption_status(results_dir, case)
+        if status != "current":
+            return False, (f"gate baseline {case} DNS adoption is "
+                           f"{status}: {why}")
     return True, ""
 
 
@@ -1282,15 +1642,28 @@ def stage_baselines(records, results_dir, quick, regen,
         print(f"[baselines] restricted pass {sorted(only)} complete; "
               f"adjudication deferred to the unrestricted or refresh pass")
         return out, None
+    if set(out["gates"]["B"]) != set(GATE_B_CASES) \
+            or not isinstance(out["gates"].get("A"), dict):
+        print("[gates] incomplete unrestricted gate roster; refusing to "
+              "write adjudication or enter Phase A")
+        sys.exit(1)
+    pass_cases = sorted(c for c, e in out["gates"]["B"].items()
+                        if e.get("pass"))
+    fail_cases = sorted(c for c, e in out["gates"]["B"].items()
+                        if not e.get("pass"))
+    if not quick and (pass_cases != list(GATE_B_PASS_CASES)
+                      or fail_cases != list(GATE_B_FAIL_CASES)):
+        print(f"[gates] outcome changed from the frozen ruling: pass "
+              f"{pass_cases}, fail {fail_cases}; stop and adjudicate before "
+              "Phase A")
+        sys.exit(1)
     adjud = {
         "ruling": "per-case (reviewer adjudication 2026-07-18); gate "
                   "failures take the registered fallback and are excluded "
                   "from claim-bearing coupled legs",
         "gate_a_pass": bool(out["gates"].get("A", {}).get("pass", False)),
-        "gate_b_pass_cases": sorted(c for c, e in out["gates"]["B"].items()
-                                    if e.get("pass")),
-        "gate_b_fail_cases": sorted(c for c, e in out["gates"]["B"].items()
-                                    if not e.get("pass")),
+        "gate_b_pass_cases": pass_cases,
+        "gate_b_fail_cases": fail_cases,
     }
     lin = {"gate_a.json": cfp.file_sha(os.path.join(results_dir,
                                                     "gate_a.json"))}
@@ -1677,6 +2050,37 @@ def main():
               f"the {args.stage} stage runs over the pinned case set or not "
               f"at all")
         sys.exit(1)
+    if args.only and args.stage != "baselines":
+        print("[scope] --only is a baselines-stage restriction")
+        sys.exit(1)
+    if args.only:
+        requested_only = {t.strip() for t in args.only.split(",")
+                          if t.strip()}
+        allowed_only = {"gatea", "frozenmean", "gateb"}
+        if not requested_only or requested_only - allowed_only:
+            print(f"[scope] --only must be a comma set drawn from "
+                  f"{sorted(allowed_only)}")
+            sys.exit(1)
+    if args.skip_extract and args.stage != "baselines":
+        print("[scope] --skip-extract is a baselines-stage restriction")
+        sys.exit(1)
+    if args.legs and args.stage not in ("loso", "insample"):
+        print("[scope] --legs is a loso/insample-stage restriction")
+        sys.exit(1)
+    if args.legs:
+        requested_legs = {t.strip() for t in args.legs.split(",")
+                          if t.strip()}
+        allowed_legs = set(LOSO_LEGS if args.stage == "loso"
+                           else INSAMPLE_LEGS)
+        if not requested_legs or requested_legs - allowed_legs:
+            print(f"[scope] {args.stage} --legs must be drawn from "
+                  f"{sorted(allowed_legs)}")
+            sys.exit(1)
+    if args.stage == "baselines" and args.cases and not args.only:
+        print("[scope] a case-restricted baseline partition requires "
+              "--only so it cannot write a subset gate adjudication, "
+              "extraction set, or basis-feasibility record")
+        sys.exit(1)
 
     np.random.seed(DRIVER_SEED)
     seeds = (0,) if args.quick else sbli_apriori.SEEDS
@@ -1814,6 +2218,7 @@ def main():
 
     numbers["config"] = {
         "driver_seed": DRIVER_SEED, "seeds": list(seeds), "epochs": epochs,
+        "sample_seed": int(sbli_apriori.SAMPLE_SEED),
         "samples_per_point": sbli_apriori.SAMPLES_PER_POINT,
         "strides_test": {k: list(v)
                          for k, v in sbli_apriori.TEST_STRIDE.items()},
@@ -1824,7 +2229,7 @@ def main():
     # empty leg or a short seed sweep can never read as authoritative (the
     # review's completion finding). Every strict consumer recomputes the
     # same way rather than trusting this label.
-    missing = numbers_missing(numbers, seeds)
+    missing = numbers_missing(numbers, seeds, frozen_gates=not args.quick)
     numbers["complete"] = not missing
     numbers["missing"] = missing
     if missing:

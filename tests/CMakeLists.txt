@@ -149,7 +149,10 @@ if(Python3_Interpreter_FOUND)
                 ${CMAKE_CURRENT_SOURCE_DIR}/python
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
     set_tests_properties(pytest PROPERTIES
-        TIMEOUT 300
+        # The complete publication-lineage suite takes roughly 20--25
+        # minutes on the reference workstation.  A five-minute timeout made
+        # an otherwise healthy exact-tree run impossible through CTest.
+        TIMEOUT 2400
         LABELS "python"
         ENVIRONMENT "PYTHONPATH=${CMAKE_BINARY_DIR}:${CMAKE_SOURCE_DIR}/python")
 endif()

@@ -12,6 +12,7 @@ import json
 import multiprocessing
 import os
 import shutil
+import subprocess
 import sys
 
 import numpy as np
@@ -201,6 +202,189 @@ def test_seed_reduce_semantics():
     hi = apo._seed_reduce(per_seed, np.max)
     assert lo["cov"] == pytest.approx(0.6)
     assert hi["cov"] == pytest.approx(0.8)
+
+
+def test_aposteriori_completion_is_seed_and_roster_resolved():
+    """Phase M completeness distinguishes missing jobs from solver
+    non-convergence and recomputes every materialized seed aggregate."""
+    import copy
+    from UQ import reproduce_sbli_aposteriori as apo
+
+    seeds = (0, 1)
+    n_members = 4
+
+    def _method():
+        per_seed = {}
+        for seed in seeds:
+            per_seed[str(seed)] = {
+                "model_seed": seed, "sample_seed": apo.SAMPLE_SEED,
+                "n_requested": n_members, "n_found": n_members,
+                "n_converged": 3, "propagation_unstable": False,
+                "scored": True, "metric": 0.5 + 0.1 * seed,
+            }
+        return {
+            "per_seed": per_seed,
+            "seed_mean": apo._seed_reduce(per_seed, np.mean),
+            "seed_min": apo._seed_reduce(per_seed, np.min),
+            "seed_max": apo._seed_reduce(per_seed, np.max),
+            "per_seed_n_converged": {"0": 3, "1": 3},
+            "propagation_unstable_any_seed": False,
+        }
+
+    def _attached():
+        per_seed = {
+            str(seed): {
+                "model_seed": seed, "sample_seed": apo.SAMPLE_SEED,
+                "n_converged": 2, "cf_members": [0.002, 0.003],
+                "metric": 0.5 + 0.1 * seed,
+            } for seed in seeds
+        }
+        return {
+            "per_seed": per_seed,
+            "seed_mean": apo._seed_reduce(per_seed, np.mean),
+            "seed_min": apo._seed_reduce(per_seed, np.min),
+            "seed_max": apo._seed_reduce(per_seed, np.max),
+        }
+
+    def _fold(fold):
+        return {
+            "fold": fold, "n_members": n_members, "epochs": 2,
+            "quick": False, "model_seeds": list(seeds),
+            "sample_seed": apo.SAMPLE_SEED,
+            "flow": _method(), "gauss": _method(),
+            "flow_energy_reach_disabled_diagnostic": _method(),
+            "attached_control": {
+                "flow": _attached(), "gauss": _attached()},
+            "zero_control": {"status": "Converged"},
+            "corners": {
+                "d1.0": {"n_members": 3, "n_found": 3},
+                "d0.5": {"n_members": 3, "n_found": 3}},
+            "five_state": {
+                "d1.0": {"n_members": 5, "n_found": 5},
+                "d0.5": {"n_members": 5, "n_found": 5}},
+            "lineage": {},
+        }
+
+    folds = {fold: dict(_fold(fold), worker_failures=0)
+             for fold in apo.FOLDS}
+    numbers = {
+        "folds": folds,
+        "config": apo._aposteriori_protocol_config(
+            n_members, seeds, 2, False),
+    }
+    assert not apo.aposteriori_numbers_missing(
+        numbers, n_members, seeds, 2, False)
+
+    bad = copy.deepcopy(numbers)
+    bad["folds"]["s1.0"]["flow"]["per_seed"]["0"]["n_found"] -= 1
+    assert any("member_roster" in x for x in
+               apo.aposteriori_numbers_missing(
+                   bad, n_members, seeds, 2, False))
+
+    bad = copy.deepcopy(numbers)
+    bad["folds"]["s1.0"]["gauss"]["per_seed"]["1"]["sample_seed"] = 9
+    assert any("sample_seed" in x for x in
+               apo.aposteriori_numbers_missing(
+                   bad, n_members, seeds, 2, False))
+
+    bad = copy.deepcopy(numbers)
+    bad["folds"]["s1.0"]["flow"]["seed_mean"]["metric"] = 99.0
+    assert any("seed_mean" in x for x in
+               apo.aposteriori_numbers_missing(
+                   bad, n_members, seeds, 2, False))
+
+    bad = copy.deepcopy(numbers)
+    bad["folds"]["s1.0"]["worker_failures"] = 1
+    assert "fold:s1.0:worker_failures" in \
+        apo.aposteriori_numbers_missing(
+            bad, n_members, seeds, 2, False)
+
+    bad = copy.deepcopy(numbers)
+    bad["config"]["member_convergence_tol"] = 9.0
+    assert "config:member_convergence_tol" in \
+        apo.aposteriori_numbers_missing(
+            bad, n_members, seeds, 2, False)
+
+
+def test_phase_barrier_and_matrix_fold_roster_are_fail_closed(
+        tmp_path, monkeypatch):
+    from UQ import reproduce_sbli_aposteriori as apo
+    monkeypatch.setattr(
+        apo, "validate_apriori_numbers",
+        lambda *_args, **_kwargs: (False, "incomplete test Phase A"))
+    with pytest.raises(SystemExit):
+        apo._require_phase_a(str(tmp_path), False, apo.MODEL_SEEDS, 2)
+
+    root = os.path.abspath(os.path.join(_HERE, "..", ".."))
+    env = dict(os.environ)
+    env["PYTHONPATH"] = os.pathsep.join([os.path.join(root, "build"),
+                                         os.path.join(root, "python")])
+    r = subprocess.run(
+        [sys.executable,
+         os.path.join(root, "python", "UQ",
+                      "reproduce_sbli_aposteriori.py"),
+         "--stage", "orchestrate", "--results", str(tmp_path / "res"),
+         "--folds", "s1.0"],
+        capture_output=True, text=True, env=env, cwd=root)
+    assert r.returncode == 1
+    assert "exact fold roster" in r.stdout
+
+
+def test_member_refuses_a_stale_target_before_starting_solver(
+        tmp_path, monkeypatch):
+    from UQ import reproduce_sbli_aposteriori as apo
+    monkeypatch.setattr(
+        apo, "_recorded_target_dns",
+        lambda *_args: {name: "digest"
+                        for name in dm.INTERACTION_SET})
+    monkeypatch.setattr(apo, "_targets_current",
+                        lambda *_args, **_kwargs: False)
+
+    def _must_not_load(*_args, **_kwargs):
+        raise AssertionError("a stale target reached the expensive solver")
+
+    monkeypatch.setattr(apo, "_load_baseline", _must_not_load)
+    with pytest.raises(SystemExit):
+        apo.stage_member(
+            {}, str(tmp_path), "s1.0", "flow", 0, False,
+            model_seed=0, n_members=3, epochs=2)
+
+
+def test_phase_m_approval_is_separate_lineage_bound_review(
+        tmp_path, monkeypatch):
+    from UQ import reproduce_sbli_aposteriori as apo
+    d = str(tmp_path)
+    cfp.json_atomic(apo._pilot_path(d), {"complete": True})
+    cfp.json_atomic(os.path.join(d, "apriori_numbers.json"), {"x": 1})
+    cfp.json_atomic(os.path.join(d, "gates_adjudication.json"), {"x": 1})
+    monkeypatch.setattr(apo, "validate_phase_p",
+                        lambda *_args: (True, ""))
+    saved_binding = cfp._BINDING_SHA
+    cfp.set_binding_provenance("abc123")
+    apo.stage_phase_p_adjudication(
+        d, "proceed-abort-off", "review accepted the measured pilot")
+    ok, why = apo.validate_phase_m_approval(d)
+    assert ok, why
+
+    # Editing the decision without rebuilding its identity cannot turn a
+    # stop record into matrix authority (or vice versa).
+    path = os.path.join(d, apo.PHASE_P_ADJUDICATION)
+    rec = json.load(open(path))
+    rec["decision"] = "stop"
+    cfp.json_atomic(path, rec)
+    ok, why = apo.validate_phase_m_approval(d)
+    assert not ok and "identity" in why
+
+    # A body-only edit to the named evidence is also refused even though the
+    # decision/lineage fingerprint was untouched.
+    apo.stage_phase_p_adjudication(
+        d, "proceed-abort-off", "review accepted the measured pilot")
+    rec = json.load(open(path))
+    rec["pilot"] = "some_other_pilot.json"
+    cfp.json_atomic(path, rec)
+    ok, why = apo.validate_phase_m_approval(d)
+    assert not ok and "did not authorize" in why
+    cfp.set_binding_provenance(saved_binding)
 
 
 def test_json_identity_roundtrip(tmp_path):
@@ -425,6 +609,13 @@ def test_manifest_verification_is_closed_over_the_registered_set(tmp_path):
     ok, why = dm.verify_manifest(fpath, root=root)
     assert not ok and "registered datasets" in why and "zdc_plate" in why
 
+    # A malformed top-level JSON value is a closed refusal, not an
+    # AttributeError escaping through a production driver.
+    bad_path = str(tmp_path / "not_a_record.json")
+    cfp.json_atomic(bad_path, [])
+    ok, why = dm.verify_manifest(bad_path, root=root)
+    assert not ok and "not a record" in why
+
     # (d) a dataset directory removed after manifesting
     shutil.rmtree(os.path.join(root, dm.DATASETS["zdc_plate"]))
     ok, why = dm.verify_manifest(mpath, root=root)
@@ -477,29 +668,38 @@ def _complete_numbers(seeds):
     from UQ.reproduce_sbli_apriori import (LOSO_LEGS, INSAMPLE_LEGS,
                                            FAR_TRANSFER_LEGS,
                                            SCORED_MODELS, HELD_FOLDS,
-                                           INDEPENDENT_SURFACE)
-    from UQ.datasets.sbli_apriori import SCORE_KEYS, SAMPLE_SEED
+                                           INDEPENDENT_SURFACE,
+                                           GATE_B_CASES)
+    from UQ.datasets.sbli_apriori import (SCORE_KEYS, SAMPLE_SEED,
+                                          SBLIAPriori)
+    from UQ.datasets.supersonic_tbl import TBL_CASES
+    from UQ.datasets.zdc_flatplate import ZDC_CASES
 
-    def row(seed, regions=True):
+    def row(seed, regions=True, multivariate=False):
         r = {k: [0.9] for k in SCORE_KEYS}
+        if multivariate:
+            r["energy_score"] = 0.9
         r["model_seed"] = seed
         r["sample_seed"] = SAMPLE_SEED
         if regions:
-            r["region_scores"] = {"interaction": {"crps": [0.9], "n": 9}}
+            scores = {k: [0.9] for k in SCORE_KEYS}
+            if multivariate:
+                scores["energy_score"] = 0.9
+            scores["n"] = 9
+            r["region_scores"] = {"interaction": scores}
         return r
 
-    def block(regions=True):
-        return {k: {"per_seed": [row(s, regions) for s in seeds],
-                    "model_seeds": list(seeds), "sample_seed": SAMPLE_SEED,
-                    "seed_mean": {"crps": [0.9]},
-                    "seed_min_max": {"min": {"crps": [0.9]},
-                                     "max": {"crps": [0.9]}}}
+    def block(regions=True, multivariate=False):
+        return {k: SBLIAPriori.seed_summary(
+                    [row(s, regions, multivariate) for s in seeds])
                 for k in SCORED_MODELS}
 
-    def folds(surface=False):
-        out = {f: {"models": block()} for f in HELD_FOLDS}
+    def folds(multivariate=False, surface=False):
+        out = {f: {"models": block(multivariate=multivariate)}
+               for f in HELD_FOLDS}
         if surface:
-            out["s1.0"][INDEPENDENT_SURFACE] = {"models": block()}
+            out["s1.0"][INDEPENDENT_SURFACE] = {
+                "models": block(regions=False, multivariate=True)}
         return out
 
     # the attached health gate runs over the COMMITTED channel matrix
@@ -507,27 +707,67 @@ def _complete_numbers(seeds):
     for t in GV_CASES:
         control.setdefault(f"family_{mach_family(t)}", {})[t] = \
             block(regions=False)
-    transfer = {leg: folds() for leg in FAR_TRANSFER_LEGS}
+    transfer = {
+        leg: folds(multivariate=leg in ("dq_joint", "db",
+                                        "db_plates_sensitivity"))
+        for leg in FAR_TRANSFER_LEGS}
     for leg in FAR_TRANSFER_LEGS:
         if leg.startswith("db"):
-            transfer[leg][INDEPENDENT_SURFACE] = {"models": block()}
+            sensitivity = leg == "db_plates_sensitivity"
+            transfer[leg][INDEPENDENT_SURFACE] = {
+                "models": block(regions=False, multivariate=True)}
+            cases = list(GV_CASES) + list(TBL_CASES)
+            if sensitivity:
+                cases += list(ZDC_CASES)
+            transfer[leg]["pool"] = {
+                "cases": cases, "skipped": {},
+                "n_boundary_layers_expected": len(TBL_CASES),
+                "n_boundary_layers_found": len(TBL_CASES),
+                "plates_sensitivity": sensitivity}
+            transfer[leg]["representation"] = "objective-basis"
     fit, cal = conformal_case_split(GV_CASES)
+    per_seed = {
+        str(s): {
+            "q_abs": 1.0, "q_norm": 1.0,
+            "model_seed": s, "sample_seed": SAMPLE_SEED,
+            "calibration_case_scores": {
+                "absolute": [1.0] * len(cal),
+                "normalized": [1.0] * len(cal)},
+            "cases": {f: {"absolute": 0.9, "normalized": 0.9, "n": 9}
+                      for f in HELD_FOLDS}}
+        for s in seeds}
+    seed_mean = {f: {"absolute": 0.9, "normalized": 0.9}
+                 for f in HELD_FOLDS}
+    seed_range = {
+        f: {"absolute": [0.9, 0.9], "normalized": [0.9, 0.9]}
+        for f in HELD_FOLDS}
     return {
-        "gates": {"A": {"pass": True}, "B": {"s1.0": {"pass": True}}},
-        "loso": {leg: folds(surface=(leg == "db")) for leg in LOSO_LEGS},
-        "insample": {leg: {"models": block(regions=False)}
+        "gates": {
+            "A": {"pass": True},
+            "B": {case: {"pass": case != "adiabatic"}
+                  for case in GATE_B_CASES}},
+        "loso": {
+            leg: folds(multivariate=leg in ("dq_joint", "db"),
+                       surface=(leg == "db"))
+            for leg in LOSO_LEGS},
+        "insample": {
+            leg: {"models": block(
+                regions=False, multivariate=leg in ("dq_joint", "db"))}
                      for leg in INSAMPLE_LEGS},
         "far": {"transfer": transfer,
                 "control": {"dq_y": control},
                 "conformal": {"roles": {"disjoint": True,
                                         "fit_cases": list(fit),
-                                        "calibration_cases": list(cal)},
-                              "per_seed": {
-                                  str(s): {"q_abs": 1.0,
-                                           "cases": {f: {} for f in HELD_FOLDS}}
-                                  for s in seeds},
-                              "seed_mean": {"s1.0": {}},
-                              "seed_min_max": {"s1.0": {}}}},
+                                        "calibration_cases": list(cal),
+                                        "n_calibration_cases": len(cal)},
+                              "per_seed": per_seed,
+                              "seed_mean": seed_mean,
+                              "seed_min_max": seed_range}},
+        "config": {
+            "driver_seed": 0, "seeds": list(seeds), "epochs": 2,
+            "sample_seed": SAMPLE_SEED, "samples_per_point": 128,
+            "quick": False,
+        },
         "complete": True, "missing": [],
     }
 
@@ -562,13 +802,17 @@ def _production_universe(d, seeds, epochs):
     gates += [(c, f"gate_b_{c}.json") for c in sorted(TEST_STRIDE)]
     for case, name in gates:
         gp = os.path.join(d, name)
-        cfp.json_atomic(gp, cfp.attach_json({"pass": True},
+        cfp.json_atomic(gp, cfp.attach_json(
+            {"pass": case not in ("adiabatic",)},
                                             ap._gate_ident(d, case)))
         lin[name] = cfp.file_sha(gp)
     apath = os.path.join(d, "gates_adjudication.json")
     cfp.json_atomic(apath, cfp.attach_json(
-        {"gate_a_pass": True}, sbli_ident("gates-adjudication", "all-cases",
-                                          adjud={"lineage": lin})))
+        {"gate_a_pass": True,
+         "gate_b_pass_cases": list(ap.GATE_B_PASS_CASES),
+         "gate_b_fail_cases": list(ap.GATE_B_FAIL_CASES)},
+        sbli_ident("gates-adjudication", "all-cases",
+                   adjud={"lineage": lin})))
     bpath = ap._basis_evidence_path(d)
     cfp.json_atomic(bpath, cfp.attach_json(
         {"all_pass": True}, ap._basis_ident(d, ap.HELD_FOLDS)))
@@ -635,10 +879,26 @@ def test_strict_numbers_validation(tmp_path, monkeypatch):
                                        expected_seeds=(0, 1, 2),
                                        expected_epochs=2)
     assert not ok and "seeds" in why
+    # The human-readable body is evidence too: a body declaration cannot
+    # disagree with the identity or carry a stale completeness label.
+    wrong_body = _complete_numbers((0,))
+    wrong_body["config"]["epochs"] = 99
+    _publish(wrong_body)
+    ok, why = validate_apriori_numbers(
+        d, strict=True, expected_seeds=(0,), expected_epochs=2)
+    assert not ok and "body epochs" in why
+    wrong_label = _complete_numbers((0,))
+    wrong_label["missing"] = ["stale-label"]
+    _publish(wrong_label)
+    ok, why = validate_apriori_numbers(
+        d, strict=True, expected_seeds=(0,), expected_epochs=2)
+    assert not ok and "not-complete label" in why
     # a record whose identity was built for the quick universe refuses even
     # though every field-by-field check passes (the fingerprint carries the
     # physics token and the quick flag)
-    _publish(full, quick=True)
+    quick_body = _complete_numbers((0,))
+    quick_body["config"]["quick"] = True
+    _publish(quick_body, quick=True)
     ok, why = validate_apriori_numbers(d, strict=True, expected_seeds=(0,),
                                        expected_epochs=2)
     assert not ok and "protocol configuration" in why
@@ -675,6 +935,7 @@ def test_strict_validation_is_transitive_through_every_parent(tmp_path,
     # still matched, because nobody re-checked a child against its parents)
     from UQ.reproduce_sbli_apriori import (numbers_ident, _fields_path,
                                            _wall_path, _basis_evidence_path,
+                                           _adoption_path,
                                            validate_apriori_numbers)
     root = _synthetic_dns_root(str(tmp_path / "root"))
     monkeypatch.setenv("QBTM_DNS_DATA", root)
@@ -715,7 +976,8 @@ def test_strict_validation_is_transitive_through_every_parent(tmp_path,
             "fields": cfp.file_sha(_fields_path(d, "s1.0"))}})))
     ok, why = validate_apriori_numbers(d, strict=True, expected_seeds=(0,),
                                        expected_epochs=2)
-    assert not ok and "apriori_far.json" in why, why
+    assert not ok and ("apriori_far.json" in why
+                       or "gate record gate_b_s1.0.json" in why), why
 
     # (c) a mutated basis-evidence artifact: the db legs' representation
     # decision rests on it, so it is lineage and not a neighbour
@@ -729,10 +991,90 @@ def test_strict_validation_is_transitive_through_every_parent(tmp_path,
     _fresh()
     with open(_dataset_file(root, "interaction_heated"), "wb") as f:
         f.write(b"corrected campaign")
-    dm.forget(tuple(dm.DATASETS))
+    # Deliberately do not clear the process memo: strict validation itself
+    # must force a fresh source ruling.
     ok, why = validate_apriori_numbers(d, strict=True, expected_seeds=(0,),
                                        expected_epochs=2)
     assert not ok, "a superseded DNS campaign must break the chain"
+
+    # (e) gate-only baselines must carry current adoption too. Gate A and
+    # the free-running adiabatic Gate-B solve are not extraction parents,
+    # so the extraction loop cannot authenticate these sidecars for us.
+    for tag in ("gate_a_attached", "adiabatic"):
+        _fresh()
+        os.remove(_adoption_path(d, tag))
+        ok, why = validate_apriori_numbers(
+            d, strict=True, expected_seeds=(0,), expected_epochs=2)
+        assert not ok and tag in why and "adoption" in why, (tag, why)
+    cfp.set_binding_provenance(saved_binding)
+
+
+def test_strict_validation_closes_nested_gate_and_dns_rosters(tmp_path,
+                                                              monkeypatch):
+    """The top-level filename roster is insufficient when a nested identity
+    can declare fewer gates or DNS datasets and re-fingerprint itself."""
+    import UQ.reproduce_sbli_apriori as ap
+    from UQ.datasets.sbli_apriori import (TEST_STRIDE, _train_stride,
+                                          SBLIAPriori)
+    root = _synthetic_dns_root(str(tmp_path / "root"))
+    monkeypatch.setenv("QBTM_DNS_DATA", root)
+    dm.forget(tuple(dm.DATASETS))
+    d = str(tmp_path / "results")
+    os.makedirs(d)
+    saved_binding = cfp._BINDING_SHA
+    cfp.set_binding_provenance("abc123")
+
+    # A re-fingerprinted adjudication containing only one Gate-B case must
+    # not define its own expected roster.
+    consumed = _production_universe(d, (0,), 2)
+    apath = os.path.join(d, "gates_adjudication.json")
+    adjud = json.load(open(apath))
+    old_lineage = json.loads(
+        adjud[cfp.IDENTITY_JSON_KEY]["config_json"])["adjud"]["lineage"]
+    reduced = {k: v for k, v in old_lineage.items()
+               if k in ("gate_a.json", "gate_b_s1.0.json")}
+    cfp.json_atomic(apath, cfp.attach_json(
+        {"gate_a_pass": True, "gate_b_pass_cases": ["s1.0"],
+         "gate_b_fail_cases": []},
+        sbli_ident("gates-adjudication", "all-cases",
+                   adjud={"lineage": reduced})))
+    # Phase P/M consumes this same closed adjudication validator before it
+    # can generate a target or member; a re-fingerprinted subset cannot
+    # authorize the coupled path.
+    import UQ.reproduce_sbli_aposteriori as apo
+    monkeypatch.setattr(apo, "_require_manifest",
+                        lambda *_args, **_kwargs: None)
+    with pytest.raises(SystemExit):
+        apo._require_gates(d, "s1.0")
+    consumed["gates_adjudication.json"] = cfp.file_sha(apath)
+    cfp.json_atomic(os.path.join(d, "apriori_numbers.json"),
+                    cfp.attach_json(_complete_numbers((0,)),
+                                    ap.numbers_ident(d, (0,), 2, False,
+                                                     consumed)))
+    ok, why = ap.validate_apriori_numbers(
+        d, strict=True, expected_seeds=(0,), expected_epochs=2)
+    assert not ok and "gate adjudication roster" in why
+
+    # The accepted in-process all-stage route must bind the full FAR_SET,
+    # not merely carry a key named "dns".
+    _production_universe(d, (0,), 2)
+    lineage = {}
+    for case in sorted(TEST_STRIDE):
+        for stride in (TEST_STRIDE[case], _train_stride(case)):
+            p = SBLIAPriori._cache_path(d, case, stride, True)
+            lineage[os.path.basename(p)] = cfp.file_sha(p)
+    lineage["gates_adjudication.json"] = cfp.file_sha(
+        os.path.join(d, "gates_adjudication.json"))
+    lineage["basis_feasibility.json"] = cfp.file_sha(
+        os.path.join(d, "basis_feasibility.json"))
+    lineage["dns"] = {}
+    cfp.json_atomic(os.path.join(d, "apriori_numbers.json"),
+                    cfp.attach_json(_complete_numbers((0,)),
+                                    ap.numbers_ident(d, (0,), 2, False,
+                                                     lineage)))
+    ok, why = ap.validate_apriori_numbers(
+        d, strict=True, expected_seeds=(0,), expected_epochs=2)
+    assert not ok and "DNS lineage" in why
     cfp.set_binding_provenance(saved_binding)
 
 
@@ -755,15 +1097,18 @@ def test_cases_restriction_is_refused_outside_solve_stages(tmp_path):
             capture_output=True, text=True, env=env, cwd=root)
         assert marker in r.stdout, (stage, r.stdout[-300:], r.stderr[-300:])
         assert r.returncode == 1, stage
-    # the solve stages keep the restriction: the refusal is scope, not a ban
+    # A baseline partition is safe only when --only marks it restricted;
+    # without that flag it used to overwrite the all-case adjudication and
+    # basis evidence with its subset before failing Gate A.
+    env["QBTM_DNS_DATA"] = str(tmp_path / "absent_dns")
     r = subprocess.run(
-        [sys.executable, "-c",
-         "import sys; sys.argv = ['x', '--stage', 'baselines', '--cases',"
-         " 's1.0', '--results', 'r']; "
-         "from UQ.reproduce_sbli_apriori import main; "
-         "import argparse; print('accepted')"],
+        [sys.executable,
+         os.path.join(root, "python", "UQ", "reproduce_sbli_apriori.py"),
+         "--stage", "baselines", "--results", str(tmp_path / "res"),
+         "--cases", "s1.0"],
         capture_output=True, text=True, env=env, cwd=root)
-    assert "accepted" in r.stdout, r.stderr[-300:]
+    assert "case-restricted baseline partition requires --only" in r.stdout
+    assert r.returncode == 1
 
 
 def test_numbers_completeness_is_recomputed_not_labeled(tmp_path):
@@ -868,6 +1213,63 @@ def test_completeness_rests_on_fixed_constants_not_the_record(tmp_path):
             in numbers_missing(rec, seeds))
 
 
+def test_completeness_validates_full_metric_seed_and_pool_contract():
+    """Presence is not enough: every registered metric, seed, scientific
+    roster and derived seed summary is ruled against the protocol."""
+    from UQ.reproduce_sbli_apriori import numbers_missing
+    seeds = (0, 1)
+
+    rec = _complete_numbers(seeds)
+    row = rec["loso"]["dq_y"]["s1.0"]["models"]["flow"]["per_seed"][0]
+    row["sample_seed"] = 9
+    assert any(m.endswith("per_seed[0]:sample_seed")
+               for m in numbers_missing(rec, seeds))
+
+    rec = _complete_numbers(seeds)
+    row = rec["loso"]["dq_y"]["s1.0"]["models"]["flow"]["per_seed"][0]
+    del row["pit_histogram"]
+    assert any(m.endswith("per_seed[0]:pit_histogram")
+               for m in numbers_missing(rec, seeds))
+
+    rec = _complete_numbers(seeds)
+    row = rec["loso"]["dq_joint"]["s1.0"]["models"]["flow"]["per_seed"][0]
+    del row["energy_score"]
+    assert any(m.endswith("per_seed[0]:energy_score")
+               for m in numbers_missing(rec, seeds))
+
+    rec = _complete_numbers(seeds)
+    row = rec["loso"]["dq_y"]["s1.0"]["models"]["flow"]["per_seed"][0]
+    row["region_scores"] = {"bogus": {}}
+    missing = numbers_missing(rec, seeds)
+    assert any("region_scores:interaction" in m for m in missing)
+    assert any("region_scores:bogus:unregistered" in m for m in missing)
+
+    rec = _complete_numbers(seeds)
+    block = rec["loso"]["dq_y"]["s1.0"]["models"]["flow"]
+    block["seed_mean"]["crps"] = [123.0]
+    assert any(m.endswith("seed_mean:mismatch")
+               for m in numbers_missing(rec, seeds))
+
+    rec = _complete_numbers(seeds)
+    del rec["gates"]["B"]["s1.4"]
+    assert "gates:B:case_roster" in numbers_missing(rec, seeds)
+
+    rec = _complete_numbers(seeds)
+    del rec["far"]["transfer"]["db"]["pool"]
+    assert "far:transfer:db:pool" in numbers_missing(rec, seeds)
+
+    rec = _complete_numbers(seeds)
+    roles = rec["far"]["conformal"]["roles"]
+    roles["fit_cases"][0], roles["calibration_cases"][0] = (
+        roles["calibration_cases"][0], roles["fit_cases"][0])
+    assert "far:conformal:roles:case_split" in numbers_missing(rec, seeds)
+
+    rec = _complete_numbers(seeds)
+    rec["far"]["conformal"]["per_seed"]["0"]["cases"]["s1.0"] = {}
+    assert ("far:conformal:per_seed:0:s1.0:scores"
+            in numbers_missing(rec, seeds))
+
+
 def test_seed_protocol_is_reported_and_the_draw_seed_is_fixed():
     # model seeds train separately, the sampling seed is the registered 0
     # for every draw, and both are recorded; the seed mean and min-max range
@@ -930,7 +1332,7 @@ def test_basis_gate_reports_rank_and_condition_and_reverts_on_failure():
     rec = SBLIAPriori.basis_feasibility(ext)
     assert rec["gate_pass"] and rec["rel_residual_median"] < 1e-8
     for key in ("rank_median", "rank_min", "cond_median", "cond_p90",
-                "n_rank_deficient"):
+                "n_rank_deficient", "n_condition_infinite"):
         assert key in rec, key
     assert rec["rank_min"] == 3 and rec["n_rank_deficient"] == 0
     # a rank-deficient map: the third tensor is a copy of the first, so the
@@ -945,6 +1347,19 @@ def test_basis_gate_reports_rank_and_condition_and_reverts_on_failure():
     # is not the quantity that detects a collapsed basis
     assert rec2["rank_min"] == 2 and rec2["n_rank_deficient"] == n
     assert np.isfinite(rec2["cond_median"])
+    # Near-degenerate directions use the exact Gram-eigenvalue convention
+    # of discrepancy.basis_diagnostics. A direct 1e-10 SINGULAR-value
+    # threshold would incorrectly retain this 1e-7 direction and report the
+    # square root of the registered condition.
+    M3 = np.zeros((1, 3, 3))
+    M3[0] = np.diag([1.0, 1e-7, 0.0])
+    g3 = np.ones((1, 3))
+    ext3 = {"region": np.array(["interaction"]),
+            "db_free": np.einsum("nij,nj->ni", M3, g3),
+            "g_basis": g3, "basis_M": M3}
+    rec3 = SBLIAPriori.basis_feasibility(ext3)
+    assert rec3["rank_min"] == 1
+    assert rec3["cond_median"] == pytest.approx(1.0)
 
 
 def test_baseline_dns_adoption_gates_reuse(tmp_path, monkeypatch):
@@ -1097,38 +1512,59 @@ def test_run_token_is_bound_to_the_verified_manifest(tmp_path):
     tpath = str(tmp_path / "token.json")
     dm.write_manifest(mpath, root=root)
     assert dm.verify_manifest(mpath, root=root)[0]
-    dm.write_run_token(tpath, mpath)
-    ok, why = dm.verify_run_token(tpath, mpath)
+    dm.write_run_token(tpath, mpath, root=root)
+    # Model a direct worker of this token-writing process. A caller that is
+    # not its child cannot reuse the token (including after a crash).
+    ok, why = dm.verify_run_token(tpath, mpath,
+                                  worker_parent_pid=os.getpid())
     assert ok, why
+    ctx = multiprocessing.get_context("fork")
+    q = ctx.Queue()
+    p = ctx.Process(target=_verify_token_as_direct_child,
+                    args=(q, tpath, mpath))
+    p.start()
+    p.join(10)
+    assert p.exitcode == 0
+    assert q.get(timeout=1)[0]
+    ok, why = dm.verify_run_token(tpath, mpath)
+    assert not ok and "orchestrating parent" in why
     # a re-manifested (even identical) record is a different file: the token
     # names the exact manifest its parent verified
     with open(_dataset_file(root, "interaction_heated"), "wb") as f:
         f.write(b"corrected campaign")
     dm.write_manifest(mpath, root=root)
-    ok, why = dm.verify_run_token(tpath, mpath)
+    ok, why = dm.verify_run_token(tpath, mpath,
+                                  worker_parent_pid=os.getpid())
     assert not ok and "manifest changed" in why
     # a token whose digests are edited and identity reforged still refuses:
     # it must agree with the manifest record digest for digest
-    dm.write_run_token(tpath, mpath)
+    dm.write_run_token(tpath, mpath, root=root)
     tok = json.load(open(tpath))
     body = {k: tok[k] for k in dm.TOKEN_FIELDS}
     body["digests"] = dict(body["digests"])
     body["digests"]["interaction_heated"] = "0000000000000000"
     cfp.json_atomic(tpath, cfp.attach_json(body, dm.token_ident(body)))
-    ok, why = dm.verify_run_token(tpath, mpath)
+    ok, why = dm.verify_run_token(tpath, mpath,
+                                  worker_parent_pid=os.getpid())
     assert not ok and "digests" in why
     # and a narrowed token cannot claim coverage it does not have
-    dm.write_run_token(tpath, mpath)
+    dm.write_run_token(tpath, mpath, root=root)
     tok = json.load(open(tpath))
     body = {k: tok[k] for k in dm.TOKEN_FIELDS}
     body["digests"] = {"interaction_heated":
                        body["digests"]["interaction_heated"]}
     cfp.json_atomic(tpath, cfp.attach_json(body, dm.token_ident(body)))
-    assert not dm.verify_run_token(tpath, mpath)[0]
+    assert not dm.verify_run_token(
+        tpath, mpath, worker_parent_pid=os.getpid())[0]
     # a missing token never passes
     os.remove(tpath)
-    ok, why = dm.verify_run_token(tpath, mpath)
+    ok, why = dm.verify_run_token(tpath, mpath,
+                                  worker_parent_pid=os.getpid())
     assert not ok and "absent" in why
+
+
+def _verify_token_as_direct_child(queue, token_path, manifest_path):
+    queue.put(dm.verify_run_token(token_path, manifest_path))
 
 
 def test_faradiab_targets_bind_the_attached_training_pool(tmp_path,

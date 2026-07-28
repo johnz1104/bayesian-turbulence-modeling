@@ -70,7 +70,8 @@ from UQ.datasets.sbli_aposteriori import (
     N_MEMBERS, MEMBER_SEED, STATIONS)
 from UQ.reproduce_sbli_apriori import (
     _all_records, _configure, _fields_path, _wall_path, sbli_ident,
-    _require_adoption, GATE_A_CF, GATE_A_STATION)
+    _require_adoption, _tree_close, validate_apriori_numbers,
+    validate_gate_adjudication, GATE_A_CF, GATE_A_STATION)
 from UQ.datasets import dns_manifest
 
 FOLDS = ("s0.5", "s1.0", "s1.9")
@@ -117,6 +118,24 @@ CORNER_LABELS = ("1C_d1", "2C_d1", "3C_d1",
                  "1C_vmax_d1", "1C_vmin_d1", "2C_vmax_d1", "2C_vmin_d1",
                  "1C_vmax_d0.5", "1C_vmin_d0.5", "2C_vmax_d0.5",
                  "2C_vmin_d0.5", "zero_control")
+PILOT_FOLD = "s1.0"
+PILOT_MODEL_SEED = MODEL_SEEDS[0]
+PILOT_MEMBER_SPECS = (
+    ("zero_control", {"corner": "zero_control"}),
+    ("registered_flow", {"kind": "flow", "index": 0,
+                         "model_seed": PILOT_MODEL_SEED}),
+    ("moderated_corner", {"corner": "3C_d0.5"}),
+    # The independent early-abort panel: the representative flow member is
+    # shared with the three-solve pilot, with a Gaussian member and a slow
+    # full-amplitude corner added. Phase M remains abort-off unless a later
+    # dated amendment changes the registered constants.
+    ("panel_gauss", {"kind": "gauss", "index": 0,
+                     "model_seed": PILOT_MODEL_SEED}),
+    ("panel_full_corner", {"corner": "3C_d1"}),
+)
+PHASE_P_ADJUDICATION = "phase_p_adjudication.json"
+PILOT_TRACE_MODE = ("QBTM_SBLI_VERBOSE=1; preserve the detached process "
+                    "log with this artifact")
 
 
 def _is_exploratory(fold):
@@ -160,7 +179,7 @@ def _corner_member_path(results_dir, fold, lab):
                         f"member_{fold}_corner_{lab}.npz")
 
 
-def _targets_lineage(results_dir, fold, attached=False):
+def _targets_lineage(results_dir, fold, attached=False, dns_digests=None):
     """Content hashes of every upstream cache a target file is built from:
     the heated extraction caches at both strides (the fold models and the
     feasibility gate consume them) and the conditioning-case converged
@@ -187,12 +206,13 @@ def _targets_lineage(results_dir, fold, attached=False):
     dns_set = dns_manifest.INTERACTION_SET
     if _is_exploratory(fold):
         dns_set = dns_set + dns_manifest.ATTACHED_DQ_SET
-    lin["dns"] = dns_manifest.digests(dns_set)
+    lin["dns"] = (dns_manifest.digests(dns_set)
+                  if dns_digests is None else dict(dns_digests))
     return lin
 
 
 def _targets_config(results_dir, fold, kind, model_seed, n_members, epochs,
-                    representation, attached=False):
+                    representation, attached=False, dns_digests=None):
     """Target-file identity: fold, method, model seed, sampling seed,
     training cases, epochs, the mask constants, the baseline source, the
     db representation, and the exact upstream content hashes."""
@@ -208,10 +228,12 @@ def _targets_config(results_dir, fold, kind, model_seed, n_members, epochs,
                              else fold)),
         "mask": {"y_min": 0.05, "y_max": sbli_aposteriori.MASK_Y_MAX,
                  "k_floor": sbli_aposteriori.MASK_K_FLOOR},
-        "lineage": _targets_lineage(results_dir, fold, attached=attached)})
+        "lineage": _targets_lineage(
+            results_dir, fold, attached=attached,
+            dns_digests=dns_digests)})
 
 
-def _corners_config(results_dir, fold):
+def _corners_config(results_dir, fold, dns_digests=None):
     """Deterministic-family target identity (corners, five-state, the zero
     control): per fold, no seed dimension; the conditioning fields are the
     only upstream."""
@@ -222,7 +244,18 @@ def _corners_config(results_dir, fold):
                  "k_floor": sbli_aposteriori.MASK_K_FLOOR},
         "lineage": {f"fields_{fold}.npz": cfp.file_sha(
             _fields_path(results_dir, fold)),
-            "dns": dns_manifest.digests(dns_manifest.INTERACTION_SET)}})
+            "dns": (dns_manifest.digests(dns_manifest.INTERACTION_SET)
+                    if dns_digests is None else dict(dns_digests))}})
+
+
+def _corners_current(results_dir, fold, dns_digests=None):
+    path = _targets_path(results_dir, fold, "corners")
+    if not os.path.isfile(path):
+        return False
+    status, _ = cfp.check(
+        np.load(path), _corners_config(
+            results_dir, fold, dns_digests=dns_digests))
+    return status == "match"
 
 
 def _member_config(results_dir, fold, kind=None, corner=None, index=None,
@@ -348,7 +381,7 @@ def _load_baseline(records, case, results_dir, quick, with_shock=True,
 
 
 def _targets_current(results_dir, fold, kind, model_seed, n_members,
-                     epochs, attached=False):
+                     epochs, attached=False, dns_digests=None):
     """True when the stored target file matches its full identity computed
     with the STORED representation and the CURRENT upstream lineage. A
     current file is never rewritten (a rewrite changes its content hash and
@@ -370,7 +403,8 @@ def _targets_current(results_dir, fold, kind, model_seed, n_members,
     status, _ = cfp.check({k: z[k] for k in z.files},
                           _targets_config(results_dir, fold, kind,
                                           model_seed, n_members, epochs,
-                                          rep, attached=attached))
+                                          rep, attached=attached,
+                                          dns_digests=dns_digests))
     return status == "match"
 
 
@@ -546,22 +580,49 @@ def stage_targets_far(records, results_dir, quick, n_members, epochs):
           f"{meta['wall_time_s']}s (exploratory)")
 
 
+def _recorded_target_dns(results_dir, fold):
+    """The manifest digest subset a verified worker uses for a cheap target
+    identity check. The worker's live-parent token (or the standalone full
+    manifest pass) has already authenticated this exact manifest."""
+    manifest = json.load(open(_manifest_path(results_dir)))
+    entries = manifest["datasets"]
+    names = dns_manifest.INTERACTION_SET
+    if _is_exploratory(fold):
+        names = names + dns_manifest.ATTACHED_DQ_SET
+    return {name: entries[name]["digest"] for name in names}
+
+
 def stage_member(records, results_dir, fold, kind, index, quick,
-                 attached=False, corner=None, model_seed=None):
+                 attached=False, corner=None, model_seed=None,
+                 n_members=N_MEMBERS, epochs=sbli_apriori.EPOCHS):
     """One injected coupled solve, warm-started from the baseline. The
     fold "faradiab" is the attached-trained far-transfer propagation into
     the adiabatic interaction configuration (dq-only targets, exploratory
     namespace). corner="zero_control" is the exact zero-discrepancy control
     of the fold (db = 0, dq = 0: bit-exact baseline reproduction by the
     discrete contract, run once per fold)."""
+    target_kind = kind[:-4] if (kind or "").endswith("_noq") else kind
+    energy_reach = not (kind or "").endswith("_noq")
+    recorded_dns = _recorded_target_dns(results_dir, fold)
+    if corner is not None:
+        current = _corners_current(
+            results_dir, fold, dns_digests=recorded_dns)
+    else:
+        current = _targets_current(
+            results_dir, fold, target_kind, model_seed, n_members, epochs,
+            attached=attached, dns_digests=recorded_dns)
+    if not current:
+        print("[member] target identity is absent or stale against its "
+              "extractions, conditioning fields, protocol and verified DNS "
+              "manifest; refusing the coupled solve")
+        sys.exit(1)
+
     case = "adiabatic" if (attached or fold == "faradiab") else fold
     record = records[case]
     base, _ = _load_baseline(records, case, results_dir, quick,
                              with_shock=not attached, member_caps=True,
                              corner_caps=corner is not None)
 
-    target_kind = kind[:-4] if (kind or "").endswith("_noq") else kind
-    energy_reach = not (kind or "").endswith("_noq")
     if corner is not None:
         tg = np.load(_targets_path(results_dir, fold, "corners"))
         b_base_t = np.asarray(tg["b_base"], dtype=float)
@@ -662,7 +723,8 @@ def _seed_reduce(per_seed, fn):
     min and max give the reported seed spread."""
     def red(vs):
         if all(isinstance(v, dict) for v in vs):
-            keys = sorted(set.intersection(*[set(v) for v in vs]))
+            keys = sorted(set.intersection(*[set(v) for v in vs])
+                          - {"model_seed", "sample_seed"})
             out = {}
             for k in keys:
                 r = red([v[k] for v in vs])
@@ -697,6 +759,7 @@ def _score_one_ensemble(results_dir, fold, kind, model_seed, n_members,
     out["n_found"] = sum(1 for p, c in zip(paths, cfgs)
                          if _member_current(p, c))
     out["model_seed"] = model_seed
+    out["sample_seed"] = SAMPLE_SEED
     conv_m = [m for m in members if "Converged" in m["status"]]
     if conv_m:
         # the pre-registered realizability-in-the-running-solve clause on
@@ -719,7 +782,17 @@ def _baseline_wall(results_dir, case):
     return {k: np.asarray(z[k]) for k in ("x_star", "Cf", "Cp", "qw", "St")}
 
 
-def stage_score(records, results_dir, fold, n_members):
+def _fold_score_ident(fold, n_members, model_seeds, epochs, quick, lineage):
+    """Identity of one scored fold, including every consumed artifact."""
+    return sbli_ident("fold-score", fold, score={
+        "n_members": int(n_members), "model_seeds": list(model_seeds),
+        "sample_seed": SAMPLE_SEED, "epochs": int(epochs),
+        "quick": bool(quick), "lineage": dict(sorted(lineage.items()))})
+
+
+def stage_score(records, results_dir, fold, n_members,
+                model_seeds=MODEL_SEEDS, epochs=sbli_apriori.EPOCHS,
+                quick=False):
     """Assemble one fold's ensembles into the scored record: per model seed
     separately (never pooled), with the seed mean and min-max spread, the
     any-seed 18-of-24 instability label, and the content-hash lineage of
@@ -731,12 +804,14 @@ def stage_score(records, results_dir, fold, n_members):
         sys.exit(1)
     record = records[fold]
     bwall = _baseline_wall(results_dir, fold)
-    out = {"fold": fold, "n_members": n_members,
-           "model_seeds": list(MODEL_SEEDS), "sample_seed": SAMPLE_SEED}
+    model_seeds = tuple(model_seeds)
+    out = {"fold": fold, "n_members": n_members, "epochs": int(epochs),
+           "quick": bool(quick), "model_seeds": list(model_seeds),
+           "sample_seed": SAMPLE_SEED}
     lineage = {}
     for kind in KINDS + ("flow_noq",):
         per_seed = {}
-        for ms in MODEL_SEEDS:
+        for ms in model_seeds:
             sc, members = _score_one_ensemble(
                 results_dir, fold, kind, ms, n_members, record, bwall,
                 lineage)
@@ -768,14 +843,20 @@ def stage_score(records, results_dir, fold, n_members):
     # target-file lineage for every seed and kind, plus the baseline wall
     # and gate records the comparisons consume
     for kind in KINDS:
-        for ms in MODEL_SEEDS:
-            p = _targets_path(results_dir, fold, kind, model_seed=ms)
-            lineage[os.path.basename(p)] = cfp.file_sha(p)
+        for ms in model_seeds:
+            for attached in (False, True):
+                p = _targets_path(results_dir, fold, kind,
+                                  attached=attached, model_seed=ms)
+                lineage[os.path.basename(p)] = cfp.file_sha(p)
     p = _targets_path(results_dir, fold, "corners")
     lineage[os.path.basename(p)] = cfp.file_sha(p)
-    for name in (f"wall_{fold}.npz", "gate_a.json",
-                 "gates_adjudication.json"):
+    root_sources = [f"wall_{fold}.npz", "gate_a.json",
+                    "gates_adjudication.json"]
+    if not quick:
+        root_sources.append(PHASE_P_ADJUDICATION)
+    for name in root_sources:
         lineage[name] = cfp.file_sha(os.path.join(results_dir, name))
+    lineage["dns"] = dns_manifest.digests(dns_manifest.INTERACTION_SET)
 
     # the exact zero-discrepancy control (once per fold): status and the
     # wall drift against the fold baseline (the contract's field check)
@@ -859,7 +940,7 @@ def stage_score(records, results_dir, fold, n_members):
     att = {"cf_baseline": cf_base, "cf_data": GATE_A_CF}
     for kind in KINDS:
         per_seed = {}
-        for ms in MODEL_SEEDS:
+        for ms in model_seeds:
             cfs = []
             n_conv = 0
             for i in range(n_members):
@@ -879,6 +960,7 @@ def stage_score(records, results_dir, fold, n_members):
                                            m["wall"]["Cf"])))
             base_err = abs(cf_base - GATE_A_CF)
             per_seed[str(ms)] = {
+                "model_seed": int(ms), "sample_seed": SAMPLE_SEED,
                 "n_converged": n_conv,
                 "cf_members": cfs,
                 # the REGISTERED criteria: member error to the MEASURED
@@ -900,31 +982,721 @@ def stage_score(records, results_dir, fold, n_members):
     out["lineage"] = lineage
     path = os.path.join(_apo_dir(results_dir, fold),
                         f"fold_scores_{fold}.json")
-    cfp.json_atomic(path, cfp.attach_json(out, sbli_ident(
-        "fold-score", fold, score={"n_members": n_members,
-                                   "model_seeds": list(MODEL_SEEDS),
-                                   "sample_seed": SAMPLE_SEED})))
+    cfp.json_atomic(path, cfp.attach_json(
+        out, _fold_score_ident(fold, n_members, model_seeds, epochs, quick,
+                               lineage)))
     print(f"[score {fold}] wrote {path}")
     return out
 
 
-def fold_score_lineage_ok(results_dir, fold):
-    """Transitive validation of a fold score for downstream consumers
-    (figures, the memo): every file hash the score recorded must still
-    match the file on disk. Names resolve in the fold's aposteriori
-    directory first, then the results root."""
+def _expected_fold_score_lineage(results_dir, fold, n_members,
+                                 model_seeds, quick=False):
+    """Exact target/member/source roster consumed by a complete fold."""
+    paths = []
+    for kind in KINDS:
+        for ms in model_seeds:
+            paths.extend([
+                _targets_path(results_dir, fold, kind, model_seed=ms),
+                _targets_path(results_dir, fold, kind, attached=True,
+                              model_seed=ms),
+            ])
+    paths.append(_targets_path(results_dir, fold, "corners"))
+    for kind in KINDS + ("flow_noq",):
+        for ms in model_seeds:
+            paths.extend(_member_path(
+                results_dir, fold, kind, i, model_seed=ms)
+                for i in range(n_members))
+    for kind in KINDS:
+        for ms in model_seeds:
+            paths.extend(_member_path(
+                results_dir, fold, kind, i, attached=True, model_seed=ms)
+                for i in range(n_members))
+    paths.extend(_corner_member_path(results_dir, fold, label)
+                 for label in CORNER_LABELS)
+    paths.extend([
+        os.path.join(results_dir, f"wall_{fold}.npz"),
+        os.path.join(results_dir, "gate_a.json"),
+        os.path.join(results_dir, "gates_adjudication.json"),
+    ])
+    if not quick:
+        paths.append(os.path.join(results_dir, PHASE_P_ADJUDICATION))
+    out = {os.path.basename(path): cfp.file_sha(path) for path in paths}
+    out["dns"] = dns_manifest.digests(dns_manifest.INTERACTION_SET)
+    return out
+
+
+def _fold_score_missing(rec, fold, n_members, model_seeds, epochs, quick):
+    """Recompute the structural completeness of a scored coupled fold."""
+    missing = []
+    if rec.get("fold") != fold:
+        missing.append("fold")
+    if rec.get("n_members") != n_members:
+        missing.append("n_members")
+    if rec.get("model_seeds") != list(model_seeds):
+        missing.append("model_seeds")
+    if rec.get("sample_seed") != SAMPLE_SEED:
+        missing.append("sample_seed")
+    if rec.get("epochs") != int(epochs):
+        missing.append("epochs")
+    if rec.get("quick") is not bool(quick):
+        missing.append("quick")
+    seed_keys = {str(s) for s in model_seeds}
+    for key in ("flow", "gauss",
+                "flow_energy_reach_disabled_diagnostic"):
+        block = rec.get(key)
+        if not isinstance(block, dict):
+            missing.append(key)
+            continue
+        per_seed = block.get("per_seed")
+        if not isinstance(per_seed, dict) or set(per_seed) != seed_keys:
+            missing.append(f"{key}:per_seed")
+            continue
+        counts = {}
+        unstable = False
+        for seed in model_seeds:
+            row = per_seed[str(seed)]
+            path = f"{key}:seed:{seed}"
+            if not isinstance(row, dict):
+                missing.append(path)
+                continue
+            if row.get("model_seed") != seed:
+                missing.append(f"{path}:model_seed")
+            if row.get("sample_seed") != SAMPLE_SEED:
+                missing.append(f"{path}:sample_seed")
+            if row.get("n_requested") != n_members \
+                    or row.get("n_found") != n_members:
+                missing.append(f"{path}:member_roster")
+            n_conv = row.get("n_converged")
+            if not isinstance(n_conv, int) or isinstance(n_conv, bool) \
+                    or not 0 <= n_conv <= n_members:
+                missing.append(f"{path}:n_converged")
+                continue
+            counts[str(seed)] = n_conv
+            expected_unstable = n_conv < 0.75 * n_members
+            if row.get("propagation_unstable") is not expected_unstable:
+                missing.append(f"{path}:propagation_unstable")
+            unstable = unstable or expected_unstable
+        if block.get("per_seed_n_converged") != counts:
+            missing.append(f"{key}:per_seed_n_converged")
+        if block.get("propagation_unstable_any_seed") is not unstable:
+            missing.append(f"{key}:propagation_unstable_any_seed")
+        for label, fn in (("seed_mean", np.mean), ("seed_min", np.min),
+                          ("seed_max", np.max)):
+            expected = _seed_reduce(per_seed, fn)
+            if not _tree_close(block.get(label), expected):
+                missing.append(f"{key}:{label}")
+
+    attached = rec.get("attached_control")
+    if not isinstance(attached, dict):
+        missing.append("attached_control")
+    else:
+        for kind in KINDS:
+            block = attached.get(kind)
+            per_seed = block.get("per_seed") if isinstance(block, dict) \
+                else None
+            if not isinstance(per_seed, dict) or set(per_seed) != seed_keys:
+                missing.append(f"attached_control:{kind}:per_seed")
+                continue
+            for seed in model_seeds:
+                row = per_seed[str(seed)]
+                n_conv = row.get("n_converged") \
+                    if isinstance(row, dict) else None
+                cfs = row.get("cf_members") if isinstance(row, dict) else None
+                if not isinstance(row, dict) \
+                        or row.get("model_seed") != seed \
+                        or row.get("sample_seed") != SAMPLE_SEED:
+                    missing.append(
+                        f"attached_control:{kind}:seed:{seed}:seeds")
+                if not isinstance(n_conv, int) or isinstance(n_conv, bool) \
+                        or not isinstance(cfs, list) or len(cfs) != n_conv:
+                    missing.append(
+                        f"attached_control:{kind}:seed:{seed}:members")
+            for label, fn in (("seed_mean", np.mean),
+                              ("seed_min", np.min),
+                              ("seed_max", np.max)):
+                expected = _seed_reduce(per_seed, fn)
+                if not _tree_close(block.get(label), expected):
+                    missing.append(f"attached_control:{kind}:{label}")
+
+    if not isinstance(rec.get("zero_control"), dict):
+        missing.append("zero_control")
+    for family, sizes in (("corners", {"d1.0": 3, "d0.5": 3}),
+                          ("five_state", {"d1.0": 5, "d0.5": 5})):
+        block = rec.get(family)
+        if not isinstance(block, dict) or set(block) != set(sizes):
+            missing.append(family)
+            continue
+        for amp, size in sizes.items():
+            row = block.get(amp)
+            if not isinstance(row, dict) \
+                    or row.get("n_members") != size \
+                    or row.get("n_found") != size:
+                missing.append(f"{family}:{amp}:member_roster")
+    return sorted(set(missing))
+
+
+def validate_fold_score(results_dir, fold, n_members=N_MEMBERS,
+                        model_seeds=MODEL_SEEDS,
+                        epochs=sbli_apriori.EPOCHS, quick=False,
+                        strict=True):
+    """Validate one fold score and its target/member lineage transitively."""
     path = os.path.join(_apo_dir(results_dir, fold),
                         f"fold_scores_{fold}.json")
     if not os.path.isfile(path):
-        return False
-    rec = json.load(open(path))
-    for name, sha in rec.get("lineage", {}).items():
-        cand = os.path.join(_apo_dir(results_dir, fold), name)
-        if not os.path.isfile(cand):
-            cand = os.path.join(results_dir, name)
-        if cfp.file_sha(cand) != sha:
-            return False
-    return True
+        return False, "fold score absent"
+    try:
+        rec = json.load(open(path))
+    except (OSError, ValueError) as exc:
+        return False, f"fold score unreadable: {exc}"
+    if not isinstance(rec, dict):
+        return False, "fold score is not a record"
+    lineage = rec.get("lineage")
+    if not isinstance(lineage, dict):
+        return False, "fold score carries no lineage mapping"
+    expected = _expected_fold_score_lineage(
+        results_dir, fold, n_members, tuple(model_seeds), quick=quick)
+    absent = sorted(name for name, sha in expected.items()
+                    if name != "dns" and sha is None)
+    if absent:
+        return False, f"fold score source artifacts absent: {absent}"
+    if lineage != expected:
+        return False, "fold score lineage is not the complete source roster"
+    status, why = cfp.check_json(
+        rec, _fold_score_ident(fold, n_members, tuple(model_seeds), epochs,
+                               quick, expected))
+    if status != "match":
+        return False, f"fold score identity {status}: {why}"
+    if not strict:
+        return True, ""
+    missing = _fold_score_missing(rec, fold, n_members, tuple(model_seeds),
+                                  epochs, quick)
+    if missing:
+        return False, f"fold score incomplete: {missing}"
+    ok, why = validate_gate_adjudication(results_dir, frozen=not quick)
+    if not ok:
+        return False, why
+    if not quick:
+        ok, why = validate_phase_m_approval(results_dir)
+        if not ok:
+            return False, why
+    if expected["dns"] != dns_manifest.digests(
+            dns_manifest.INTERACTION_SET):
+        return False, "fold score DNS lineage is stale"
+    for kind in KINDS:
+        for seed in model_seeds:
+            for attached in (False, True):
+                if not _targets_current(
+                        results_dir, fold, kind, seed, n_members, epochs,
+                        attached=attached):
+                    return False, (f"target {kind} seed {seed} "
+                                   f"attached={attached} is stale")
+    if not _corners_current(results_dir, fold):
+        return False, "deterministic target family is stale"
+    for kind in KINDS + ("flow_noq",):
+        for seed in model_seeds:
+            for index in range(n_members):
+                p = _member_path(results_dir, fold, kind, index,
+                                 model_seed=seed)
+                cfg = _member_config(results_dir, fold, kind=kind,
+                                     index=index, model_seed=seed)
+                if not _member_current(p, cfg):
+                    return False, (f"member {kind} seed {seed} index "
+                                   f"{index} is stale")
+    for kind in KINDS:
+        for seed in model_seeds:
+            for index in range(n_members):
+                p = _member_path(results_dir, fold, kind, index,
+                                 attached=True, model_seed=seed)
+                cfg = _member_config(results_dir, fold, kind=kind,
+                                     index=index, attached=True,
+                                     model_seed=seed)
+                if not _member_current(p, cfg):
+                    return False, (f"attached member {kind} seed {seed} "
+                                   f"index {index} is stale")
+    for label in CORNER_LABELS:
+        path = _corner_member_path(results_dir, fold, label)
+        if not _member_current(
+                path, _member_config(results_dir, fold, corner=label)):
+            return False, f"deterministic member {label} is stale"
+    ident = rec.get(cfp.IDENTITY_JSON_KEY, {})
+    if "binding_sha" not in ident:
+        return False, "fold score has no binding provenance"
+    live_binding = cfp.binding_provenance()
+    if live_binding is not None and ident["binding_sha"] != live_binding \
+            and os.environ.get("QBTM_SBLI_ACCEPT_BINDING") != "1":
+        return False, (f"fold score was produced by binding "
+                       f"{ident['binding_sha']}, this build is "
+                       f"{live_binding}")
+    return True, ""
+
+
+def fold_score_lineage_ok(results_dir, fold):
+    """Compatibility predicate used by the figure driver."""
+    return validate_fold_score(results_dir, fold)[0]
+
+
+def _aposteriori_numbers_lineage(results_dir, folds, quick=False):
+    """Exact Phase-A and per-fold score sources of the matrix summary."""
+    out = {
+        "apriori_numbers.json": cfp.file_sha(os.path.join(
+            results_dir, "apriori_numbers.json")),
+        "gates_adjudication.json": cfp.file_sha(os.path.join(
+            results_dir, "gates_adjudication.json")),
+        "dns": dns_manifest.digests(dns_manifest.FAR_SET),
+    }
+    if not quick:
+        out[PHASE_P_ADJUDICATION] = cfp.file_sha(os.path.join(
+            results_dir, PHASE_P_ADJUDICATION))
+    for fold in folds:
+        name = f"fold_scores_{fold}.json"
+        out[name] = cfp.file_sha(os.path.join(
+            _apo_dir(results_dir, fold), name))
+    return out
+
+
+def _aposteriori_protocol_config(n_members, model_seeds, epochs, quick):
+    """The exact human-readable and fingerprinted Phase-M protocol."""
+    return {
+        "n_members": int(n_members),
+        "model_seeds": list(model_seeds),
+        "sample_seed": SAMPLE_SEED,
+        "epochs": int(epochs),
+        "kinds": list(KINDS),
+        "member_max_iterations": MEMBER_MAX_ITER,
+        "member_convergence_tol": MEMBER_TOL,
+        "member_early_abort": {
+            "iter": MEMBER_ABORT_ITER,
+            "rel_max": MEMBER_ABORT_RELMAX,
+            "note": "retired pending the abort panel amendment",
+        },
+        "corner_max_iterations": CORNER_MAX_ITER,
+        "corner_deltas": list(sbli_aposteriori.CORNER_DELTAS),
+        "stations": [float(v) for v in STATIONS],
+        "mask": {"y_max": sbli_aposteriori.MASK_Y_MAX,
+                 "k_floor": sbli_aposteriori.MASK_K_FLOOR},
+        "quick": bool(quick),
+    }
+
+
+def _aposteriori_numbers_ident(n_members, model_seeds, epochs, quick,
+                               lineage):
+    return sbli_ident("aposteriori-numbers", "all-cases", numbers={
+        "n_members": int(n_members), "model_seeds": list(model_seeds),
+        "sample_seed": SAMPLE_SEED, "epochs": int(epochs),
+        "folds": list(FOLDS), "quick": bool(quick),
+        "protocol": _aposteriori_protocol_config(
+            n_members, model_seeds, epochs, quick),
+        "lineage": dict(sorted(lineage.items()))})
+
+
+def aposteriori_numbers_missing(
+        numbers, n_members=N_MEMBERS, model_seeds=MODEL_SEEDS,
+        epochs=sbli_apriori.EPOCHS, quick=False):
+    """Recompute matrix completeness without trusting a stored label."""
+    missing = []
+    folds = numbers.get("folds")
+    if not isinstance(folds, dict) or set(folds) != set(FOLDS):
+        missing.append("fold_roster")
+        return missing
+    config = numbers.get("config")
+    expected_config = _aposteriori_protocol_config(
+        n_members, model_seeds, epochs, quick)
+    if not isinstance(config, dict):
+        missing.append("config")
+    elif config != expected_config:
+        for key in sorted(set(config) | set(expected_config)):
+            if config.get(key) != expected_config.get(key):
+                missing.append(f"config:{key}")
+    for fold in FOLDS:
+        row = folds.get(fold)
+        if not isinstance(row, dict):
+            missing.append(f"fold:{fold}")
+            continue
+        if row.get("worker_failures") != 0:
+            missing.append(f"fold:{fold}:worker_failures")
+        missing.extend(
+            f"fold:{fold}:{item}" for item in _fold_score_missing(
+                row, fold, n_members, tuple(model_seeds), epochs, quick))
+    return sorted(set(missing))
+
+
+def validate_aposteriori_numbers(
+        results_dir, quick=False, strict=True, expected_n_members=None,
+        expected_model_seeds=None, expected_epochs=None):
+    """Publication gate for Phase M and all coupled-result consumers."""
+    n_members = int(expected_n_members if expected_n_members is not None
+                    else (3 if quick else N_MEMBERS))
+    model_seeds = tuple(
+        expected_model_seeds if expected_model_seeds is not None
+        else ((MODEL_SEEDS[0],) if quick else MODEL_SEEDS))
+    epochs = int(expected_epochs if expected_epochs is not None
+                 else (2 if quick else sbli_apriori.EPOCHS))
+    suffix = "_quick" if quick else ""
+    path = os.path.join(results_dir, f"aposteriori_numbers{suffix}.json")
+    if not os.path.isfile(path):
+        return False, "a-posteriori numbers file absent"
+    try:
+        rec = json.load(open(path))
+    except (OSError, ValueError) as exc:
+        return False, f"a-posteriori numbers unreadable: {exc}"
+    if not isinstance(rec, dict):
+        return False, "a-posteriori numbers are not a record"
+    lineage = _aposteriori_numbers_lineage(results_dir, FOLDS, quick=quick)
+    stored_ident = rec.get(cfp.IDENTITY_JSON_KEY)
+    if not isinstance(stored_ident, dict):
+        return False, "a-posteriori numbers carry no identity block"
+    status, why = cfp.check_json(
+        rec, _aposteriori_numbers_ident(
+            n_members, model_seeds, epochs, quick, lineage))
+    if status != "match":
+        return False, f"a-posteriori numbers identity {status}: {why}"
+    absent = sorted(name for name, sha in lineage.items()
+                    if name != "dns" and sha is None)
+    if absent:
+        return False, f"a-posteriori lineage sources absent: {absent}"
+    if lineage["dns"] != dns_manifest.digests(dns_manifest.FAR_SET):
+        return False, "a-posteriori DNS lineage is stale"
+    if not strict:
+        return True, ""
+    missing = aposteriori_numbers_missing(
+        rec, n_members, model_seeds, epochs, quick)
+    if missing:
+        return False, f"a-posteriori numbers incomplete: {missing}"
+    if rec.get("complete") is not True or rec.get("missing") != []:
+        return False, "a-posteriori completeness label is false or stale"
+    ok, why = validate_apriori_numbers(
+        results_dir, quick=quick, strict=True,
+        expected_seeds=model_seeds, expected_epochs=epochs)
+    if not ok:
+        return False, f"Phase A dependency refused: {why}"
+    if not quick:
+        ok, why = validate_phase_m_approval(results_dir)
+        if not ok:
+            return False, why
+    for fold in FOLDS:
+        ok, why = validate_fold_score(
+            results_dir, fold, n_members=n_members,
+            model_seeds=model_seeds, epochs=epochs, quick=quick,
+            strict=True)
+        if not ok:
+            return False, f"fold {fold} refused: {why}"
+        score_path = os.path.join(_apo_dir(results_dir, fold),
+                                  f"fold_scores_{fold}.json")
+        score = json.load(open(score_path))
+        body = {k: v for k, v in score.items()
+                if k != cfp.IDENTITY_JSON_KEY}
+        combined = {k: v for k, v in rec["folds"][fold].items()
+                    if k != "worker_failures"}
+        if not _tree_close(combined, body):
+            return False, (f"fold {fold} summary does not reproduce its "
+                           "bound fold-score artifact")
+    if "binding_sha" not in stored_ident:
+        return False, "a-posteriori numbers have no binding provenance"
+    live_binding = cfp.binding_provenance()
+    if live_binding is not None \
+            and stored_ident["binding_sha"] != live_binding \
+            and os.environ.get("QBTM_SBLI_ACCEPT_BINDING") != "1":
+        return False, (f"a-posteriori numbers were produced by binding "
+                       f"{stored_ident['binding_sha']}, this build is "
+                       f"{live_binding}")
+    return True, ""
+
+
+def _pilot_path(results_dir):
+    return os.path.join(_apo_dir(results_dir), "pilot.json")
+
+
+def _pilot_member_path_config(results_dir, spec):
+    if "corner" in spec:
+        label = spec["corner"]
+        return (_corner_member_path(results_dir, PILOT_FOLD, label),
+                _member_config(results_dir, PILOT_FOLD, corner=label))
+    return (
+        _member_path(results_dir, PILOT_FOLD, spec["kind"], spec["index"],
+                     model_seed=spec["model_seed"]),
+        _member_config(results_dir, PILOT_FOLD, kind=spec["kind"],
+                       index=spec["index"],
+                       model_seed=spec["model_seed"]),
+    )
+
+
+def _pilot_lineage(results_dir):
+    paths = [
+        os.path.join(results_dir, "apriori_numbers.json"),
+        os.path.join(results_dir, "gates_adjudication.json"),
+        os.path.join(results_dir, f"zerocheck_{PILOT_FOLD}.json"),
+        _targets_path(results_dir, PILOT_FOLD, "flow",
+                      model_seed=PILOT_MODEL_SEED),
+        _targets_path(results_dir, PILOT_FOLD, "gauss",
+                      model_seed=PILOT_MODEL_SEED),
+        _targets_path(results_dir, PILOT_FOLD, "corners"),
+    ]
+    paths.extend(_pilot_member_path_config(results_dir, spec)[0]
+                 for _name, spec in PILOT_MEMBER_SPECS)
+    out = {os.path.basename(path): cfp.file_sha(path) for path in paths}
+    out["dns"] = dns_manifest.digests(dns_manifest.FAR_SET)
+    return out
+
+
+def _pilot_ident(results_dir, lineage=None):
+    return sbli_ident("sbli-phase-p-pilot", PILOT_FOLD, pilot={
+        "model_seed": PILOT_MODEL_SEED, "sample_seed": SAMPLE_SEED,
+        "member_abort": {"iter": MEMBER_ABORT_ITER,
+                         "rel_max": MEMBER_ABORT_RELMAX},
+        "member_specs": [{"name": name, **spec}
+                         for name, spec in PILOT_MEMBER_SPECS],
+        "lineage": dict(sorted(
+            (lineage if lineage is not None
+             else _pilot_lineage(results_dir)).items()))})
+
+
+def _pilot_member_summary(results_dir, spec):
+    path, config = _pilot_member_path_config(results_dir, spec)
+    if not _member_current(path, config):
+        return None
+    member = _load_member(path)
+    return {
+        "status": member["status"],
+        "iterations": member["iterations"],
+        "final_residual": member["final_residual"],
+        "all_realizable": member["all_realizable"],
+        "min_effective_margin": member["min_margin"],
+        "max_realizability_violation": member["max_violation"],
+    }
+
+
+def stage_pilot(records, results_dir, quick=False):
+    """Run the lineage-clean Phase-P pilot plus its abort-off panel.
+
+    This stage writes evidence and stops. It never writes Phase-M approval;
+    that requires a separate post-review adjudication command.
+    """
+    if quick:
+        print("[pilot] Phase P is production-only; quick mode refused")
+        sys.exit(1)
+    os.environ["QBTM_SBLI_VERBOSE"] = "1"
+    stage_targets_deterministic(records, results_dir, PILOT_FOLD, False)
+    stage_targets(records, results_dir, PILOT_FOLD, False, N_MEMBERS,
+                  sbli_apriori.EPOCHS, PILOT_MODEL_SEED)
+    for name, spec in PILOT_MEMBER_SPECS:
+        path, config = _pilot_member_path_config(results_dir, spec)
+        if _member_current(path, config):
+            print(f"[pilot] {name} member current; not re-solved")
+            continue
+        stage_member(
+            records, results_dir, PILOT_FOLD, spec.get("kind", "flow"),
+            spec.get("index", 0), False, corner=spec.get("corner"),
+            model_seed=spec.get("model_seed", PILOT_MODEL_SEED),
+            n_members=N_MEMBERS, epochs=sbli_apriori.EPOCHS)
+    summaries = {
+        name: _pilot_member_summary(results_dir, spec)
+        for name, spec in PILOT_MEMBER_SPECS
+    }
+    if any(value is None for value in summaries.values()):
+        print("[pilot] one or more requested member artifacts are absent or "
+              "stale; pilot withheld")
+        sys.exit(1)
+    lineage = _pilot_lineage(results_dir)
+    absent = sorted(name for name, value in lineage.items()
+                    if name != "dns" and value is None)
+    if absent:
+        print(f"[pilot] lineage sources absent; pilot withheld: {absent}")
+        sys.exit(1)
+    out = {
+        "phase": "P",
+        "fold": PILOT_FOLD,
+        "model_seed": PILOT_MODEL_SEED,
+        "sample_seed": SAMPLE_SEED,
+        "early_abort": {"iter": MEMBER_ABORT_ITER,
+                        "rel_max": MEMBER_ABORT_RELMAX,
+                        "ruling": "off pending review of this panel"},
+        "three_solve_pilot": {
+            key: summaries[key] for key in (
+                "zero_control", "registered_flow", "moderated_corner")},
+        "abort_panel": {
+            key: summaries[key] for key in (
+                "registered_flow", "panel_gauss", "panel_full_corner")},
+        "trace_mode": PILOT_TRACE_MODE,
+        "complete": True,
+        "review_required_before_phase_m": True,
+        "lineage": lineage,
+    }
+    cfp.json_atomic(
+        _pilot_path(results_dir),
+        cfp.attach_json(out, _pilot_ident(results_dir, lineage)))
+    print(f"[pilot] wrote {_pilot_path(results_dir)}; STOP for review")
+    return out
+
+
+def validate_phase_p(results_dir):
+    """Validate the Phase-P artifact against its exact A/target/member
+    lineage. Outcomes are deliberately not judged here; that is the
+    binding reviewer stop point."""
+    path = _pilot_path(results_dir)
+    if not os.path.isfile(path):
+        return False, "Phase-P pilot artifact absent"
+    try:
+        rec = json.load(open(path))
+    except (OSError, ValueError) as exc:
+        return False, f"Phase-P pilot unreadable: {exc}"
+    if not isinstance(rec, dict):
+        return False, "Phase-P pilot is not a record"
+    lineage = _pilot_lineage(results_dir)
+    absent = sorted(name for name, value in lineage.items()
+                    if name != "dns" and value is None)
+    if absent:
+        return False, f"Phase-P sources absent: {absent}"
+    if rec.get("lineage") != lineage:
+        return False, "Phase-P lineage is not the exact pilot/panel roster"
+    status, why = cfp.check_json(rec, _pilot_ident(results_dir, lineage))
+    if status != "match":
+        return False, f"Phase-P identity {status}: {why}"
+    if rec.get("phase") != "P" or rec.get("fold") != PILOT_FOLD \
+            or rec.get("model_seed") != PILOT_MODEL_SEED \
+            or rec.get("sample_seed") != SAMPLE_SEED \
+            or rec.get("complete") is not True \
+            or rec.get("review_required_before_phase_m") is not True \
+            or rec.get("trace_mode") != PILOT_TRACE_MODE:
+        return False, "Phase-P body does not match the registered protocol"
+    if rec.get("early_abort") != {
+            "iter": MEMBER_ABORT_ITER, "rel_max": MEMBER_ABORT_RELMAX,
+            "ruling": "off pending review of this panel"}:
+        return False, "Phase-P early-abort panel is not the registered one"
+    expected_pilot = {"zero_control", "registered_flow",
+                      "moderated_corner"}
+    expected_panel = {"registered_flow", "panel_gauss",
+                      "panel_full_corner"}
+    if set(rec.get("three_solve_pilot") or ()) != expected_pilot \
+            or set(rec.get("abort_panel") or ()) != expected_panel:
+        return False, "Phase-P pilot or panel member roster is incomplete"
+    summaries = {}
+    for name, spec in PILOT_MEMBER_SPECS:
+        path, config = _pilot_member_path_config(results_dir, spec)
+        if not _member_current(path, config):
+            return False, "a Phase-P member is absent or stale"
+        summaries[name] = _pilot_member_summary(results_dir, spec)
+    if not _tree_close(
+            rec["three_solve_pilot"],
+            {key: summaries[key] for key in expected_pilot}) \
+            or not _tree_close(
+                rec["abort_panel"],
+                {key: summaries[key] for key in expected_panel}):
+        return False, "Phase-P summaries do not reproduce their members"
+    if not _targets_current(
+            results_dir, PILOT_FOLD, "flow", PILOT_MODEL_SEED,
+            N_MEMBERS, sbli_apriori.EPOCHS) \
+            or not _targets_current(
+                results_dir, PILOT_FOLD, "gauss", PILOT_MODEL_SEED,
+                N_MEMBERS, sbli_apriori.EPOCHS) \
+            or not _corners_current(results_dir, PILOT_FOLD):
+        return False, "a Phase-P target is absent or stale"
+    zerocheck_path = os.path.join(
+        results_dir, f"zerocheck_{PILOT_FOLD}.json")
+    try:
+        zerocheck = json.load(open(zerocheck_path))
+    except (OSError, ValueError) as exc:
+        return False, f"Phase-P zero-check unreadable: {exc}"
+    status, why = cfp.check_json(
+        zerocheck, sbli_ident("zerocheck", PILOT_FOLD, zc={
+            "lineage": {
+                "fields": cfp.file_sha(
+                    _fields_path(results_dir, PILOT_FOLD)),
+                "wall": cfp.file_sha(
+                    _wall_path(results_dir, PILOT_FOLD)),
+            }}))
+    if status != "match":
+        return False, f"Phase-P zero-check identity {status}: {why}"
+    ident = rec.get(cfp.IDENTITY_JSON_KEY, {})
+    if "binding_sha" not in ident:
+        return False, "Phase-P pilot has no binding provenance"
+    live_binding = cfp.binding_provenance()
+    if live_binding is not None and ident["binding_sha"] != live_binding \
+            and os.environ.get("QBTM_SBLI_ACCEPT_BINDING") != "1":
+        return False, (f"Phase P used binding {ident['binding_sha']}, "
+                       f"this build is {live_binding}")
+    return True, ""
+
+
+def _phase_p_adjudication_ident(results_dir, decision, note):
+    return sbli_ident("sbli-phase-p-adjudication", PILOT_FOLD, adjudication={
+        "decision": decision, "note": note,
+        "early_abort": {"iter": MEMBER_ABORT_ITER,
+                        "rel_max": MEMBER_ABORT_RELMAX},
+        "lineage": {
+            "pilot.json": cfp.file_sha(_pilot_path(results_dir)),
+            "apriori_numbers.json": cfp.file_sha(os.path.join(
+                results_dir, "apriori_numbers.json")),
+            "gates_adjudication.json": cfp.file_sha(os.path.join(
+                results_dir, "gates_adjudication.json")),
+        }})
+
+
+def stage_phase_p_adjudication(results_dir, decision, note):
+    """Record the review decision separately from the measured pilot."""
+    ok, why = validate_phase_p(results_dir)
+    if not ok:
+        print(f"[phase P] adjudication refused ({why})")
+        sys.exit(1)
+    if decision not in ("proceed-abort-off", "stop"):
+        print("[phase P] decision must be proceed-abort-off or stop")
+        sys.exit(1)
+    if not note.strip():
+        print("[phase P] a natural-language review note is required")
+        sys.exit(1)
+    body = {
+        "decision": decision,
+        "note": note.strip(),
+        "pilot": os.path.basename(_pilot_path(results_dir)),
+        "phase_m_authorized": decision == "proceed-abort-off",
+        "early_abort": {"iter": MEMBER_ABORT_ITER,
+                        "rel_max": MEMBER_ABORT_RELMAX},
+    }
+    path = os.path.join(results_dir, PHASE_P_ADJUDICATION)
+    cfp.json_atomic(
+        path, cfp.attach_json(
+            body, _phase_p_adjudication_ident(
+                results_dir, decision, note.strip())))
+    print(f"[phase P] wrote {path}: {decision}")
+    return body
+
+
+def validate_phase_m_approval(results_dir):
+    ok, why = validate_phase_p(results_dir)
+    if not ok:
+        return False, why
+    path = os.path.join(results_dir, PHASE_P_ADJUDICATION)
+    if not os.path.isfile(path):
+        return False, "Phase-P review adjudication absent"
+    try:
+        rec = json.load(open(path))
+    except (OSError, ValueError) as exc:
+        return False, f"Phase-P adjudication unreadable: {exc}"
+    if not isinstance(rec, dict):
+        return False, "Phase-P adjudication is not a record"
+    status, why = cfp.check_json(
+        rec, _phase_p_adjudication_ident(
+            results_dir, rec.get("decision"), rec.get("note")))
+    if status != "match":
+        return False, f"Phase-P adjudication identity {status}: {why}"
+    if rec.get("decision") != "proceed-abort-off" \
+            or rec.get("phase_m_authorized") is not True \
+            or rec.get("pilot") != os.path.basename(
+                _pilot_path(results_dir)) \
+            or rec.get("early_abort") != {
+                "iter": MEMBER_ABORT_ITER, "rel_max": MEMBER_ABORT_RELMAX}:
+        return False, "Phase-P review did not authorize abort-off Phase M"
+    if not isinstance(rec.get("note"), str) or not rec["note"].strip():
+        return False, "Phase-P adjudication carries no review note"
+    ident = rec.get(cfp.IDENTITY_JSON_KEY, {})
+    if "binding_sha" not in ident:
+        return False, "Phase-P adjudication has no binding provenance"
+    live_binding = cfp.binding_provenance()
+    if live_binding is not None and ident["binding_sha"] != live_binding \
+            and os.environ.get("QBTM_SBLI_ACCEPT_BINDING") != "1":
+        return False, (f"Phase-P adjudication used binding "
+                       f"{ident['binding_sha']}, this build is "
+                       f"{live_binding}")
+    return True, ""
 
 
 def stage_score_exploratory(records, results_dir, n_members):
@@ -1003,10 +1775,13 @@ def stage_zerocheck(records, results_dir, quick, cases):
 
 
 def _spawn(script_args, log_path):
-    log = open(log_path, "ab")
-    return subprocess.Popen(
-        [sys.executable, os.path.abspath(__file__)] + script_args,
-        stdout=log, stderr=log)
+    # Popen duplicates the descriptor for the child; close the parent's
+    # copy immediately so a multi-hundred-member matrix cannot exhaust the
+    # orchestrator's file-descriptor table.
+    with open(log_path, "ab") as log:
+        return subprocess.Popen(
+            [sys.executable, os.path.abspath(__file__)] + script_args,
+            stdout=log, stderr=log)
 
 
 def _run_pool(jobs, throttle, log_path):
@@ -1036,11 +1811,16 @@ def stage_orchestrate(records, results_dir, quick, throttle, n_members,
     per-seed fold score; a combined numbers file at the end. The faradiab
     exploratory phase runs ONLY under QBTM_SBLI_EXPLORATORY=1 and its
     outputs never enter the formal numbers."""
+    if tuple(folds) != FOLDS:
+        raise ValueError(f"formal matrix fold roster must be {FOLDS}")
+    if throttle < 1:
+        raise ValueError("orchestration throttle must be at least one")
     common = ["--results", results_dir] + (["--quick"] if quick else [])
-    # this process fresh-verified the manifest for every orchestrated fold
-    # above; its workers re-check that token instead of re-hashing the whole
-    # source corpus once per member (a matrix spawns a worker per member, so
-    # the full pass per worker is hours of pure hashing)
+    # Main verified the manifest once before loading records; token issue
+    # fresh-verifies it again at the worker boundary. Direct child workers
+    # re-check that token instead of re-hashing the whole source corpus once
+    # per member (a matrix spawns a worker per member, so the full pass per
+    # worker is hours of pure hashing).
     token = os.path.join(_apo_dir(results_dir),
                          f"dns_run_token_{os.getpid()}.json")
     dns_manifest.write_run_token(token, _manifest_path(results_dir))
@@ -1084,8 +1864,17 @@ def stage_orchestrate(records, results_dir, quick, throttle, n_members,
                            log_path)
         print(f"[orchestrate {fold}] interaction members done, "
               f"{failed} worker failures")
-        summary[fold] = stage_score(records, results_dir, fold, n_members)
-        summary[fold]["worker_failures"] = int(failed)
+        if failed:
+            if os.path.isfile(token):
+                os.remove(token)
+            print(f"[orchestrate {fold}] refusing to score or continue: "
+                  "process failures are operationally missing artifacts, "
+                  "not scientific non-convergence")
+            sys.exit(1)
+        summary[fold] = stage_score(
+            records, results_dir, fold, n_members,
+            model_seeds=model_seeds, epochs=epochs, quick=quick)
+        summary[fold]["worker_failures"] = 0
 
     # phase 2: the preserve-attached control for every fold closure and
     # every model seed (the tripled control of the seed protocol)
@@ -1094,9 +1883,17 @@ def stage_orchestrate(records, results_dir, quick, throttle, n_members,
                            log_path)
         print(f"[orchestrate {fold}] attached control done, "
               f"{failed} worker failures")
+        if failed:
+            if os.path.isfile(token):
+                os.remove(token)
+            print(f"[orchestrate {fold}] refusing to publish: attached "
+                  "worker failures are operationally missing artifacts")
+            sys.exit(1)
         prior = summary[fold]["worker_failures"]
-        summary[fold] = stage_score(records, results_dir, fold, n_members)
-        summary[fold]["worker_failures"] = prior + int(failed)
+        summary[fold] = stage_score(
+            records, results_dir, fold, n_members,
+            model_seeds=model_seeds, epochs=epochs, quick=quick)
+        summary[fold]["worker_failures"] = prior
 
     # phase 3 (exploratory namespace only, explicit opt-in): the
     # attached-trained far-transfer propagation into the gate-B failing
@@ -1107,36 +1904,51 @@ def stage_orchestrate(records, results_dir, quick, throttle, n_members,
                            throttle, log_path)
         print(f"[orchestrate faradiab] members done, {failed} worker "
               f"failures (exploratory)")
-        stage_score_exploratory(records, results_dir, n_members)
+        if failed:
+            print("[orchestrate faradiab] exploratory score withheld: "
+                  "operationally missing workers are not solver "
+                  "non-convergence")
+        else:
+            stage_score_exploratory(records, results_dir, n_members)
     else:
         print("[orchestrate] faradiab exploratory phase skipped "
               "(QBTM_SBLI_EXPLORATORY unset)")
 
     suffix = "_quick" if quick else ""
+    fold_errors = {}
+    for fold in FOLDS:
+        ok, why = validate_fold_score(
+            results_dir, fold, n_members=n_members,
+            model_seeds=model_seeds, epochs=epochs, quick=quick)
+        if not ok:
+            fold_errors[fold] = why
     numbers = {
         "folds": summary,
-        "config": {"n_members": n_members,
-                   "model_seeds": list(model_seeds),
-                   "sample_seed": SAMPLE_SEED,
-                   "epochs": epochs, "kinds": list(KINDS),
-                   "member_max_iterations": MEMBER_MAX_ITER,
-                   "member_convergence_tol": MEMBER_TOL,
-                   "member_early_abort": {"iter": MEMBER_ABORT_ITER,
-                                          "rel_max": MEMBER_ABORT_RELMAX,
-                                          "note": "retired pending the "
-                                                  "abort panel amendment"},
-                   "corner_max_iterations": CORNER_MAX_ITER,
-                   "corner_deltas": list(sbli_aposteriori.CORNER_DELTAS),
-                   "stations": [float(v) for v in STATIONS],
-                   "mask": {"y_max": sbli_aposteriori.MASK_Y_MAX,
-                            "k_floor": sbli_aposteriori.MASK_K_FLOOR},
-                   "quick": bool(quick)},
+        "config": _aposteriori_protocol_config(
+            n_members, model_seeds, epochs, quick),
     }
+    missing = aposteriori_numbers_missing(
+        numbers, n_members, model_seeds, epochs, quick)
+    missing.extend(f"fold:{fold}:{why}"
+                   for fold, why in sorted(fold_errors.items()))
+    numbers["missing"] = sorted(set(missing))
+    numbers["complete"] = not numbers["missing"]
+    lineage = _aposteriori_numbers_lineage(results_dir, FOLDS, quick=quick)
+    if not numbers["complete"]:
+        progress = os.path.join(
+            results_dir, f"aposteriori_numbers{suffix}.progress.json")
+        cfp.json_atomic(progress, cfp.attach_json(
+            numbers, _aposteriori_numbers_ident(
+                n_members, model_seeds, epochs, quick, lineage)))
+        if os.path.isfile(token):
+            os.remove(token)
+        print(f"[orchestrate] final matrix incomplete; wrote {progress}: "
+              f"{numbers['missing']}")
+        sys.exit(1)
     path = os.path.join(results_dir, f"aposteriori_numbers{suffix}.json")
-    cfp.json_atomic(path, cfp.attach_json(numbers, sbli_ident(
-        "aposteriori-numbers", "all-cases", numbers={
-            "n_members": n_members, "model_seeds": list(model_seeds),
-            "quick": bool(quick)})))
+    cfp.json_atomic(path, cfp.attach_json(
+        numbers, _aposteriori_numbers_ident(
+            n_members, model_seeds, epochs, quick, lineage)))
     print("wrote", path)
     # the token authorizes workers of THIS run only
     if os.path.isfile(token):
@@ -1174,37 +1986,34 @@ def _require_manifest(results_dir, run_token=None):
         sys.exit(1)
 
 
-def _require_gates(results_dir, fold, run_token=None):
+def _require_phase_a(results_dir, quick, model_seeds, epochs):
+    """The explicit A -> P/M barrier: coupled work starts only from a
+    complete, publication-valid a-priori result on this exact protocol."""
+    ok, why = validate_apriori_numbers(
+        results_dir, quick=quick, strict=True,
+        expected_seeds=model_seeds, expected_epochs=epochs)
+    if not ok:
+        print(f"[phase A] coupled stage refused ({why}); complete and "
+              "review Phase A before generating coupled targets or members")
+        sys.exit(1)
+
+
+def _require_gates(results_dir, fold, run_token=None, quick=False,
+                   manifest_checked=False):
     """Claim-bearing coupled stages run only on gate-passing configurations
     (the recorded per-case ruling); the far-transfer target is exempt only
     when explicitly labeled exploratory via QBTM_SBLI_EXPLORATORY=1. Carries
     the manifest gate as well, so a single-fold worker verifies the source
     data exactly once."""
-    _require_manifest(results_dir, run_token)
-    path = os.path.join(results_dir, "gates_adjudication.json")
-    if not os.path.isfile(path):
-        print("[gates] no adjudication record; run the a-priori baselines "
-              "stage first")
+    if not manifest_checked:
+        _require_manifest(results_dir, run_token)
+    ok, why = validate_gate_adjudication(results_dir, frozen=not quick)
+    if not ok:
+        print(f"[gates] adjudication refused ({why}); regenerate the "
+              "complete adjudication before coupled stages")
         sys.exit(1)
-    adjud = json.load(open(path))
-    # transitive validation: the adjudication's recorded gate-record hashes
-    # must match the records on disk (a superseded gate can never authorize
-    # a coupled stage)
-    ident = adjud.get(cfp.IDENTITY_JSON_KEY)
-    if not isinstance(ident, dict) or "config_json" not in ident:
-        print("[gates] adjudication record carries no identity block; "
-              "regenerate it (baselines stage) before coupled stages")
-        sys.exit(1)
-    lin = json.loads(ident["config_json"]).get("adjud", {}).get("lineage",
-                                                                {})
-    for name, sha in lin.items():
-        if cfp.file_sha(os.path.join(results_dir, name)) != sha:
-            print(f"[gates] adjudication lineage stale for {name}; "
-                  f"regenerate the adjudication before coupled stages")
-            sys.exit(1)
-    if not adjud.get("gate_a_pass"):
-        print("[gates] gate A failed; coupled stages are not adjudicable")
-        sys.exit(1)
+    adjud = json.load(open(os.path.join(
+        results_dir, "gates_adjudication.json")))
     case = "adiabatic" if fold == "faradiab" else fold
     if case in adjud.get("gate_b_fail_cases", []):
         if os.environ.get("QBTM_SBLI_EXPLORATORY") == "1":
@@ -1221,7 +2030,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--stage", required=True,
                     choices=("targets", "member", "score", "orchestrate",
-                             "zerocheck"))
+                             "zerocheck", "pilot", "adjudicate-pilot"))
     ap.add_argument("--results", default="results/sbli")
     ap.add_argument("--fold", default=None)
     ap.add_argument("--kind", default="flow",
@@ -1240,6 +2049,13 @@ def main():
                          "manifest; workers re-check it instead of "
                          "re-hashing the source corpus (a worker without "
                          "one verifies in full)")
+    ap.add_argument("--decision", default="",
+                    choices=("", "proceed-abort-off", "stop"),
+                    help="adjudicate-pilot only: the explicit post-review "
+                         "Phase-M decision")
+    ap.add_argument("--note", default="",
+                    help="adjudicate-pilot only: natural-language review "
+                         "rationale recorded with the decision")
     args = ap.parse_args()
 
     np.random.seed(SAMPLE_SEED)
@@ -1261,6 +2077,40 @@ def main():
     # earlier form skipped the ruling entirely and generated targets for a
     # whole matrix ungated (the review's bypass finding)
     orchestrated = [f.strip() for f in args.folds.split(",") if f.strip()]
+    if args.run_token and args.stage != "member":
+        print("[args] --run-token is worker-only and valid only for the "
+              "member stage")
+        sys.exit(1)
+    if args.throttle < 1:
+        print("[args] --throttle must be at least one")
+        sys.exit(1)
+    if args.stage == "orchestrate" and tuple(orchestrated) != FOLDS:
+        print(f"[args] a formal orchestration requires the exact fold "
+              f"roster {list(FOLDS)}; use direct target/member stages for "
+              "the Phase-P pilot")
+        sys.exit(1)
+    if args.stage in ("targets", "member", "score"):
+        allowed = set(FOLDS) | {"faradiab"}
+        if args.fold not in allowed:
+            print(f"[args] --fold must be one of {sorted(allowed)}")
+            sys.exit(1)
+    if args.stage in ("targets", "member") \
+            and args.model_seed not in model_seeds:
+        print(f"[args] model seed {args.model_seed} is outside the "
+              f"registered roster {list(model_seeds)}")
+        sys.exit(1)
+    if args.stage == "member":
+        if args.corner is not None and args.corner not in CORNER_LABELS:
+            print(f"[args] unregistered deterministic member {args.corner}")
+            sys.exit(1)
+        if args.corner is None and not 0 <= args.index < n_members:
+            print(f"[args] member index must be in [0, {n_members})")
+            sys.exit(1)
+        if args.attached and (args.corner is not None
+                              or args.kind not in KINDS):
+            print("[args] attached members are registered only for the "
+                  "flow and gauss predictive families")
+            sys.exit(1)
     if args.stage == "orchestrate":
         gated = list(orchestrated)
         if os.environ.get("QBTM_SBLI_EXPLORATORY") == "1":
@@ -1269,19 +2119,65 @@ def main():
             gated.append("faradiab")
     elif args.stage == "zerocheck":
         gated = []                      # pre-target probe, no fold claim
+    elif args.stage in ("pilot", "adjudicate-pilot"):
+        gated = [PILOT_FOLD]
     else:
         gated = [args.fold] if getattr(args, "fold", None) else []
     # an orchestrating parent verifies in full (it writes the token its own
     # workers ride on), so the cheap path is only ever a spawned worker's
     token = None if args.stage == "orchestrate" else args.run_token
     if gated:
+        # One raw-input verification for this process, then rule every
+        # physical fold against the same closed gate record. Re-hashing the
+        # 9.7-GB corpus once per fold adds no authority.
+        _require_manifest(args.results, run_token=token)
         for fold in gated:
-            _require_gates(args.results, fold, run_token=token)
+            _require_gates(args.results, fold, run_token=token,
+                           quick=args.quick, manifest_checked=True)
     else:
         _require_manifest(args.results, run_token=token)
 
+    # Spawned member workers inherit this ruling through their live-parent
+    # token and their target/member lineage; all parent and standalone
+    # coupled stages validate Phase A directly.
+    if args.stage in ("targets", "member", "score", "orchestrate",
+                      "pilot", "adjudicate-pilot") \
+            and args.run_token is None:
+        _require_phase_a(args.results, args.quick, model_seeds, epochs)
+
+    if not args.quick and args.run_token is None:
+        approval_ok, approval_why = validate_phase_m_approval(args.results)
+        if args.stage in ("orchestrate", "score") and not approval_ok:
+            print(f"[phase M] refused ({approval_why}); run and review "
+                  "Phase P, then record the adjudication")
+            sys.exit(1)
+        if args.stage == "targets" and not approval_ok \
+                and (args.fold != PILOT_FOLD
+                     or args.model_seed != PILOT_MODEL_SEED):
+            print("[phase P] before review, target generation is limited "
+                  "to the registered s1.0 seed-0 pilot")
+            sys.exit(1)
+        if args.stage == "member" and not approval_ok:
+            corner_roles = {"zero_control", "3C_d0.5", "3C_d1"}
+            predictive_role = (
+                args.corner is None and not args.attached
+                and args.kind in KINDS and args.index == 0
+                and args.model_seed == PILOT_MODEL_SEED)
+            if args.fold != PILOT_FOLD \
+                    or not (args.corner in corner_roles or predictive_role):
+                print("[phase P] before review, coupled solves are limited "
+                      "to the registered pilot and abort-panel members")
+                sys.exit(1)
+
+    if args.stage == "adjudicate-pilot":
+        stage_phase_p_adjudication(args.results, args.decision, args.note)
+        return
+
     records = _all_records()
 
+    if args.stage == "pilot":
+        stage_pilot(records, args.results, quick=args.quick)
+        return
     if args.stage == "targets":
         if _is_exploratory(args.fold):
             stage_targets_far(records, args.results, args.quick, n_members,
@@ -1294,12 +2190,15 @@ def main():
     if args.stage == "member":
         stage_member(records, args.results, args.fold, args.kind,
                      args.index, args.quick, attached=args.attached,
-                     corner=args.corner, model_seed=args.model_seed)
+                     corner=args.corner, model_seed=args.model_seed,
+                     n_members=n_members, epochs=epochs)
     if args.stage == "score":
         if _is_exploratory(args.fold):
             stage_score_exploratory(records, args.results, n_members)
         else:
-            stage_score(records, args.results, args.fold, n_members)
+            stage_score(records, args.results, args.fold, n_members,
+                        model_seeds=model_seeds, epochs=epochs,
+                        quick=args.quick)
     if args.stage == "orchestrate":
         stage_orchestrate(records, args.results, args.quick, args.throttle,
                           n_members, epochs, orchestrated,

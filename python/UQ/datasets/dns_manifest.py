@@ -159,16 +159,21 @@ def token_ident(body):
     return {"kind": "dns-run-token", "token": body}
 
 
-def write_run_token(token_path, manifest_path, required=tuple(DATASETS)):
+def write_run_token(token_path, manifest_path, required=tuple(DATASETS),
+                    root=None):
     """Record that THIS process has just fresh-verified the manifest.
 
     Verification hashes every registered dataset, which is the right cost
     once per run and the wrong cost once per worker: an orchestrated matrix
     spawns a worker per member, and each one re-reading the whole source
-    corpus turns a correctness gate into hours of pure hashing. The parent
-    verifies, writes this token, and passes it to the workers it spawns; a
-    standalone worker gets no token and verifies in full. Only a caller that
-    has just verified may write one."""
+    corpus turns a correctness gate into hours of pure hashing. Token issue
+    performs the fresh verification itself, then the parent passes the
+    token only to its direct workers; a standalone worker gets no token and
+    verifies in full."""
+    ok, why = verify_manifest(manifest_path, root=root, required=required)
+    if not ok:
+        raise RuntimeError("cannot issue a DNS run token without a fresh "
+                           f"manifest verification: {why}")
     rec = json.load(open(manifest_path))
     body = {"manifest": cfp.file_sha(manifest_path),
             "digests": {n: rec["datasets"][n]["digest"] for n in sorted(required)},
@@ -177,27 +182,44 @@ def write_run_token(token_path, manifest_path, required=tuple(DATASETS)):
     return body
 
 
-def verify_run_token(token_path, manifest_path, required=tuple(DATASETS)):
+def verify_run_token(token_path, manifest_path, required=tuple(DATASETS),
+                     worker_parent_pid=None):
     """The worker-side gate: the token must be self-consistent and must name
     the manifest that is on disk right now, digest for digest. Cheap by
     construction (no dataset is re-read), and never a substitute for the
     parent's fresh pass, which is what actually bound the manifest to the
-    live data. Returns (ok, reason)."""
+    live data. The issuing PID must be the worker's current parent, so a
+    token left by a crashed or completed orchestration cannot authorize a
+    later run. ``worker_parent_pid`` exists only to make that relationship
+    hermetically testable. Returns (ok, reason)."""
     if not os.path.isfile(token_path):
         return False, "run token absent"
-    tok = json.load(open(token_path))
+    try:
+        tok = json.load(open(token_path))
+    except (OSError, ValueError) as exc:
+        return False, f"run token unreadable: {exc}"
     if not isinstance(tok, dict) or set(TOKEN_FIELDS) - set(tok):
         return False, "run token is missing fields"
     body = {k: tok[k] for k in TOKEN_FIELDS}
     status, why = cfp.check_json(tok, token_ident(body))
     if status != "match":
         return False, f"run token identity {status} ({why})"
+    parent_pid = (os.getppid() if worker_parent_pid is None
+                  else int(worker_parent_pid))
+    if body["writer_pid"] != parent_pid:
+        return False, ("run token was not issued by this worker's live "
+                       "orchestrating parent")
     if not os.path.isfile(manifest_path):
         return False, "manifest absent"
     if body["manifest"] != cfp.file_sha(manifest_path):
         return False, ("the manifest changed since the run token was "
                        "written; re-verify")
-    rec = json.load(open(manifest_path))
+    try:
+        rec = json.load(open(manifest_path))
+    except (OSError, ValueError) as exc:
+        return False, f"manifest unreadable: {exc}"
+    if not isinstance(rec, dict):
+        return False, "manifest is not a record"
     entries = rec.get("datasets")
     if not isinstance(entries, dict):
         return False, "manifest carries no datasets block"
@@ -224,7 +246,12 @@ def verify_manifest(path, root=None, required=tuple(DATASETS)):
     absent dataset would simply drop out of the comparison)."""
     if not os.path.isfile(path):
         return False, "manifest absent"
-    rec = json.load(open(path))
+    try:
+        rec = json.load(open(path))
+    except (OSError, ValueError) as exc:
+        return False, f"manifest unreadable: {exc}"
+    if not isinstance(rec, dict):
+        return False, "manifest is not a record"
     entries = rec.get("datasets")
     if not isinstance(entries, dict):
         return False, "manifest carries no datasets block"
