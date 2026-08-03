@@ -356,8 +356,85 @@ injection is magnitude-capped by the running k) is unchanged by every item below
    on the corrected solver (baseline + flow/Gaussian injection ensembles + three-corner
    AND five-state families, fair scoring for the sampled ensembles and exact discrete-
    forecast scoring for the bounding families, status-gated members) re-tests the
-   verdict. As of this revision (2026-07-13) THE PROBE HAS NOT BEEN RUN: this section
-   records the protocol before its outcome is observed, the probe result will be
-   reported in a separate follow-up pull request, and the hills regeneration decision
-   (regenerate only if the probe moves a conclusion rather than a number) is likewise
-   pre-committed here.
+   verdict. As of the 2026-07-13 revision the probe had not been run; the protocol was
+   recorded before its outcome. The probe and the triggered hills regeneration have now
+   run, and their results are in the dated section below.
+
+## Corrected-solver results (2026-07-17): the BFS verdict moves, the hills verdict holds
+
+The pre-committed probe ran on the merged corrected trunk (fixed seeds, the same
+reproduce scripts, member records in finding_numbers_corrected.json and
+hills_numbers_corrected.json alongside the committed originals; sampled ensembles
+scored fair, bounding families scored with the exact discrete-forecast convention).
+Because the probe moved a clause verdict on the BFS, the pre-committed rule triggered
+the hills regeneration, reported here with it. Three further pipeline corrections
+accompany the solver fixes: all members are genuinely converged cold solves (the
+committed evidence, like the committed calibrations, admitted unconverged members
+before the audit), a diverged member's fields are honestly absent (the two committed
+contaminated hills records cannot recur), and non-converged members enter the records
+as NaN with their status.
+
+BFS, against DNS reattachment 6.28: the corrected baseline moves toward the data
+(6.611 to 6.556). The flow ensemble moves from 23/24 converged, mean 7.290, band
+[6.50, 8.65] MISSING the truth and the worst reattachment CRPS (0.651), to 18/24
+converged, mean 6.549, band [5.35, 7.42] CONTAINING the truth and the BEST
+reattachment CRPS (0.245 fair, versus the Gaussian's 0.268). The committed statements
+that the flow band misses the reattachment truth and that the flow does not beat the
+other methods on reattachment are therefore WITHDRAWN for this geometry. The
+regeneration changed several things at once (the production limiter, the unclipped
+cross-diffusion, the completed stress operator, the honest convergence
+classification, and the clean member handling), so without a term-by-term ablation
+the defensible statement is that the committed result was NOT ROBUST to the
+integrated corrections; the production limiter, whose excess omega production in the
+separated shear layer the flow's sampled corrections were plausibly compensating, is
+the leading candidate mechanism, stated as a candidate rather than an established
+attribution. What does
+not move: station-Cf coverage stays far below nominal for every method (flow 0.4,
+Gaussian 0.4 at nominal 0.9), so the full pre-registered coverage clause still fails
+on the conjunction; the negative is now SCOPED to the wall-quantity block rather than
+blanket. The corner families shift slightly (delta 1.0 envelope [4.80, 5.48] still
+excludes the truth, delta 0.5 [5.31, 8.00] still contains it); more flow members
+diverge on the corrected solver (6 of 24, excluded and stated).
+
+Hills, against DNS reattachment 4.684: the within-geometry NEGATIVE REPRODUCES
+cleanly. The corrected baseline sits at 7.674 (was 7.615); the flow (24/24 converged,
+band [6.28, 7.70]) and the Gaussian (24/24, band [5.72, 7.90]) both MISS the truth,
+now with zero contaminated records. Full projection at delta_B 1.0 admits NO steady
+solution in either family, reproducing the committed non-existence result on the
+corrected operator; at delta 0.5 the family THINS from three members to two (the 1C
+corner no longer converges), envelope [5.27, 7.93], still excluding the truth. The
+magnitude-cap diagnosis (the anisotropy-only injection cannot deliver the correction
+the running k can carry) STANDS, but its scope narrows: it is a hills result, and the
+BFS evidence previously cited for it is withdrawn with the BFS reversal.
+
+Cross-geometry, the strongest corrected-solver result: the flow now transfers in BOTH
+directions where the Gaussian fails both. Hills-trained flow on the BFS: 24/24
+converged, band [6.17, 7.04] containing 6.28, CRPS 0.232 (Gaussian: band [6.42, 7.15]
+missing, CRPS 0.331). BFS-trained flow on the hills: mean 4.619 against truth 4.684
+(mean error 0.065 where the Gaussian's is 1.92) with the honest caveats stated
+plainly: 7 of 24 members do not converge, and the containing band is very wide
+([0.92, 7.45]), so the containment is dispersion-driven; the CRPS advantage over the
+Gaussian (0.882 versus 1.540 fair) is the defensible comparative statement. The
+coverage counterparts remain poor in each direction on that direction's own
+observable set: BFS-trained-on-hills velocity-probe coverage is 0.27 for either
+method, and hills-trained-on-BFS station-Cf coverage is 0.20 (the BFS leg carries
+wall stations, not velocity probes; the two directions are measured by different
+observables and are quoted separately).
+
+The five-state family contributes NO new converged envelope member on either geometry
+at either amplitude, for a structural reason worth recording: a Boussinesq-based
+baseline anisotropy is coaxial with the strain in exactly the production-extremal
+pairing, so the vmax alignments coincide with the 2013 eigenvalue-only corners to
+machine precision, and the anti-aligned vmin members (and the 1C variants on the
+hills) admit no steady solution at these amplitudes. On these baselines the 2017
+extension is the 2013 family plus non-convergent members.
+
+Standing verdict after the corrected regeneration: the pre-registered coverage
+clauses still fail on both geometries through their wall-quantity components; the
+reattachment components and every flow-versus-Gaussian ranking move in the flow's
+favor, decisively on the BFS and on both cross-geometry directions; the amplitude-cap
+diagnosis survives as a hills-scoped statement; and the motivated follow-on the
+committed memo named (a correction reaching the turbulence-transport quantities) is
+unchanged, now with the sharper motivation that the flow's conditional structure
+demonstrably carries transferable signal while the injection's wall-quantity reach
+remains the binding constraint.

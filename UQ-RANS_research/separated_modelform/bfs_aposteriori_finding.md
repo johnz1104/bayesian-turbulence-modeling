@@ -237,3 +237,17 @@ discrete forecast, for which the M^2 plug-in is the exact CRPS (0.380 at
 delta 0.5), and its fair column is a sensitivity reading of a hypothetical
 sampled predictive. The committed statement that the flow does not beat the
 corner family holds under either convention (0.634 fair vs 0.380 exact).
+
+
+## Post-audit corrected-solver results (2026-07-17)
+
+The pre-committed corrected-solver probe ran; the full two-geometry account, the
+withdrawn BFS statements, the reproduced hills negative, the five-state structural
+result, and the revised standing verdict are in hills_crossgeom_finding.md (the
+corrected-solver results section), with the member records in
+finding_numbers_corrected.json alongside the committed originals. For this memo's
+geometry in one line: the flow band now CONTAINS the reattachment truth with the best
+fair CRPS of any method (6.549 mean, band [5.35, 7.42], 0.245), the committed
+flow-misses-and-loses statements are withdrawn as substantially misprint artifacts,
+and the station-Cf coverage failure (0.4 at nominal 0.9) is what survives of the
+negative.
