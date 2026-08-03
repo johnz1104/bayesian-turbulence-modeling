@@ -25,6 +25,8 @@ jobs:
     env:
       MPLBACKEND: Agg        # headless matplotlib (some tests import pyplot)
       PYTHON: python         # entrypoint builds + tests with this interpreter
+      CTEST_WORKERS: 4       # independent C++ test executables in parallel
+      PYTEST_WORKERS: 3      # xdist file shards, BLAS pinned to 1 per worker
     steps:
       - uses: actions/checkout@v4
 

@@ -32,6 +32,8 @@ conformal sets the interval half-width from the calibration-residual quantile;
 both restore coverage. The learning rate and the conformal score are calibrated on
 a calibration split only, never on the evaluated number.
 """
+import os
+
 import numpy as np
 
 from solver_bindings import _rs
@@ -69,6 +71,12 @@ class ChannelCalibration:
 
     def __init__(self, dns, param_set="a1_betaStar", n_stations=20,
                  yplus_lo=1.0, cfg=None, sigma_floor=0.005, seed=0):
+        # verbatim construction arguments, so ensemble worker processes can
+        # rebuild an equivalent calibration (the pybind members themselves
+        # cannot cross a process boundary)
+        self._spawn_kwargs = dict(dns=dns, param_set=param_set,
+                                  n_stations=n_stations, yplus_lo=yplus_lo,
+                                  cfg=cfg, sigma_floor=sigma_floor, seed=seed)
         self.dns = dns
         self.param_set_name = param_set
         self.cfg = dict(DEFAULT_CFG if cfg is None else cfg)
@@ -149,8 +157,19 @@ class ChannelCalibration:
 
     # ---- ensemble and surrogates (the expensive step) ---------------------
 
-    def run_ensemble(self, n=48, seed=0, verbose=False):
+    def run_ensemble(self, n=48, seed=0, verbose=False, n_workers=None):
         """Latin-hypercube ensemble of forward solves; collect loglik + predictions.
+
+        n_workers > 1 evaluates members in a spawn-context process pool.
+        Because every member is a COLD, index-seeded, fresh forward model,
+        parallel evaluation changes NOTHING numerically: the design X is drawn
+        once in the parent, each worker rebuilds an equivalent calibration
+        from the construction arguments and solves its assigned members, and
+        the results are keyed by member index, so serial and parallel runs
+        produce bit-identical arrays (pinned by test_parallel_ensemble).
+        Workers pin their BLAS to one thread; choose n_workers so
+        n_workers x concurrent cases stays at or below the physical cores.
+        Default is the QBTM_ENSEMBLE_WORKERS environment variable, else 1.
 
         Only genuinely CONVERGED evaluations enter the surrogate training set:
         an Unconverged solve's likelihood depends on the iteration budget and
@@ -165,6 +184,41 @@ class ChannelCalibration:
         loglik = np.full(n, -np.inf)
         preds = np.full((n, self.n_qoi), np.nan)
         converged = np.zeros(n, dtype=bool)
+        if n_workers is None:
+            n_workers = int(os.environ.get("QBTM_ENSEMBLE_WORKERS", "1"))
+        if n_workers > 1:
+            import multiprocessing as mp
+            ctx = mp.get_context("spawn")
+            done = 0
+            # BLAS pinning must be in the environment BEFORE the spawned
+            # interpreter imports numpy (thread counts are read at library
+            # load, so the initializer alone is too late); the parent sets
+            # the variables for the spawn and restores its own afterwards
+            _blas = ("OMP_NUM_THREADS", "VECLIB_MAXIMUM_THREADS",
+                     "OPENBLAS_NUM_THREADS")
+            _saved = {v: os.environ.get(v) for v in _blas}
+            for v in _blas:
+                os.environ[v] = "1"
+            with ctx.Pool(min(n_workers, n), initializer=_member_pool_init,
+                          initargs=(type(self), self._spawn_kwargs)) as pool:
+                jobs = [(i, X[i].tolist()) for i in range(n)]
+                for i, ll, status, p in pool.imap_unordered(_member_pool_eval,
+                                                            jobs):
+                    loglik[i] = ll
+                    converged[i] = status == "Converged"
+                    p = np.asarray(p)
+                    if p.size == self.n_qoi:
+                        preds[i] = p
+                    done += 1
+                    if verbose and done % 10 == 0:
+                        print(f"  ensemble {done}/{n}  loglik={ll:.1f}",
+                              flush=True)
+            for v, val in _saved.items():
+                if val is None:
+                    os.environ.pop(v, None)
+                else:
+                    os.environ[v] = val
+            return self._finalize_ensemble(X, loglik, preds, converged)
         for i in range(n):
             # a FRESH forward model per member: every member solves COLD, so
             # its convergence classification is independent of evaluation
@@ -186,6 +240,10 @@ class ChannelCalibration:
                 preds[i] = p
             if verbose and (i + 1) % 10 == 0:
                 print(f"  ensemble {i+1}/{n}  loglik={loglik[i]:.1f}", flush=True)
+        return self._finalize_ensemble(X, loglik, preds, converged)
+
+    def _finalize_ensemble(self, X, loglik, preds, converged):
+        """Shared status-strict filtering for serial and pooled evaluation."""
         valid = converged & (loglik > -1e5) & np.all(np.isfinite(preds), axis=1)
         n_unconverged = int((~converged & (loglik > -1e5)).sum())
         if n_unconverged:
@@ -359,6 +417,28 @@ class ChannelCalibration:
         cov = ev.empirical_coverage(y_test, lo, hi)
         half = 0.5 * float(np.mean(hi - lo))
         return cov, half, (1.0 - alpha) - cov
+
+
+# ---- ensemble worker-process machinery (module level so spawn can pickle
+# the references; the worker holds ONE calibration and builds a fresh forward
+# model per member, exactly the cold-member policy of run_ensemble) ----------
+_POOL_CAL = None
+
+
+def _member_pool_init(cls, spawn_kwargs):
+    for var in ("OMP_NUM_THREADS", "VECLIB_MAXIMUM_THREADS",
+                "OPENBLAS_NUM_THREADS"):
+        os.environ[var] = "1"
+    global _POOL_CAL
+    _POOL_CAL = cls(**spawn_kwargs)
+
+
+def _member_pool_eval(job):
+    i, theta = job
+    fm = _POOL_CAL._forward_model()
+    res = fm.evaluate(list(theta))
+    return (i, float(res.log_lik), str(res.status).split(".")[-1],
+            np.array(res.predictions))
 
 
 class CrossReStudy:

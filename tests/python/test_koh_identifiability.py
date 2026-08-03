@@ -140,39 +140,44 @@ def toy_setup():
 
 # ---------------- Tests ------------------------------------------------
 
+@pytest.fixture(scope="module")
+def mode_runs(toy_setup):
+    """ONE calibration per mode, shared by every assertion in this module.
+
+    The structural assertions (types, modes, sample shapes) are configuration-
+    independent, so they inspect the same runs the credible-interval test
+    scores instead of reconstructing identical studies per test (the runs are
+    the expensive part; this fixture halves the module's calibration work
+    while preserving every assertion).
+    """
+    runs = {}
+    for mode in ("no_discrepancy", "diagonal", "physical_gp"):
+        runs[mode] = run_calibration(
+            toy_setup.fwd, toy_setup.param_set,
+            toy_setup.x, toy_setup.obs, toy_setup.sigmas,
+            mode=mode, n_ensemble=25, n_steps=300, rng_seed=0, verbose=False,
+        )
+    return runs
+
+
 class TestRunCalibrationModes:
     """Each mode constructs the right inference object and recovers truth."""
 
-    def test_no_discrepancy(self, toy_setup):
-        bi = run_calibration(
-            toy_setup.fwd, toy_setup.param_set,
-            toy_setup.x, toy_setup.obs, toy_setup.sigmas,
-            mode="no_discrepancy",
-            n_ensemble=20, n_steps=200, rng_seed=0, verbose=False,
-        )
+    def test_no_discrepancy(self, mode_runs):
+        bi = mode_runs["no_discrepancy"]
         assert isinstance(bi, BayesianInference)
         assert bi.samples is not None
         assert bi.samples.shape[1] == 2
 
-    def test_diagonal_mode(self, toy_setup):
-        bi = run_calibration(
-            toy_setup.fwd, toy_setup.param_set,
-            toy_setup.x, toy_setup.obs, toy_setup.sigmas,
-            mode="diagonal",
-            n_ensemble=20, n_steps=200, rng_seed=0, verbose=False,
-        )
+    def test_diagonal_mode(self, mode_runs):
+        bi = mode_runs["diagonal"]
         assert isinstance(bi, BayesianInferenceKOH)
         assert bi.koh.mode == "diagonal"
         assert bi.n_extra == 1
         assert bi.samples.shape[1] == 3   # θ (2) + log σ_δ (1)
 
-    def test_physical_gp_mode(self, toy_setup):
-        bi = run_calibration(
-            toy_setup.fwd, toy_setup.param_set,
-            toy_setup.x, toy_setup.obs, toy_setup.sigmas,
-            mode="physical_gp",
-            n_ensemble=20, n_steps=200, rng_seed=0, verbose=False,
-        )
+    def test_physical_gp_mode(self, mode_runs):
+        bi = mode_runs["physical_gp"]
         assert isinstance(bi, BayesianInferenceKOH)
         assert bi.koh.mode == "physical_gp"
         assert bi.n_extra == 2
@@ -180,12 +185,8 @@ class TestRunCalibrationModes:
 
     @pytest.mark.parametrize("mode",
                              ["no_discrepancy", "diagonal", "physical_gp"])
-    def test_truth_within_credible_interval(self, toy_setup, mode):
-        bi = run_calibration(
-            toy_setup.fwd, toy_setup.param_set,
-            toy_setup.x, toy_setup.obs, toy_setup.sigmas,
-            mode=mode, n_ensemble=25, n_steps=300, rng_seed=0, verbose=False,
-        )
+    def test_truth_within_credible_interval(self, toy_setup, mode_runs, mode):
+        bi = mode_runs[mode]
         s = bi.posterior_summary()
         for i, name in enumerate(toy_setup.param_set.active_names()):
             mean = s[name]["mean"]

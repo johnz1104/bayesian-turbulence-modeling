@@ -42,5 +42,6 @@ pybind11==3.0.2
 
 # --- test runner and plugins ---
 pytest==7.4.1
+pytest-xdist==3.6.1
 pytest-timeout==2.1.0
 pytest-reportlog==0.4.0
