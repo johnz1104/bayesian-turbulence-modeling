@@ -245,8 +245,8 @@ class ChannelCalibration:
                     return False
         self.X, self.loglik, self.preds = d["X"], d["loglik"], d["preds"]
         self.n_valid = len(self.X)
-        self.fit_surrogates()
-        return True
+        # an empty cache trains nothing; loading must not report success then
+        return self.fit_surrogates()
 
     # ---- posterior and posterior predictive -------------------------------
 
