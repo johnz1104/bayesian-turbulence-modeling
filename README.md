@@ -1,249 +1,179 @@
-# Bayesian Calibration of RANS Turbulence Models
+# Bayesian Uncertainty Quantification for RANS Turbulence Models
 
-RANS turbulence models underpin the vast majority of production CFD, yet their
-closure coefficients are empirical constants tuned decades ago for generic flow
-classes. Applied to a specific configuration (a particular geometry,
-Reynolds-number regime, or separation-dominated flow), these defaults can
-introduce systematic prediction error with no indication of how wrong they might
-be. This project replaces that single-point-estimate practice with a statistical
-one. Given experimental or DNS observations of a flow, it infers a full posterior
-distribution over the SST k-omega closure coefficients, producing calibrated
-values together with quantified uncertainty. The result is not merely a better set
-of constants, but a measure of how strongly the data constrains each one and which
-combinations the data can resolve at all.
+C++ CFD solvers and Python probabilistic methods for model-form uncertainty
+under distribution shift.
 
-## Motivation
+This project asks a practical question: when a turbulence model is systematically
+wrong, do its uncertainty intervals still cover an unseen flow? It combines
+in-house CFD solvers with Gaussian-process surrogates, Bayesian inference,
+normalizing flows, and conformal calibration, then tests the predictions against
+direct numerical simulation (DNS) data excluded from fitting and calibration.
 
-Re-tuning closure coefficients to a new dataset is standard practice, and it
-returns one value for each coefficient. That single value omits three quantities
-that govern whether a calibration can be trusted: how tightly the data constrains
-each coefficient, whether coefficients trade off so that only a combination is
-determined, and how much predictive uncertainty remains afterward. A posterior
-distribution recovers all three. A coefficient the data informs moves away from
-its prior and narrows. A coefficient the data cannot see remains at its prior.
-Coefficients that compensate for one another appear as correlations in the joint
-distribution.
+**Headline finding.** A model calibrated on plane-channel flow was evaluated on
+an unseen Couette flow type. Nominal 90% Bayesian intervals covered only 5.3% to
+21.1% of the DNS reference quantities. Split-conformal calibration, using a
+separate channel case and leaving Couette untouched, raised coverage to 89.5% to
+100%.
 
-Bayesian calibration of turbulence-model coefficients is itself well established
-(Edeling et al., 2014). Surrogate-accelerated implementations, however, carry
-recurring weaknesses this work addresses directly. A Gaussian-process surrogate
-fitted to a deterministic solver tends toward an interpolating, overconfident
-posterior unless its predictive variance is controlled, so the surrogate here is
-given a noise floor and its accuracy is reported on held-out solves rather than
-assumed. The directions of coefficient space that the data actually constrains are
-often left implicit, so this implementation measures identifiability and
-sensitivity and reports them. Parameter uncertainty and model-form error are
-easily conflated, so a Kennedy-O'Hagan discrepancy term separates the two, and a
-posterior predictive check run on the real solver exposes the model-form residual
-that no choice of coefficients can remove. The emphasis here is not the Bayesian
-formulation, which is standard, but the discipline applied to keep its uncertainty
-estimates honest.
+Coverage is the fraction of reference values inside an interval. A reliable 90%
+interval should cover about 90% over repeated cases. The headline results use
+corrected solver physics, converged runs, and separate data for fitting,
+calibration, and testing.
 
-## Theory
+Research status: active, with a working paper in preparation. The coupled
+shock-interaction study is still in progress.
 
-Reynolds-averaging the Navier-Stokes equations leaves the Reynolds-stress tensor
-unclosed. The SST model closes it through the Boussinesq hypothesis, aligning the
-stress with the mean strain rate and scaling it by a single eddy viscosity whose
-transport is governed by eleven empirical coefficients (Menter, 1994). Calibration
-asks which coefficient values are consistent with measured observables, a question
-Bayes' rule answers directly.
+## Main findings
 
-```
-p(θ | data) ∝ p(data | θ) · p(θ)
-```
+The table reports empirical coverage for nominal 90% intervals.
 
-The prior `p(θ)` is a truncated normal centred on the Menter defaults and clipped
-to the region where the solver remains stable and the closure remains realizable.
-The likelihood `p(data | θ)` compares solver output to measurements under Gaussian
-observation noise. Each likelihood evaluation requires a full CFD solve, which
-makes direct sampling of the posterior intractable. The solver is therefore
-emulated through the following stages.
+| Evaluation | Standard Bayes | Generalized Bayes | Split conformal |
+|---|---:|---:|---:|
+| Channel to unseen Couette flow, four Reynolds numbers | 5.3% to 21.1% | 42.1% to 52.6% | **89.5% to 100%** |
+| Held-out channel locations, five Reynolds numbers | 0% to 20% | 60% to 80% | **80% pooled** |
+| Channel transfer to an unseen Reynolds number | 9.5% to 33.3% | 81.0% to 95.2% | **90.5% to 100%** |
 
-1. **Ensemble.** Latin-hypercube coefficient vectors spanning the prior support
-   are evaluated by the solver. Each returns a set of observables and a Gaussian
-   log-likelihood. Solves that diverge or fail to converge are classified and
-   excluded.
-2. **Surrogate.** A Gaussian process with an automatic-relevance-determination
-   (ARD) RBF kernel is fitted to the surviving coefficient-likelihood pairs. A
-   noise floor prevents the variance collapse that would otherwise render the
-   surrogate overconfident. The per-coefficient lengthscales serve as a relevance
-   measure.
-3. **Sampling.** The affine-invariant ensemble sampler emcee draws from the
-   posterior using the surrogate in place of the solver. A No-U-Turn sampler
-   provides a gradient-based alternative, driven by the analytic surrogate
-   gradient that the implementation verifies against finite differences.
-4. **Diagnostics.** Autocorrelation time, effective sample size, acceptance
-   fraction, and split-R-hat establish that the chain has mixed.
-5. **Analysis.** The posterior yields credible intervals and a shift-from-prior
-   for each coefficient, an identifiability spectrum and a sensitivity ranking,
-   model evidence and Bayes factors for comparing closure variants, and posterior
-   predictive checks that return the real solver to the loop. A multi-fidelity
-   mode fuses observations of differing resolution, and the Kennedy-O'Hagan
-   discrepancy term represents model-form error explicitly.
+Standard Bayes is overconfident in every transfer test. Generalized Bayes widens
+the intervals and improves coverage, but only conformal calibration reaches the
+90% target on the unseen flow type. On held-out locations across the channel
+cases, conformal coverage improves to 80% but remains below nominal.
 
-## Results
+<p align="center">
+  <img src="UQ-RANS_research/step1_plane_channel/figures/coverage_in_distribution_corrected.png" alt="Coverage on held-out channel locations" width="47%">
+  <img src="UQ-RANS_research/step2_couette/figures/crossflow_coverage_corrected.png" alt="Coverage on unseen Couette cases" width="47%">
+</p>
+<p align="center"><sub>Held-out channel locations (left) and channel-to-Couette transfer (right). The dashed line marks the nominal 90% target.</sub></p>
 
-The results below come from calibrating against turbulent channel-flow skin
-friction at `Re_b = 6800` under two configurations. A two-coefficient case (`a1`
-and `β*`) isolates the posterior cleanly, and a four-coefficient case (adding
-`β1` and `σ_k1`) exposes the sensitivity and identifiability structure.
+Full protocols and corrected numbers are in the
+[channel finding](UQ-RANS_research/step1_plane_channel/channel_finding.md) and
+[Couette finding](UQ-RANS_research/step2_couette/couette_finding.md).
 
-### A posterior, not a point estimate
+## What is being modeled
 
-![Corner plot of the joint and marginal posteriors for a1 and beta-star](viz/figures/posterior_corner_a1_betaStar.png)
+A RANS prediction can be written as
 
-The joint and marginal posteriors for `a1` and `β*` settle at `a1 = 0.319 ± 0.043`
-and `β* = 0.090 ± 0.014`, with the Menter prior mean indicated in red. The joint
-distribution is close to isotropic, which indicates that the two coefficients are
-nearly uncorrelated under this observable. These marginals are the basis for the
-analysis that follows.
+$$
+y(x) = G(x,\theta) + \delta(x) + \varepsilon,
+$$
 
-### What the data constrains
+where $G$ is the CFD solver, $\theta$ contains turbulence-model parameters,
+$\delta$ is systematic model error, and $\varepsilon$ is observation error.
+Standard Bayesian calibration updates the parameter distribution:
 
-![Prior versus posterior for each coefficient](viz/figures/prior_posterior_a1_betaStar.png)
+$$
+p(\theta \mid D) \propto p(D \mid \theta)\,p(\theta).
+$$
 
-Overlaying each prior on its posterior distinguishes the informed coefficient from
-the uninformed one. `a1` shifts from its prior and narrows, so the channel skin
-friction constrains it to a degree. `β*` coincides with its prior, meaning the
-observable carries no information about it. A single-point calibration would have
-reported a definite value of `β*` that the data never supported.
+If the likelihood treats systematic model error as ordinary noise, more data can
+shrink the posterior around a biased prediction. This produces narrow intervals
+that miss new flow conditions.
 
-### Sampling convergence
+Gaussian-process surrogates replace expensive solver calls during inference.
+Gaussian and normalizing-flow models represent the remaining stress discrepancy.
+The flow model can capture correlated, non-Gaussian errors that a Gaussian model
+cannot.
 
-![Walker traces and autocorrelation showing convergence](viz/figures/convergence_a1_betaStar.png)
+## Conformal calibration
 
-The walker traces and autocorrelation confirm a converged chain. Split-R-hat is
-1.02 for both coefficients, and the run yields approximately 1,500 effective
-samples from 48,000 draws at an acceptance fraction of 0.72.
+Conformal calibration uses errors on reserved calibration data to choose an
+interval width. For prediction $\hat y_i$ and scale $w_i$, the calibration
+scores are
 
-### Surrogate fidelity and acceleration
+$$
+s_i = \frac{|y_i - \hat y_i|}{w_i}, \qquad
+q = \operatorname{Quantile}_{1-\alpha}(s_1,\ldots,s_n).
+$$
 
-![Held-out predicted versus true log-likelihood for the GP surrogate](viz/figures/surrogate_near_wall4.png)
+The resulting interval is
 
-Predicted against true log-likelihood on held-out solves, the Gaussian-process
-surrogate attains `R² = 0.91` across the sampling region. This fidelity is what
-permits the acceleration. A likelihood query costs roughly a ten-thousandth of a
-second on the surrogate against approximately eighteen seconds for the solver, a
-factor of about 176,000, which reduces a sampling run of nominally two weeks to a
-few seconds. The same held-out diagnostic also marks the method's boundary.
-Extended across the full prior box, the surrogate loses fidelity in the sparse
-low-likelihood tails, which is the reason sampling is confined to the narrowed
-region.
+$$
+C_{1-\alpha}(x) =
+[\hat y(x) - q\,w(x),\; \hat y(x) + q\,w(x)].
+$$
 
-### Coefficient sensitivity
+The basic method uses $w=1$. The high-speed study also scales errors by the
+predicted wall heat flux. Conformal calibration adjusts uncertainty width; it
+does not change the mean CFD prediction.
 
-![Bar chart of coefficient influence from ARD lengthscales](viz/figures/sensitivity_near_wall4.png)
+## Additional results
 
-Ranking the four coefficients by their ARD lengthscales converts the fit into a
-sensitivity measure. `β1`, `β*`, and `a1` register as influential, while `σ_k1`
-is inert, its lengthscale four to five orders of magnitude longer than the others.
-The channel skin friction does not depend on the k-equation diffusion coefficient,
-so this observable cannot calibrate it at any sample size.
+### High-speed heat transfer
 
-### Joint identifiability
+Across two noise settings, scaling conformal errors by predicted wall heat flux
+raised held-out thermal coverage from 11.4% to 60.8% and from 10.8% to 64.8%,
+without refitting the model. The result remains below 90%, showing that heat-flux
+scale explains much, but not all, of the transfer error. The remaining error
+changes with Mach number.
 
-![Posterior correlation heatmap](viz/figures/identifiability_near_wall4.png)
+<p align="center">
+  <img src="UQ-RANS_research/heatflux_modelform/figures/heatflux_conformal_scores.png" alt="Heat-flux coverage under three conformal score choices" width="68%">
+</p>
 
-The posterior correlation matrix completes the picture. `a1` and `β*` correlate at
-0.82, meaning a single skin-friction measurement constrains a combination of the
-two rather than either independently, and leaves a ridge in the `(a1, β*)` plane.
-`σ_k1`, consistent with its negligible sensitivity, is uncorrelated with the
-others. This joint structure determines whether a calibration is well posed and is
-invisible to a point estimate.
+See the [heat-flux finding](UQ-RANS_research/heatflux_modelform/heatflux_modelform_finding.md)
+for the registered test and complete results.
 
-## Validation and interpretation
+### Separated flows
 
-### Validation against reference correlations
+Conditional normalizing flows were compared with Gaussian and standard
+stress-perturbation baselines. On the corrected periodic-hills runs, every
+available 90% reattachment interval missed the DNS value. The corrections stayed
+physically valid but were too small. The current method changes stress anisotropy
+without correcting turbulence energy, so the solver's modeled energy limits how
+far the mean flow can move. This is a measured method limitation, not a software
+failure.
 
-![Simulated skin friction versus Dean and Schoenherr correlations](viz/figures/validation_cf.png)
+See the [separated-flow finding](UQ-RANS_research/separated_modelform/hills_crossgeom_finding.md).
 
-Calibration is meaningful only if the underlying solver is sound. On a flat-plate
-boundary layer the solver reproduces the Schoenherr skin-friction correlation to
-3.6%. On channel flow it predicts 18.7% below Dean's correlation, within the
-solver's acceptance band but a substantial margin, and consistent with the known
-under-prediction of channel `Cf` by two-equation models on a coarse near-wall
-mesh. The low-Mach compressible path is pinned to a committed regression baseline,
-in which the `Ma = 0.1` channel converges in 494 SIMPLE iterations with a
-mass-flux imbalance of 8.8e-5 and reproduces its skin friction to within 5%.
+### Shock interaction
 
-### Posterior predictive check
+The current study extends the same methods to shock and turbulent-boundary-layer
+interaction. Its coupled solver campaign is ongoing, so no coupled result is
+reported here. The protocol was fixed in advance in the
+[shock-interaction pre-registration](UQ-RANS_research/shock_interaction/PRE_REGISTRATION.md).
 
-![Posterior predictive distribution of skin friction against the observation](viz/figures/posterior_predictive_a1_betaStar.png)
+## Implementation
 
-The end-to-end test returns the solver to the loop, re-running it at a sample of
-posterior draws and comparing the resulting distribution of skin friction to the
-observation used for calibration. The predictive mean is 0.00656 against the Dean
-target of 0.00804, and the observation falls inside the 95% predictive interval
-but at its upper edge. The calibrated coefficients are therefore statistically
-consistent with the measurement while remaining biased low by roughly the margin
-seen in the raw validation. Adjusting `a1` and `β*` reduces the discrepancy
-without eliminating it, because the residual is model-form rather than parametric,
-which is the condition the Kennedy-O'Hagan term is designed to represent.
+The C++ solvers in this repository are implemented as part of the project:
 
-## Repository layout
+- [incompressible/](incompressible/) contains the SIMPLE RANS solver used for
+  channel, Couette, and separated-flow studies.
+- [compressible/](compressible/) contains the low-Mach compressible SIMPLE solver.
+- [dbns/](dbns/) contains the density-based, shock-capturing solver library.
+- [core/](core/) contains meshes, fields, linear solvers, and the SST closure
+  shared by the flow solvers.
 
-```
-core/            mesh, fields, linear solvers, the SST closure, the observation
-                 operator, and inference parameter sets (the physics-agnostic core)
-incompressible/  the incompressible SIMPLE solver, forward model, and
-                 parameter-sensitivity machinery
-compressible/    the low-Mach compressible SIMPLE solver and forward model
-include/, src/   an earlier flat header and source layout retained alongside the
-                 layered modules above
-python/          the inference layer: priors, Latin hypercube sampling, the GP
-                 surrogate, emcee, NUTS, Kennedy-O'Hagan, identifiability,
-                 sensitivity, model evidence, and multi-fidelity fusion, with the
-                 pybind11 bindings and runnable examples
-viz/             scripts that regenerate every figure in this README from solver
-                 and inference output
-tests/           C++ (ctest) and Python (pytest) tests, fixtures, regression data
-data/            a provenance manifest, with the datasets themselves kept local
-scripts/         build, test, and reproduce entrypoints
-docs/            project notes and documentation
-CMakeLists.txt   builds the static libraries, both solver CLIs, and the Python module
-```
+The Python layer provides:
 
-## Build and run
+- Gaussian-process surrogates and Bayesian sampling;
+- generalized Bayes and split-conformal calibration;
+- conditional normalizing flows and Gaussian discrepancy baselines;
+- fixed-seed evaluation, scoring, and figure generation.
 
-The prerequisites are a C++17 compiler (GCC 9+, Clang 10+, or Apple Clang), CMake
-3.14 or newer, and Python 3.11 with numpy, scipy, matplotlib, emcee, GPy, corner,
-and multiprocess. CMake fetches pybind11 on its own. The binding is compiled for
-whichever interpreter CMake selects, so a single Python should be used throughout.
+Curated evidence lives in [UQ-RANS_research/](UQ-RANS_research/). Each completed
+study includes a finding memo, machine-readable numbers, and selected figures.
+Large solver caches and third-party DNS fields are not committed. Dataset
+attribution and provenance are recorded in the
+[research archive](UQ-RANS_research/README.md).
 
-Build the libraries, both solver CLIs, and the Python module.
+## Build and test
+
+Use one Python 3.11 interpreter for installation, CMake, and tests. The project
+pins NumPy 1.25.2 because newer releases are incompatible with the validated GPy
+stack.
 
 ```bash
-cmake -S . -B build -DBUILD_PYTHON_BINDINGS=ON
+# Reference macOS interpreter; replace with your Python 3.11 path.
+QBTM_PYTHON=/Library/Frameworks/Python.framework/Versions/3.11/bin/python3
+
+"$QBTM_PYTHON" -m pip install -r requirements.txt
+cmake -S . -B build -DBUILD_PYTHON_BINDINGS=ON \
+  -DPython_EXECUTABLE="$QBTM_PYTHON"
 cmake --build build -j
+ctest --test-dir build --output-on-failure
+PYTHONPATH=build:python "$QBTM_PYTHON" -m pytest
 ```
 
-Check the solver against its built-in validations.
-
-```bash
-./build/rans_sst --validate-channel   # channel flow vs Dean
-./build/rans_sst --validate-plate     # flat plate vs Schoenherr
-./build/rans_sst --all
-```
-
-Run a calibration end to end.
-
-```bash
-PYTHONPATH=build:python python3 python/examples/channel_flow_example.py --demo
-```
-
-Run the tests (462 Python, 2 C++) through the canonical entrypoint.
-
-```bash
-scripts/run_tests.sh
-```
-
-Regenerate the figures above from solver and inference output.
-
-```bash
-export PYTHONPATH=build:python
-python3 viz/run_cpp_validation.py
-python3 viz/run_calibration.py a1_betaStar
-python3 viz/run_calibration.py near_wall4
-python3 viz/run_surrogate_benchmark.py
-python3 viz/make_all_figures.py
-```
+The normalizing-flow studies also require PyTorch 2.10.0. Reproduction drivers
+are under [python/UQ/](python/UQ/) and use fixed seeds. The full studies require
+the local DNS datasets and can be computationally expensive; each finding memo
+names its driver and exact protocol.
