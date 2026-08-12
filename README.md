@@ -1,33 +1,27 @@
 # Bayesian Uncertainty Quantification for RANS Turbulence Models
 
-Reynolds-averaged Navier-Stokes (RANS) models make turbulent-flow simulations
-affordable, but they replace unknown turbulent stresses with an approximate
-closure. That approximation creates systematic model error, and the error can
-change when a prediction moves to a new Reynolds number, geometry, Mach number,
-or flow type.
+## Introduction
 
-This project studies how to represent that model error and how to determine
-whether the resulting uncertainty intervals can be trusted outside the
-conditions used for calibration. It combines C++ CFD solvers developed in this
-repository with Python methods for Bayesian inference, surrogate modeling,
-generative modeling, and statistical calibration.
+Reynolds-averaged Navier-Stokes (RANS) models reduce the cost of turbulent-flow
+simulation by replacing unresolved turbulent stresses with an approximate
+closure. The resulting model-form error depends on the flow regime and may not
+be represented by uncertainty in the closure coefficients alone. Bayesian
+calibration can therefore produce a concentrated posterior while its predictive
+intervals remain systematically too narrow under changes in Reynolds number,
+geometry, Mach number, or flow type.
 
-The research progresses from attached incompressible flows to separated flows,
-high-speed heat transfer, and shock-boundary-layer interaction. Predictions are
-evaluated against direct numerical simulation (DNS) data using fixed
-fit/calibration/test splits, so an unseen case does not influence the method
-being evaluated.
+The objective of this work is to distinguish parameter uncertainty from
+structural closure error and to quantify how predictive calibration changes
+under distribution shift. C++ CFD solvers implemented in this repository are
+coupled to Python methods for Bayesian inference, Gaussian-process emulation,
+conditional density estimation, and conformal calibration. The studies span
+attached incompressible flows, separated flows, high-speed heat transfer, and
+shock-boundary-layer interaction. Predictions are assessed against independent
+direct numerical simulation (DNS) data.
 
-## Research questions
+## Methodology
 
-- When does Bayesian calibration become overconfident because parameter
-  uncertainty does not capture structural model error?
-- Can generalized Bayes or conformal calibration produce reliable intervals on
-  flow conditions excluded from fitting?
-- Can learned stress-error models transfer across flow regimes and improve a
-  full CFD prediction while remaining physically valid?
-
-## Research approach
+### Statistical formulation
 
 A RANS prediction can be written as
 
@@ -35,28 +29,54 @@ $$
 y(x) = G(x,\theta) + \delta(x) + \varepsilon,
 $$
 
-where $G$ is the CFD solver, $\theta$ contains turbulence-model parameters,
-$\delta$ is systematic model error, and $\varepsilon$ is observation error.
-Standard Bayesian calibration updates the parameter distribution:
+where $G$ denotes the CFD forward model, $\theta$ contains turbulence-model
+parameters, $\delta$ represents systematic model discrepancy, and $\varepsilon$
+is observation error. Standard Bayesian calibration updates the parameter
+distribution according to
 
 $$
-p(\theta \mid D) \propto p(D \mid \theta)\,p(\theta).
+p(\theta \mid D) \propto p(D \mid \theta) p(\theta).
 $$
 
-If the likelihood treats systematic model error as ordinary noise, more data can
-shrink the posterior around a biased prediction. This produces narrow intervals
-that miss new flow conditions.
+When model discrepancy is omitted or inadequately represented, additional data
+can contract the posterior around a biased approximation. Generalized Bayes
+reduces this contraction through a learning rate $\eta$:
 
-Gaussian-process surrogates replace expensive solver calls during inference.
-Gaussian and normalizing-flow models represent the remaining stress discrepancy.
-The flow model can capture correlated, non-Gaussian errors that a Gaussian model
-cannot.
+$$
+p_\eta(\theta \mid D) \propto p(D \mid \theta)^\eta p(\theta),
+\qquad 0 < \eta \leq 1.
+$$
 
-## Conformal calibration
+The learning rate is estimated by moment matching on reserved calibration data,
+without reference to the evaluated test observations.
 
-Conformal calibration uses errors on reserved calibration data to choose an
-interval width. For prediction $\hat y_i$ and scale $w_i$, the calibration
-scores are
+### Surrogate and discrepancy models
+
+Ensembles of CFD solutions provide training data for Gaussian-process surrogates
+of the likelihood and predicted quantities. The surrogates replace repeated CFD
+evaluations during posterior sampling while retaining predictive variance.
+
+For model-form inference, the target is the discrepancy between the DNS and RANS
+Reynolds-stress anisotropy tensors,
+
+$$
+\Delta \mathbf{b}(x) =
+\mathbf{b}_{\mathrm{DNS}}(x) - \mathbf{b}_{\mathrm{RANS}}(x).
+$$
+
+Gaussian models and conditional normalizing flows approximate the conditional
+law $p(\Delta \mathbf{b} \mid \boldsymbol{\phi})$, where
+$\boldsymbol{\phi}$ contains local flow features. The normalizing-flow model
+permits correlated, non-Gaussian stress discrepancies beyond a Gaussian
+conditional baseline. Coherent samples are propagated through the CFD solver
+under a realizability constraint, allowing the uncertainty model to be evaluated
+on mean-flow and wall quantities rather than only on stress reconstruction.
+
+### Predictive calibration
+
+Split-conformal calibration estimates interval width from residuals on reserved
+calibration data. For prediction $\hat y_i$ and scale $w_i$, the calibration score
+is
 
 $$
 s_i = \frac{|y_i - \hat y_i|}{w_i}, \qquad
@@ -64,29 +84,43 @@ q = Q_{1-\alpha}(s_1,\ldots,s_n).
 $$
 
 Here, $Q_{1-\alpha}$ is the empirical quantile of the reserved calibration
-scores.
-
-The resulting interval is
+scores. The corresponding predictive interval is
 
 $$
 C_{1-\alpha}(x) =
 [\hat y(x) - q w(x), \quad \hat y(x) + q w(x)].
 $$
 
-The basic method uses $w=1$. The high-speed study also scales errors by the
-predicted wall heat flux. Conformal calibration adjusts uncertainty width; it
-does not change the mean CFD prediction.
+The unscaled score uses $w=1$; the high-speed study also considers a
+physics-based scale derived from predicted wall heat flux. Conformal calibration
+changes the interval width but not the mean CFD prediction.
 
-## Current findings
+### Evaluation protocol
 
-Across the completed studies, standard Bayesian intervals were consistently too
-narrow outside the conditions used for calibration. The degree of
-overconfidence, and how fully it could be corrected, depended on the type of
-distribution shift.
+Study designs use separate fitting, calibration, and testing roles. Test cases do
+not enter model fitting, learning-rate selection, or conformal calibration. For
+$N$ test observations, empirical coverage of a nominal $(1-\alpha)$ interval is
 
-Coverage is the fraction of DNS reference values inside an interval. A reliable
-90% interval should cover about 90% over repeated cases. The table reports
-empirical coverage for nominal 90% intervals.
+$$
+\widehat{c}_{1-\alpha} =
+\frac{1}{N}\sum_{j=1}^{N}
+\mathbf{1}[y_j \in C_{1-\alpha}(x_j)].
+$$
+
+Predictive performance is evaluated jointly through coverage, interval sharpness,
+continuous ranked probability score, and energy score. Only converged solver
+members enter reported statistics, and propagated stress corrections are checked
+for physical realizability. Study-specific protocols, fixed seeds, deviations,
+and machine-readable results are retained with each evidence package.
+
+## Results
+
+### Predictive coverage under distribution shift
+
+Standard Bayesian intervals undercovered in each attached-flow evaluation
+summarized below. Generalized Bayes and split conformal moved coverage toward the
+nominal level, although the extent of recovery depended on the distribution
+shift.
 
 | Evaluation | Standard Bayes | Generalized Bayes | Split conformal |
 |---|---:|---:|---:|
@@ -94,16 +128,15 @@ empirical coverage for nominal 90% intervals.
 | Held-out channel locations, five Reynolds numbers | 0% to 20% | 60% to 80% | **80% pooled** |
 | Channel transfer to an unseen Reynolds number | 9.5% to 33.3% | 81.0% to 95.2% | **90.5% to 100%** |
 
-The clearest cross-flow result comes from calibrating on plane-channel flow and
-evaluating on an unseen Couette flow type. Standard Bayes covered only 1 to 4 of
-19 DNS targets per case. Conformal calibration used a separate channel case,
-without fitting or calibrating on Couette data, and covered 17 to 19 targets.
-
-Generalized Bayes widened the intervals and improved coverage but did not reach
-the nominal level on the unseen flow type. On held-out locations across the
-channel cases, conformal coverage improved to 80% but also remained below
-nominal. These results use audited solver physics, converged runs, and separate
-data for fitting, calibration, and testing.
+For cross-flow transfer, the posterior was trained on plane-channel data and
+propagated through an independent Couette-flow solver. Standard Bayesian
+intervals contained 1 to 4 of 19 DNS targets per case, corresponding to 5.3% to
+21.1% coverage. Split conformal used residuals from a reserved channel case and
+contained 17 to 19 targets, corresponding to 89.5% to 100% coverage. No Couette
+data were used for fitting or calibration. Generalized Bayes improved coverage
+but remained below nominal. On held-out locations within the channel cases,
+pooled conformal coverage reached 80%, so restoration was incomplete under that
+evaluation.
 
 <p align="center">
   <img src="UQ-RANS_research/step1_plane_channel/figures/coverage_in_distribution_corrected.png" alt="Coverage on held-out channel locations" width="47%">
@@ -111,19 +144,17 @@ data for fitting, calibration, and testing.
 </p>
 <p align="center"><sub>Held-out channel locations (left) and channel-to-Couette transfer (right). The dashed line marks the nominal 90% target.</sub></p>
 
-Full protocols and corrected numbers are in the
+Complete protocols and corrected numbers are in the
 [channel finding](UQ-RANS_research/step1_plane_channel/channel_finding.md) and
 [Couette finding](UQ-RANS_research/step2_couette/couette_finding.md).
 
-## Additional results
-
 ### High-speed heat transfer
 
-Across two noise settings, scaling conformal errors by predicted wall heat flux
-raised held-out thermal coverage from 11.4% to 60.8% and from 10.8% to 64.8%,
-without refitting the model. The result remains below 90%, showing that heat-flux
-scale explains much, but not all, of the transfer error. The remaining error
-changes with Mach number.
+Across two observation-noise settings, normalizing conformal residuals by
+predicted wall heat flux increased held-out thermal coverage from 11.4% to 60.8%
+and from 10.8% to 64.8%, without model refitting. Coverage remained below the
+nominal 90%, indicating that wall-flux scale explains a substantial component of
+the transfer error but not its Mach-dependent shape.
 
 <p align="center">
   <img src="UQ-RANS_research/heatflux_modelform/figures/heatflux_conformal_scores.png" alt="Heat-flux coverage under three conformal score choices" width="68%">
@@ -135,25 +166,25 @@ for the registered test and complete results.
 ### Separated flows
 
 Conditional normalizing flows were compared with Gaussian and standard
-stress-perturbation baselines. On the corrected periodic-hills runs, every
-available 90% reattachment interval missed the DNS value. The corrections stayed
-physically valid but were too small. The current method changes stress anisotropy
-without correcting turbulence energy, so the solver's modeled energy limits how
-far the mean flow can move. This is a measured method limitation, not a software
-failure.
+stress-perturbation baselines. In the corrected periodic-hills study, every
+available 90% reattachment interval excluded the DNS value. All converged
+corrections remained realizable, but the coupled response was too small. Because
+the current injection changes stress anisotropy without correcting turbulence
+energy, the modeled energy limits the achievable change in the mean flow.
 
 See the [separated-flow finding](UQ-RANS_research/separated_modelform/hills_crossgeom_finding.md).
 
-### Shock interaction
+## Ongoing study
 
-The current study extends the same methods to shock and turbulent-boundary-layer
-interaction. Its coupled solver campaign is ongoing, so no coupled result is
-reported here. The protocol was fixed in advance in the
+The current study extends the framework to shock and turbulent-boundary-layer
+interaction. The coupled solver campaign is ongoing, and no coupled result is
+reported here. The evaluation protocol was fixed in advance in the
 [shock-interaction pre-registration](UQ-RANS_research/shock_interaction/PRE_REGISTRATION.md).
 
-## Implementation
+## Software and reproducibility
 
-The C++ solvers in this repository are implemented as part of the project:
+The numerical implementation comprises four C++ components developed as part of
+the project:
 
 - [incompressible/](incompressible/) contains the SIMPLE RANS solver used for
   channel, Couette, and separated-flow studies.
