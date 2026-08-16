@@ -2,12 +2,12 @@
 
 Reynolds-averaged Navier-Stokes (RANS) models make turbulent-flow simulations
 computationally practical by replacing unresolved turbulent stresses with an
-approximate closure. The resulting model-form error varies across Reynolds
-number, geometry, Mach number, and flow type, and is not generally represented
-by uncertainty in the closure coefficients alone.
+approximate closure. The resulting model-form error varies with Reynolds number,
+geometry, Mach number, and flow type. Uncertainty in the closure coefficients
+alone does not generally represent this error.
 
-This project develops probabilistic methods for separating parameter uncertainty
-from structural closure error and for evaluating predictive uncertainty under
+This project develops probabilistic methods to separate parameter uncertainty
+from structural closure error and evaluate predictive uncertainty under
 distribution shift. A RANS observable is represented as
 
 $$
@@ -22,12 +22,12 @@ $$
 p(\theta \mid D) \propto p(D \mid \theta) p(\theta).
 $$
 
-Parameter inference is combined with Gaussian-process surrogates, generalized
-Bayes, Gaussian and normalizing-flow models of Reynolds-stress discrepancy, and
-split-conformal calibration. Uncertainty models are evaluated both against
-held-out direct numerical simulation (DNS) data and through propagation in the
-CFD solvers. The numerical stack consists of C++ flow solvers developed in this
-repository and a Python inference and evaluation layer.
+The framework combines parameter inference with Gaussian-process surrogates,
+generalized Bayes, Gaussian and normalizing-flow models of Reynolds-stress
+discrepancy, and split-conformal calibration. It evaluates uncertainty models
+against held-out direct numerical simulation (DNS) data and by propagating them
+through the CFD solvers. The numerical stack combines C++ flow solvers developed
+in this repository with a Python inference and evaluation layer.
 
 ## Research program
 
@@ -38,11 +38,12 @@ repository and a Python inference and evaluation layer.
 | Compressible heat transfer | Turbulent heat-flux uncertainty, wall-cooling effects, and transfer across Mach number |
 | Shock interaction | Density-based shock-capturing RANS, wall-thermal transfer, and model-form uncertainty for shock-boundary-layer interaction |
 
-The research program uses fixed fitting, calibration, and testing roles. Test
-cases do not enter model fitting or uncertainty calibration. Reported
-a-posteriori statistics include only converged solver members, and propagated
-stress corrections are checked for realizability. The shock-interaction study is
-ongoing; no coupled finding is stated before its registered campaign is complete.
+The research program assigns cases fixed roles in fitting, calibration, and
+testing. Test cases do not enter model fitting or uncertainty calibration.
+Reports include a-posteriori statistics only for converged solver members and
+check propagated stress corrections for realizability. The shock-interaction
+study is ongoing; no coupled finding is stated before its registered campaign is
+complete.
 
 ## Repository structure
 
@@ -60,15 +61,14 @@ ongoing; no coupled finding is stated before its registered campaign is complete
 
 ## Evidence and reproducibility
 
-The repository supports an ongoing working paper. Completed studies are archived
-under [UQ-RANS_research/](UQ-RANS_research/) with their study-specific protocol,
-fixed seeds, finding memo, numbers file, and selected figures. Bulk solver
-outputs and other artifacts that can be regenerated from fixed-seed drivers are
-kept out of version control.
+The repository supports an ongoing working paper. Each completed study is
+archived under [UQ-RANS_research/](UQ-RANS_research/) with its protocol, fixed
+seeds, finding memo, numbers file, and selected figures. Version control excludes
+bulk solver outputs and other artifacts that fixed-seed drivers can regenerate.
 
-All DNS datasets are third-party reference data rather than outputs of this
-project. Raw fields are stored locally and are not redistributed. Dataset
-sources, citations, and usage terms are recorded in the
+All DNS datasets are third-party reference data, not project outputs. Raw fields
+remain local and are not redistributed. Dataset sources, citations, and usage
+terms are recorded in the
 [research archive](UQ-RANS_research/README.md).
 
 ## Build and test
